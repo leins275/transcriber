@@ -207,7 +207,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 
 ## Tasks
 
-### [ ] T1: Rust workspace, Tauri 2 skeleton, error taxonomy, module stubs  [deps: —]
+### [x] T1: Rust workspace, Tauri 2 skeleton, error taxonomy, module stubs  [deps: —]
 
 - **Files**: `Cargo.toml`, `.gitignore`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/build.rs`, `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/capabilities/default.json`, `apps/desktop/src-tauri/icons/**`, `apps/desktop/src-tauri/.gitignore`, `apps/desktop/src-tauri/src/{main.rs,lib.rs,error.rs,config.rs,paths.rs,ingest.rs,jobs.rs,sidecar.rs,commands.rs}`, `apps/desktop/src-tauri/src/service/{mod.rs,fake.rs,http.rs}`
 - **Test first**: unit tests inside `apps/desktop/src-tauri/src/error.rs` — cases: every `AppError` variant serializes to exactly `{"kind": "...", "message": "..."}` with the `ErrorKind` strings frozen in the plan's IPC contract (FR-12, NFR-6); `AppError::from(std::io::Error)` maps to `kind: "io"` without panicking.
@@ -215,7 +215,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: `devops-toolkit:devops-rollout-plan` (bundle block only, marginal — **not installed**, note the gap; F4 owns packaging).
 - **Done when**: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` all pass from the repo root, F1's crate builds as a workspace member, and `cargo build -p transcriber-desktop` succeeds. No `capabilities` entry beyond the plan's candidate list.
 
-### [ ] T2: Frontend scaffold — Vite + React + TypeScript + Vitest + lint/format scripts  [deps: —]
+### [x] T2: Frontend scaffold — Vite + React + TypeScript + Vitest + lint/format scripts  [deps: —]
 
 - **Files**: `apps/desktop/package.json`, `apps/desktop/package-lock.json`, `apps/desktop/index.html`, `apps/desktop/vite.config.ts`, `apps/desktop/tsconfig.json`, `apps/desktop/tsconfig.node.json`, `apps/desktop/eslint.config.js`, `apps/desktop/.prettierrc.json`, `apps/desktop/.prettierignore`, `apps/desktop/.gitignore`, `apps/desktop/src/{main.tsx,App.tsx,styles.css,vite-env.d.ts}`, `apps/desktop/src/test/setup.ts`, `apps/desktop/src/App.test.tsx`
 - **Test first**: `apps/desktop/src/App.test.tsx` — cases: the app shell renders its product name and the three region landmarks (settings bar, drop zone, job list) as accessible regions; `vitest run` exits 0 under jsdom with no Tauri runtime present (FR-1, FR-19).
@@ -223,7 +223,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: `frontend-toolkit:internal-ui` (mandatory — **not installed**; degrade to the plan's written UI conventions and report the gap), `frontend-toolkit:ui-ux-pro-max` (**not installed**).
 - **Done when**: from `apps/desktop/`, `npm run format:check`, `npm run lint`, `npm run type` and `npm run test` all pass on a clean tree, and `npm run build` emits `apps/desktop/dist/`.
 
-### [ ] T3: Settings module — config.json load/save/validate  [deps: T1]
+### [x] T3: Settings module — config.json load/save/validate  [deps: T1]
 
 - **Files**: `apps/desktop/src-tauri/src/config.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/config.rs` (`tempfile` for the config dir) — cases: absent file → first-run defaults, `meetings_root: None`, no file written (FR-18); file with only `{"schema_version":1,"meetings_root":"…"}` loads with defaults for the rest (FR-16); unknown top-level and unknown nested `service.*` keys survive a load→modify→save round-trip byte-for-byte in value (F4 contract); `meetings_root` pointing at a deleted folder loads with `meetings_root_exists = false` and no panic (FR-16); malformed JSON returns `AppError { kind: "config" }` naming the file (NFR-6); `set_meetings_root` rejects a relative path, an empty string and a path that cannot be created, and accepts an existing writable directory, persisting atomically; save→load round-trip preserves the value across a simulated restart (FR-16).
@@ -231,7 +231,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: — (no toolkit in the matched profiles covers Rust; the `desktop` profile's inline IPC/validation rules apply).
 - **Done when**: `cargo test -p transcriber-desktop config::`, `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass; the file contains no `unwrap()`/`expect()` outside `#[cfg(test)]`.
 
-### [ ] T4: Path canonicalization and containment  [deps: T1]
+### [x] T4: Path canonicalization and containment  [deps: T1]
 
 - **Files**: `apps/desktop/src-tauri/src/paths.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/paths.rs` (`tempfile` roots) — cases: a path inside the root is accepted and returned canonical (FR-11); `<root>\..\evil.mp4`, an absolute path on another drive, a UNC path and a `\\?\` device path are all refused with `kind: "outside_root"` **before** any write (FR-11); a path whose prefix merely *string-matches* the root (`C:\Meetings-old\x.mp4` vs root `C:\Meetings`) is refused — component-wise comparison, not `starts_with` on strings; verbatim `\\?\` prefixes are stripped for display and both sides are canonicalized before comparison; a non-existent file under the root reports `not_a_file` rather than panicking; a directory input is rejected with `not_a_file` without traversal (FR-6); extension checking is case-insensitive against the single allowlist and unknown extensions yield `unsupported_extension` naming the file and its extension (FR-6); reveal-target validation refuses a path outside the root (FR-15).
@@ -239,7 +239,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: — (`desktop` profile inline rule: "a file dialog result is not validation").
 - **Done when**: `cargo test -p transcriber-desktop paths::` passes, plus workspace `fmt`/`clippy -D warnings`; a test asserts the containment check runs before any filesystem mutation.
 
-### [ ] T5: Transcription service seam — trait, types, in-memory fake  [deps: T1]
+### [x] T5: Transcription service seam — trait, types, in-memory fake  [deps: T1]
 
 - **Files**: `apps/desktop/src-tauri/src/service/mod.rs`, `apps/desktop/src-tauri/src/service/fake.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/service/fake.rs` — cases: `health()` on a healthy fake returns ready; `submit()` returns a job id and `status()` then walks `Queued → Running (progress non-decreasing) → Done` (FR-12, FR-14); a fake configured to fail returns `Failed` carrying the exact provider message verbatim (FR-14); a fake configured as down returns `ServiceError::Unavailable` from `health()` and `submit()` while previously submitted jobs still report status (FR-13); the mapping table (`succeeded→Done`, `cancelled→Failed("cancelled")`) is exercised through the shared `JobState::from_wire` helper.
@@ -247,7 +247,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test -p transcriber-desktop service::` passes; workspace `fmt`/`clippy -D warnings` clean; no `reqwest` or transport type appears in `mod.rs`.
 
-### [ ] T6: UI components — drop zone, job list, settings bar, service banner, first-run  [deps: T2]
+### [x] T6: UI components — drop zone, job list, settings bar, service banner, first-run  [deps: T2]
 
 - **Files**: `apps/desktop/src/types.ts`, `apps/desktop/src/components/{DropZone,JobRow,JobList,SettingsBar,ServiceBanner,FirstRun}.tsx`, `apps/desktop/src/components/*.module.css`, `apps/desktop/src/components/*.test.tsx`
 - **Test first**: co-located `*.test.tsx` with React Testing Library — cases: `DropZone` renders distinct idle / hovering / working states and reverts from hovering to idle (FR-5); when disabled by first-run it renders the "choose a meetings folder" prompt and exposes no drop affordance (FR-18); `JobRow` renders each `JobState` with the file name, and for `done` shows the full `transcript_path` plus an enabled Reveal control (FR-15); for `failed` renders the backend `message` verbatim (FR-14); for `rejected` names the file and its unsupported extension (FR-6); for `ingesting` shows a busy indication (FR-10); `JobList` renders three jobs in submission order and keys them by id with none lost (FR-8); `ServiceBanner` in `unavailable` state names the configured base URL and states what to do (FR-13); `SettingsBar` shows the meetings-root path, a Change… button, and an actionable warning when `meetings_root_exists` is false (FR-16); all controls are reachable by keyboard.
@@ -255,7 +255,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: `frontend-toolkit:internal-ui` (mandatory — **not installed**; degrade to the plan's UI conventions and report the gap), `frontend-toolkit:ui-ux-pro-max` (**not installed**).
 - **Done when**: `npm run test`, `npm run lint`, `npm run type`, `npm run format:check` pass from `apps/desktop/`; grep confirms no `@tauri-apps/api` import under `src/components/`.
 
-### [ ] T7: HTTP binding to the F2 service  [deps: T5]
+### [x] T7: HTTP binding to the F2 service  [deps: T5]
 
 - **Files**: `apps/desktop/src-tauri/src/service/http.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/service/http.rs` using `wiremock` — cases: `submit()` POSTs to `/v1/jobs` with F2's exact body keys and returns the `job_id` from a `202` (FR-12); the `Authorization: Bearer <token>` header is sent when a token is configured and omitted otherwise; `status()` maps each of F2's five statuses to the seam's four and passes `progress`, `error_kind`, `error_message` through unchanged (FR-14); `health()` maps a `GET /health` 200 to ready and a connection refusal to `ServiceError::Unavailable` naming the base URL (FR-13); a 401 maps to an auth error, a 5xx to a distinct error, a malformed body to a decode error — none of them panic (NFR-6); constructing a client with a non-loopback base URL (`http://10.0.0.5:8000`, `https://example.com`) is rejected (NFR-5); a `status()` call completes well under the poll interval and uses a bounded request timeout (NFR-4).
@@ -263,7 +263,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test -p transcriber-desktop service::http` passes; workspace `fmt`/`clippy -D warnings` clean; no HTTPS or non-loopback host can be constructed.
 
-### [ ] T8: Sidecar supervisor — spawn F2, parse ready line, terminate on exit  [deps: T3]
+### [x] T8: Sidecar supervisor — spawn F2, parse ready line, terminate on exit  [deps: T3]
 
 - **Files**: `apps/desktop/src-tauri/src/sidecar.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/sidecar.rs` — cases: `parse_ready_line` accepts `{"event":"listening","port":51234,"token":"abc","pid":9001}` and yields base URL `http://127.0.0.1:51234` plus the token (F2 FR-14); a non-JSON line, a JSON line with a different `event`, and a line missing `port` are ignored/rejected without panicking (NFR-6); waiting on a stream that never emits a ready line resolves to a timeout error naming the command (FR-13); `SidecarSpawnConfig` renders the documented dev command (`uv run --directory services/transcription transcription-service serve --port 0`) with `TRANSCRIBER_CONFIG`, `TRANSCRIBER_APP_DIR`, `TRANSCRIBER_ALLOWED_ROOTS`, `TRANSCRIBER_MODEL_PATH`, `TRANSCRIBER_MODEL_ID` derived from a `Settings` value; a config with `service.base_url` set produces "do not spawn, use this URL" (FR-12); `restart()` terminates the previous child before spawning (used when the meetings-root changes).
@@ -271,7 +271,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test -p transcriber-desktop sidecar::` passes; workspace `fmt`/`clippy -D warnings` clean; no `shell = true`-equivalent, no string-concatenated command line, and no UI-supplied value reaches the argument vector.
 
-### [ ] T9: Vault ingest wrapper over F1's crate  [deps: T3, T4]
+### [x] T9: Vault ingest wrapper over F1's crate  [deps: T3, T4]
 
 - **Files**: `apps/desktop/src-tauri/src/ingest.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/ingest.rs` against a real `tempfile` vault root — cases: a correctly named recording lands at `<root>/ELS/260812 - Security issue/source.mp4` and the returned `meeting_dir` and `source_dest` are absolute and exist (FR-9); a badly named recording lands under `<root>/unsorted/…` per F1's rule with `classification: "unsorted"` and F1's rejection reason surfaced as the job message (FR-9); a `.txt` file and a directory are refused before any vault call (FR-6); a destination collision is reported as `kind: "collision"` (or F1's duplicate/suffix outcome) and never overwrites the existing `source.*` (FR-9); a path outside the meetings-root is refused by `paths::ensure_inside` before F1 is called (FR-11); no naming regex, date parsing or path-joining rule appears in this file (FR-9 acceptance).
@@ -279,7 +279,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test -p transcriber-desktop ingest::` passes; workspace `fmt`/`clippy -D warnings` clean; a large-file smoke is deferred to T13.
 
-### [ ] T12: Frontend IPC layer, job state hook, app wiring, drag-drop listener  [deps: T6]
+### [x] T12: Frontend IPC layer, job state hook, app wiring, drag-drop listener  [deps: T6]
 
 - **Files**: `apps/desktop/src/api.ts`, `apps/desktop/src/api.test.ts`, `apps/desktop/src/state/useJobs.ts`, `apps/desktop/src/state/useJobs.test.ts`, `apps/desktop/src/App.tsx`, `apps/desktop/src/App.test.tsx`, `apps/desktop/src/styles.css`
 - **Test first**: `api.test.ts` / `useJobs.test.ts` / `App.test.tsx` using `mockIPC` + `clearMocks` from `@tauri-apps/api/mocks` — cases: `api.enqueuePaths` invokes `enqueue_paths` with `{ paths }` and returns snapshots; a rejected promise carrying `{kind, message}` is surfaced as a typed `AppError`, never as an unhandled rejection (NFR-6); `useJobs` upserts by id from `jobs://updated` events so a job transitions `queued → running → done` in the rendered list with no user action (FR-14); events for an unknown id append rather than drop (FR-8); `App` renders the first-run picker when `meetings_root` is null and refuses drops in that state (FR-18); a simulated `tauri://drag-drop` `over` event puts the drop zone into hovering, `leave` restores idle, and `drop` with `["C:\\x\\ELS - 260812 - Security issue.mp4"]` invokes `enqueue_paths` with that exact absolute path (FR-4, FR-5); a mixed drop `[good.mp4, bad.txt]` renders one accepted and one rejected row (FR-6); "Choose file…" reaches the same `enqueue_paths` call as a drop of the same path (FR-7); Reveal invokes `reveal_job` with the job id, never with a path string (FR-15); Change… persists via `set_meetings_root` and re-renders the new root (FR-16).
@@ -287,7 +287,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: `frontend-toolkit:internal-ui` (mandatory — **not installed**; degrade as above), `frontend-toolkit:ui-ux-pro-max` (**not installed**).
 - **Done when**: `npm run test`, `npm run lint`, `npm run type`, `npm run format:check` pass; grep shows `@tauri-apps/api` imported only in `src/api.ts`; grep shows no `ondrop`/`dataTransfer` usage.
 
-### [ ] T10: Job registry, sequential pipeline and 1.5 s poll loop  [deps: T5, T7, T9]
+### [x] T10: Job registry, sequential pipeline and 1.5 s poll loop  [deps: T5, T7, T9]
 
 - **Files**: `apps/desktop/src-tauri/src/jobs.rs`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/jobs.rs` driving the fake service and a `tempfile` vault, with an injected event sink instead of a Tauri handle — cases: `enqueue` returns snapshots synchronously in under 300 ms for three files while ingest is still pending (NFR-1); three enqueued files are ingested and submitted **strictly one at a time** in order and all three reach a terminal state (FR-8); a running job emits an update at least every 2 s while polling (NFR-4) with the interval set to 1.5 s; a job transitions `pending → ingesting → queued → running → done` emitting one snapshot per transition (FR-14); on `Done` the snapshot's `transcript_path` is `<meeting_dir>\transcript.json` (FR-15); a service-reported failure sets `failed` with the message verbatim (FR-14); with the fake service down, the file is still ingested (vault write asserted on disk) and the job ends in a distinct awaiting/failed-transcription state, never an ingest failure (FR-13); a rejected file in a mixed batch does not abort the accepted ones (FR-6); ingest work happens off the async runtime (assert the runtime stays responsive by racing a short timer against a slow ingest — NFR-2).
@@ -295,7 +295,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test -p transcriber-desktop jobs::` passes; workspace `fmt`/`clippy -D warnings` clean; the poll interval and its NFR-4 justification are a named constant.
 
-### [ ] T11: Tauri command handlers, app state wiring, capability pruning  [deps: T3, T4, T7, T8, T9, T10, T12]
+### [x] T11: Tauri command handlers, app state wiring, capability pruning  [deps: T3, T4, T7, T8, T9, T10, T12]
 
 - **Files**: `apps/desktop/src-tauri/src/commands.rs`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/src/main.rs`, `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/src-tauri/capabilities/default.json`, `apps/desktop/src-tauri/Cargo.toml`
 - **Test first**: unit tests in `apps/desktop/src-tauri/src/commands.rs` calling the handler bodies through injectable state (no Tauri runtime) — cases: `enqueue_paths` with `[]`, with a 32k-character string, with a relative path, and with a path outside the meetings-root each return a typed `AppError` and never panic (NFR-6, FR-11); `enqueue_paths` before a meetings-root is configured returns `kind: "not_configured"` and writes nothing (FR-18); `reveal_job` with an unknown id returns `invalid_argument`, and with a job whose path was tampered to sit outside the root returns `outside_root` — asserting the containment check is in Rust, not the frontend (FR-15); `reveal_job` on a valid job builds the `explorer.exe /select,<canonical path>` argument vector from the registry, not from any caller string, and tolerates Explorer's nonzero exit code; `set_meetings_root` persists and triggers a sidecar restart with the new allowed root; `service_status` reports `unavailable` naming the URL when the seam is down (FR-13).
@@ -303,7 +303,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` pass; `npm run tauri dev` from `apps/desktop/` opens the window and the full drop→ingest→status→done flow works against the fake service with **no F2 process running**; `capabilities/default.json` contains no `core:default` and no unused permission.
 
-### [ ] T13: Integration verification — end-to-end flow, real app run, security assertions  [deps: T11]
+### [x] T13: Integration verification — end-to-end flow, real app run, security assertions  [deps: T11]
 
 - **Files**: `apps/desktop/src-tauri/tests/e2e_flow.rs`, `apps/desktop/src-tauri/tests/common/mod.rs`
 - **Test first**: `apps/desktop/src-tauri/tests/e2e_flow.rs` — cases: with the fake service and a temp vault, enqueuing `ELS - 260812 - Security issue.mp4` drives the whole pipeline to `done`, leaves exactly `<root>/ELS/260812 - Security issue/source.mp4` on disk, and reports `transcript.json` under that folder (FR-9, FR-15); a badly named recording lands under `unsorted/` (FR-9); a `.txt` in the same batch is rejected while the media file completes (FR-6); with the fake service down the recording is still filed and the job is marked awaiting/failed transcription (FR-13); a crafted `..`-escaping path is refused with `outside_root` (FR-11); re-dropping the identical file applies F1's collision policy without overwriting (FR-9).
@@ -311,7 +311,7 @@ No `fs`, `shell`, `opener`, `http` or `process` plugin permission is granted: al
 - **Skills**: —
 - **Done when**: `cargo test --workspace` passes including the new integration tests; the app was actually launched and the flows driven; the 2 GB responsiveness observation and cold-start timing (NFR-3) are reported.
 
-### [ ] T14: Setup documentation, manual smoke checklist, QA/contract docs  [deps: T11]
+### [x] T14: Setup documentation, manual smoke checklist, QA/contract docs  [deps: T11]
 
 - **Files**: `docs/setup.md`, `docs/manual-smoke-checklist.md`, `docs/config-contract.md`, `apps/desktop/README.md`
 - **Test first**: `docs/manual-smoke-checklist.md` is itself the executable artifact — it must enumerate FR-21's steps as checkboxes with expected results: launch app → set meetings-root → drop `ELS - 260812 - Security issue.mp4` → observe ingest, `queued→running→done`, and the reported `transcript.json` path → drop `random meeting.mp4` → observe `unsorted/` placement → drop `notes.txt` → observe named rejection with no vault write → Reveal opens the meeting folder → restart the app and confirm the meetings-root persisted. Execute it against the real app and commit the recorded run (date, result per step) in the same file.

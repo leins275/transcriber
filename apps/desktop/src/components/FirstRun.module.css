@@ -1,0 +1,5 @@
+.prompt {
+  padding: 1rem;
+  border: 1px dashed var(--border-color, #888);
+  border-radius: 2px;
+}

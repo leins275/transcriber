@@ -1,2 +1,5 @@
 ﻿vexa/
 specs/_intake/*/worktrees/
+target/
+node_modules/
+dist/
