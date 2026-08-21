@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+
+# Tauri (handled by src-tauri/.gitignore too)
+src-tauri/target

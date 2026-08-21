@@ -1,0 +1,12 @@
+.banner {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color, #ddd);
+}
+
+.banner[data-state="unavailable"] {
+  border-color: var(--warning-color, #b91c1c);
+}
+
+.banner[data-state="starting"] {
+  border-color: var(--busy-color, #b45309);
+}

@@ -1,0 +1,32 @@
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border-color, #ddd);
+}
+
+.fileName {
+  flex: 0 0 auto;
+}
+
+.state {
+  flex: 0 0 auto;
+  color: var(--muted-color, #555);
+}
+
+.classification {
+  flex: 0 0 auto;
+  color: var(--muted-color, #555);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.message {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+.busy {
+  color: var(--busy-color, #b45309);
+}
