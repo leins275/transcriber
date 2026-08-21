@@ -96,7 +96,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 
 ## Tasks
 
-### [ ] T1: Rust toolchain, crate skeleton, error vocabulary  [deps: —]
+### [x] T1: Rust toolchain, crate skeleton, error vocabulary  [deps: —]
 
 - **Files**: `crates/vault/Cargo.toml`, `crates/vault/.gitignore`, `crates/vault/README.md`, `crates/vault/src/lib.rs`, `crates/vault/src/error.rs`, `crates/vault/src/date.rs`, `crates/vault/src/title.rs`, `crates/vault/src/code.rs`, `crates/vault/src/media.rs`, `crates/vault/src/paths.rs`, `crates/vault/src/transfer.rs`, `crates/vault/src/appdata.rs`, `crates/vault/src/parse.rs`, `crates/vault/src/layout.rs`, `crates/vault/src/ingest.rs`, `crates/vault/tests/error_vocabulary.rs`
 - **Test first**: `crates/vault/tests/error_vocabulary.rs` — cases: (NFR-5) a `Rejection::ALL` const slice covers every variant and no two `Display` strings are equal; (NFR-5) each message is specific — the `DateNotACalendarDate` message mentions the calendar, not "invalid filename"; a `VaultError::ALL_KINDS` slice likewise has pairwise-distinct `Display` strings; both enums are `Debug + Clone + PartialEq` and `VaultError: std::error::Error`; `Rejection` is `Copy`-able or cheap to clone so F3 can move it across the IPC boundary.
@@ -104,7 +104,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: — (the spec's "Applicable toolkits" list is empty; no domain toolkit resolves for this crate)
 - **Done when**: `cargo --version`, `cargo fmt --version`, `cargo clippy --version` all succeed in a fresh shell; from `crates/vault/`, `cargo build`, `cargo test`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` all pass on the stub crate; `git status` shows no `target/` noise. No `Makefile` anywhere (F4 owns it).
 
-### [ ] T2: Date component — YYMMDD validation and the local-date clock  [deps: T1]
+### [x] T2: Date component — YYMMDD validation and the local-date clock  [deps: T1]
 
 - **Files**: `crates/vault/src/date.rs`, `crates/vault/tests/date.rs`
 - **Test first**: `crates/vault/tests/date.rs` — cases: (FR-5) `260812` and `260724` accepted and returned **verbatim**; `260230` → `DateNotACalendarDate`; `991345` → `DateNotACalendarDate`; `260228` accepted; `260229` **rejected** — 2026 is not a leap year, see R3; `240229` accepted and `250229` rejected, which is the real leap-year coverage; `2026-08-12`, `26081`, `2608123`, `""` → `DateNotSixDigits`; (NFR-3) the Arabic-Indic digits `٢٦٠٨١٢` → `DateNotSixDigits` (ASCII-digits-only, never `char::is_numeric`); `000101` accepted (year 2000), `991231` accepted (year 2099); `260012` and `261300` → `DateNotACalendarDate`; `260800` → `DateNotACalendarDate`; `today_local()` returns a date whose `format_yymmdd` is exactly six ASCII digits and round-trips through the validator.
@@ -112,7 +112,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test date` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` pass; the module imports nothing from `std::fs`/`std::path`.
 
-### [ ] T3: Title rules — Windows-illegal characters, trimming, reserved device names  [deps: T1]
+### [x] T3: Title rules — Windows-illegal characters, trimming, reserved device names  [deps: T1]
 
 - **Files**: `crates/vault/src/title.rs`, `crates/vault/tests/title.rs`
 - **Test first**: `crates/vault/tests/title.rs` — cases: (FR-6) `Security issue`, `Client demo`, `Security - issue - part 2` accepted verbatim; each of `< > : " / \ | ? *` in a title → `IllegalTitleCharacter(c)` with the offending char reported; `Q3: review` → `IllegalTitleCharacter(':')`; a `\u{0}`, `\u{1f}` or `\u{7f}` control char → `IllegalTitleCharacter`; `NUL`, `nul`, `CON`, `com1`, `COM9`, `LPT1`, `LPT9`, `AUX`, `PRN` → `ReservedDeviceName`; the stem rule also catches `NUL.backup`; `COM0`, `LPT0`, `CONSOLE`, `NULL` are **accepted** (not reserved); `""`, `"   "`, `"..."`, `" . "` → `EmptyTitle` after trimming; `Review ` → `Review` (trailing space stripped, FR-6 acceptance); `Review...` → `Review`; leading whitespace trimmed; (NFR-3) emoji, an RTL mark `\u{200f}`, and a 30 000-char title are all accepted here without panic (length is `paths.rs`'s concern, T5); a title that is trimmed to something *different in meaning* is never produced — only whitespace and trailing dots are ever removed.
@@ -120,7 +120,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test title` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
-### [ ] T4: Project code pattern and media extension allowlist  [deps: T1]
+### [x] T4: Project code pattern and media extension allowlist  [deps: T1]
 
 - **Files**: `crates/vault/src/code.rs`, `crates/vault/src/media.rs`, `crates/vault/tests/code.rs`, `crates/vault/tests/media.rs`
 - **Test first**: `crates/vault/tests/code.rs` — cases: (FR-4) `ELS`, `GIS`, `AB`, `A1B2C3`, and a 10-char `ABCDEFGHIJ` accepted; `A` (1 char) and an 11-char code → `InvalidProjectCode`; `els` and `Els` → `InvalidProjectCode` (uppercase-only, see R4 — this is the resolution of the FR-4 prose vs. acceptance-bullet conflict); `EL S` → `InvalidProjectCode`; `""` → `EmptyProjectCode`; `1ELS` → `InvalidProjectCode`; (FR-15) `UNSORTED` → `ReservedProjectCode`, and `unsorted`/`Unsorted` reject too (whatever the variant, they must not become a project); (FR-14 defense in depth) `..`, `\\?\C:`, `C:`, `ELS\evil`, `ELS/evil` all reject and none of them can reach the filesystem layer. `crates/vault/tests/media.rs` — cases: (FR-7) all ten of `mp4 mkv mov webm avi m4a mp3 wav flac ogg` accepted and normalized to lowercase; `MP4` → `mp4`; `exe`, `txt`, `json`, `md`, `""` → `Err(VaultError::UnsupportedMediaType { ext })` carrying the offending extension; `movie.mp4.exe` resolves on the **last** extension and is unsupported; a name with no dot at all is unsupported; a non-ASCII extension is unsupported; extension extraction never panics on a name that is only dots.
@@ -128,7 +128,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test code --test media` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
-### [ ] T5: Path containment, length cap, and vault name shaping  [deps: T1]
+### [x] T5: Path containment, length cap, and vault name shaping  [deps: T1]
 
 - **Files**: `crates/vault/src/paths.rs`, `crates/vault/tests/paths.rs`
 - **Test first**: `crates/vault/tests/paths.rs` — cases: (FR-14) `contained_child(root, ["..", "x"])`, `["ELS", "..", "..", "evil"]`, `["C:\\Windows"]`, `["\\\\?\\C:"]`, `["\\\\server\\share"]`, `["ELS/evil"]`, `["ELS\\evil"]`, `["."]`, `[""]` each return `VaultError::PathEscapesVault`; a legal `["ELS", "260812 - Security issue"]` returns a path that `starts_with` the canonicalized root; (FR-14 second bullet) after **all** of the rejecting calls above, the root directory is still empty — the containment check creates nothing; (NFR-4) `check_len` on a destination whose full absolute form including `\source.mp4` exceeds 260 returns `PathTooLong { len, limit: 260 }`, and a 259-char one passes; (FR-8) `meeting_folder_name("260812", "Security issue")` == `260812 - Security issue`; (FR-10) `unsorted_folder_name(date(2026,8,21), "random meeting")` == `260821 - random meeting`; the unsorted shaper repairs rather than rejects (R6): `"Q3: review"` → `260821 - Q3_ review`, `"bad\\name"` → underscore, trailing dots/spaces trimmed, an empty or all-illegal stem → `260821 - recording`, a stem longer than 120 chars truncated on a char boundary (never mid-UTF-8, assert with an emoji stem); (FR-11) `suffixed("260812 - Security issue", 2)` == `260812 - Security issue (2)`; (FR-15) the reserved-name constants `source`, `transcript.json`, `summary.md`, `unsorted` are exported and no function in this module writes any of them.
@@ -136,7 +136,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test paths` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`; a test asserts the vault root is still empty after every rejection path.
 
-### [ ] T6: File transfer — rename/copy, verify, delete, roll back  [deps: T1]
+### [x] T6: File transfer — rename/copy, verify, delete, roll back  [deps: T1]
 
 - **Files**: `crates/vault/src/transfer.rs`, `crates/vault/tests/transfer.rs`
 - **Test first**: `crates/vault/tests/transfer.rs` (real dirs via `tempfile`) — cases: (FR-12) a successful transfer leaves the destination byte-length equal to the original and the **original absent**; (R7/FR-11) the destination's mtime equals the original's mtime after transfer — assert it, because the size+mtime dedupe depends on it; (FR-12) a forced failure — pre-create the destination path as a *directory* named `source.mp4` — returns an error, leaves the original intact and creates no partial file; a zero-byte source transfers cleanly; a missing source → `VaultError::SourceMissing`; a directory passed as the source → `SourceNotAFile`; (NFR-2) an 8 MiB file moved within the same temp volume completes in under 500 ms (same-volume rename path) — assert elapsed time; a simulated cross-volume transfer (call the copy path directly) verifies size before deleting, and when the verification is made to fail the destination is removed and the original survives.
@@ -144,7 +144,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test transfer` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`; no test leaves anything outside its `tempfile` directory.
 
-### [ ] T7: Application-data directory as a concept distinct from the vault  [deps: T1]
+### [x] T7: Application-data directory as a concept distinct from the vault  [deps: T1]
 
 - **Files**: `crates/vault/src/appdata.rs`, `crates/vault/tests/appdata.rs`
 - **Test first**: `crates/vault/tests/appdata.rs` — cases: (FR-16) `app_data_dir("Transcriber")` returns `%LOCALAPPDATA%\Transcriber` as an absolute path; the function **creates nothing** — assert the returned path does not spring into existence (F4 owns installation); with `LOCALAPPDATA` unset the call returns `VaultError::AppDataUnavailable` rather than panicking; an app name containing `..`, `\`, `/` or `:` returns an error; `DEFAULT_APP_NAME` is a valid app name by the same rule.
@@ -152,7 +152,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test appdata` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
-### [ ] T8: Filename parser — the pure classification entry point  [deps: T2, T3, T4]
+### [x] T8: Filename parser — the pure classification entry point  [deps: T2, T3, T4]
 
 - **Files**: `crates/vault/src/parse.rs`, `crates/vault/tests/parse_filename.rs`, `crates/vault/tests/parse_fuzz.rs`
 - **Test first**: `crates/vault/tests/parse_filename.rs` — cases: (FR-2/FR-3) `ELS - 260812 - Security issue.mp4` → project `ELS`, date `260812`, title `Security issue`, ext `mp4`; `GIS - 260724 - Client demo.mp4` likewise; `ELS - 260812 - Security - issue - part 2.mp4` → title `Security - issue - part 2` (split on the first two separators only); `recording_final(1).mp4` and `ELS-260812-Security.mp4` → `Unsorted { reason: MissingSeparator }`; a name with exactly one `" - "` → `MissingSeparator`; the parser is exercised against a path that does not exist on disk and the test creates no fixture directory at all (FR-2 acceptance); (FR-7) `... .exe` and `... .txt` → `Err(VaultError::UnsupportedMediaType)`, **not** `Unsorted` — the extension gate runs before classification; (FR-4/R4) `els - 260812 - x.mp4` → `Unsorted { InvalidProjectCode }`; (FR-15) `unsorted - 260812 - x.mp4` and `UNSORTED - 260812 - x.mp4` → `Unsorted { ReservedProjectCode }`; (FR-5) `ELS - 260230 - x.mp4` → `Unsorted { DateNotACalendarDate }`; (FR-6) `ELS - 260812 - Q3: review.mp4` → `Unsorted { IllegalTitleCharacter(':') }`, `ELS - 260812 - NUL.mp4` → `ReservedDeviceName`, `ELS - 260812 -  .mp4` → `EmptyTitle`; (FR-14) `.. - 260812 - x.mp4` and `ELS - 260812 - ..\..\evil.mp4` are rejections, and the unsorted result they produce still carries the original stem for the fallback name; the first failing rule wins, and the reported reason is the specific one (NFR-5); (NFR-1) a 4096-char filename classifies in under 1 ms (measure over 100 iterations to beat timer granularity). `crates/vault/tests/parse_fuzz.rs` — (NFR-3) a seeded xorshift generator (no dependency) produces 10 000+ filenames drawn from an alphabet of ASCII, the separator string, `" - "` fragments, control chars, `\u{0}`, emoji, RTL marks, lone surrogate-ish sequences expressed as valid UTF-8, plus lengths up to 32 768; every call returns `Ok`/`Err` and none panics; the same seed reproduces the same run.
@@ -160,7 +160,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: both test files pass, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`; the fuzz test is deterministic (fixed seed) and runs in the default `cargo test` sweep in under a few seconds.
 
-### [ ] T9: Vault layout — init, project-folder reuse, collision policy  [deps: T5, T6]
+### [x] T9: Vault layout — init, project-folder reuse, collision policy  [deps: T5, T6]
 
 - **Files**: `crates/vault/src/layout.rs`, `crates/vault/tests/layout.rs`
 - **Test first**: `crates/vault/tests/layout.rs` (real dirs via `tempfile`) — cases: (FR-1) `init` on an empty directory creates `<root>\unsorted\`; calling it twice more changes nothing, returns success, and does not touch any existing child; `init` on a path that exists as a **file** returns `VaultError::RootIsNotADirectory`, not a panic; `init` on a path whose parent does not exist creates the whole chain or returns a typed `Io` error, never panics; (FR-9) with `<root>\els\` pre-existing, resolving project `ELS` returns exactly `<root>\els` and creates no sibling `ELS`; with nothing pre-existing it creates `<root>\ELS`; a pre-existing *file* named `<root>\ELS` yields a typed error; the resolver is case-insensitive but never renames what it finds; (FR-11) `resolve_meeting_dir` on a free name → `Placement::Fresh`; when `<parent>\<name>\source.mp4` exists with the **same size and mtime** as the incoming file → `Placement::DuplicateRedrop` and the existing file is byte-for-byte untouched afterwards (assert content and mtime); when it exists with a different size → `Placement::Suffixed { dir: "... (2)", n: 2 }`; when ` (2)` is also taken by a different file → `(3)`; a duplicate match against a suffixed folder is reported as a duplicate re-drop of that folder; beyond 999 suffixes → `VaultError::SuffixLimitExceeded`; no path in this module ever truncates or overwrites an existing `source.*`.
@@ -168,7 +168,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test --test layout` passes, then full `cargo test`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`.
 
-### [ ] T10: Ingest orchestration, rollback, and the public API surface  [deps: T7, T8, T9]
+### [x] T10: Ingest orchestration, rollback, and the public API surface  [deps: T7, T8, T9]
 
 - **Files**: `crates/vault/src/ingest.rs`, `crates/vault/src/lib.rs`, `crates/vault/tests/ingest.rs`
 - **Test first**: `crates/vault/tests/ingest.rs` (real dirs via `tempfile`) — cases: (FR-8) ingesting `ELS - 260812 - Security issue.mp4` yields exactly `<root>\ELS\260812 - Security issue\source.mp4` and **no other file** anywhere under the root — walk the tree and assert the full file list; (FR-7) `.MP4` ingests and produces `source.mp4`; `.exe` and `.txt` return `UnsupportedMediaType` and create nothing on disk, not even the project folder; (FR-9) with `<root>\els\` pre-existing the ingest writes into it; (FR-10) `random meeting.mp4` ingested with `ingest_on(.., 2026-08-21)` lands at `<root>\unsorted\260821 - random meeting\source.mp4` and in no project folder; two unsorted files ingested with different injected dates sort by name in date-added order; the unsorted result's `meeting_dir` exists and is writable, so F2 could drop `transcript.json` into it — the test actually writes one there; (FR-11) ingesting the same file twice reports `CollisionOutcome::DuplicateRedrop`, leaves exactly one `source.mp4`, unmodified; ingesting a *different* file with the same name reports `SuffixedFolder(2)` and both recordings survive intact; (FR-12) after a success the original is **absent**; with the destination sabotaged (a directory pre-created at the `source.mp4` path) the call errors, the original is intact, no `source.*` exists in the vault, and the meeting folder the attempt created is gone — while a project folder that already existed beforehand is *not* removed; (FR-13) `meeting_dir` and `source_path` are absolute, the directory exists at return time, a sorted result carries project/date/title and a `Fresh` collision outcome, an unsorted result carries a `Rejection`; (FR-14) `.. - 260812 - x.mp4`, `ELS - 260812 - ..\..\evil.mp4` and a project code of `\\?\C:` all fail or route to unsorted without ever creating anything outside the root — assert the parent of the root is unchanged; a test asserts the containment check runs *before* directory creation by pointing an over-long destination at a fresh root and observing that no project directory appeared; (NFR-4) a title that pushes the absolute destination past 260 chars returns `PathTooLong` and creates nothing; (FR-15) `summary.md` does not exist anywhere after any of the above; a missing source file → `SourceMissing`; a directory dropped instead of a file → `SourceNotAFile`.
@@ -176,7 +176,7 @@ pub fn appdata::app_data_dir(app_name: &str) -> Result<PathBuf, VaultError>;    
 - **Skills**: —
 - **Done when**: `cargo test` passes in full, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` are clean, and `cargo doc --no-deps` builds without warnings (the crate denies `missing_docs`).
 
-### [ ] T11: Acceptance sweep, consumer smoke run, QA gate  [deps: T10]
+### [x] T11: Acceptance sweep, consumer smoke run, QA gate  [deps: T10]
 
 - **Files**: `crates/vault/tests/acceptance.rs`, `crates/vault/examples/f3_consumer.rs`, `crates/vault/README.md`
 - **Test first**: `crates/vault/tests/acceptance.rs` — one test function per acceptance-criteria bullet in the spec, named after its FR (`fr08_exact_destination_and_nothing_else`, `fr12_failed_transfer_rolls_back`, …), each written against the **public** API only, the way F3 will call it, over a real `tempfile` vault. This file is the traceability artifact: every bullet under "Acceptance criteria" in `specs/meeting-vault-layout/spec.md` is either a test here or carries a comment naming the earlier test file that covers it. Include the two spec bullets that no single earlier task owns end to end: a full-session scenario ingesting one sorted, one unsorted and one duplicate recording in sequence and asserting the resulting tree exactly; and the FR-5 note recording that `260229` is rejected because 2026 is not a leap year (R3), so the deviation from the spec's wording is visible in the test suite rather than buried.
