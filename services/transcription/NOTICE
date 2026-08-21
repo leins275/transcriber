@@ -1,0 +1,26 @@
+Transcription microservice
+
+This product includes software adapted from Vexa (Vexa-ai/vexa),
+licensed under the Apache License, Version 2.0. You may obtain a copy of
+the License at http://www.apache.org/licenses/LICENSE-2.0.
+
+Portions of the following files are adapted from Vexa (Vexa-ai/vexa),
+Apache License, Version 2.0:
+
+- src/transcription/errors.py
+  origin: core/meetings/modules/whisper/src/transcription-client.ts:57-88
+  reinforced by: docs/docs/how-to/custom-stt.mdx:114-124
+
+- src/transcription/filters.py
+  origin: core/meetings/services/transcription/src/transcription/main.py:99-118
+  and: core/meetings/modules/whisper/src/confidence.ts:8-13
+
+- src/transcription/providers/local_whisper.py
+  origin: core/meetings/services/transcription/src/transcription/main.py:227-245
+  and: core/meetings/services/transcription/src/transcription/main.py:462-484
+
+- tests/test_api_contract.py
+  origin: core/meetings/services/transcription/tests/conftest.py
+
+See the Apache License, Version 2.0 for the full terms governing use,
+reproduction and distribution of the adapted portions.
