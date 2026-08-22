@@ -1,0 +1,11 @@
+# FR-9: statically link the MSVC C runtime so the installed app has no
+# VCRUNTIME140.dll dependency (no separate redistributable to detect/install).
+#
+# Fallback (per plan.md T6), if `crt-static` ever breaks a native dependency
+# in this workspace: drop this override and instead bundle the VC++
+# redistributable DLLs as `bundle.resources` in ../tauri.conf.json, restoring
+# the dynamic CRT. As of this task, `cargo build -p transcriber-desktop` and
+# `cargo build --workspace` both compile cleanly with crt-static enabled, so
+# no fallback is in effect.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -14,6 +14,9 @@ export type SettingsView = {
   // app still opened (falling back to first-run defaults) instead of
   // panicking, and this is the actionable error to render.
   config_error: string | null;
+  // A sane starting point for the vault folder picker (windows-installer-
+  // build E2, FR-10). Additive to the frozen contract above.
+  default_meetings_root: string | null;
 };
 
 export type JobState =

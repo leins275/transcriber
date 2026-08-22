@@ -11,6 +11,7 @@ dependencies = [
   "faster-whisper>=1.2,<2",
   "litellm>=1.60",
   "h11>=0.16",
+  "huggingface_hub>=0.35",
 ]
 
 [project.scripts]

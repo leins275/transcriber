@@ -13,6 +13,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AppError, JobSnapshot, ServiceStatusView, SettingsView } from "./types";
+import type { ModelDownloadStatus } from "./lib/modelDownload";
 
 /** Narrows an unknown IPC rejection into the frozen `AppError` shape (NFR-6). */
 function toAppError(error: unknown): AppError {
@@ -46,6 +47,15 @@ export const api = {
   listJobs: (): Promise<JobSnapshot[]> => call<JobSnapshot[]>("list_jobs"),
   serviceStatus: (): Promise<ServiceStatusView> => call<ServiceStatusView>("service_status"),
   revealJob: (jobId: string): Promise<void> => call<void>("reveal_job", { jobId }),
+  // Model-download trio (T13, FR-12, FR-17) -- thin proxies over the Rust
+  // commands, which themselves proxy the T11 HTTP endpoints. None takes a
+  // path argument: the destination is resolved on the Rust side only.
+  modelDownloadStatus: (): Promise<ModelDownloadStatus> =>
+    call<ModelDownloadStatus>("model_download_status"),
+  startModelDownload: (): Promise<ModelDownloadStatus> =>
+    call<ModelDownloadStatus>("start_model_download"),
+  cancelModelDownload: (): Promise<ModelDownloadStatus> =>
+    call<ModelDownloadStatus>("cancel_model_download"),
 };
 
 /** Upsert-by-id feed of job transitions (FR-8, FR-14). */
@@ -70,9 +80,17 @@ export async function chooseFile(): Promise<string[]> {
   return Array.isArray(selected) ? selected : [selected];
 }
 
-/** Native folder picker for the meetings-root setting (FR-16, FR-18). */
-export async function chooseMeetingsFolder(): Promise<string | null> {
-  const selected = await open({ multiple: false, directory: true });
+/**
+ * Native folder picker for the meetings-root setting (FR-16, FR-18). Offers
+ * a sane starting point under the user's own profile (FR-10's "a sane
+ * default") rather than opening wherever the OS last left the dialog.
+ */
+export async function chooseMeetingsFolder(defaultPath?: string | null): Promise<string | null> {
+  const selected = await open({
+    multiple: false,
+    directory: true,
+    defaultPath: defaultPath ?? undefined,
+  });
   return typeof selected === "string" ? selected : null;
 }
 

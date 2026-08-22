@@ -35,6 +35,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, ChildStdout, Command};
 
+use crate::app_paths;
 use crate::config::Settings;
 
 /// How long the supervisor waits for F2's ready line before giving up
@@ -93,6 +94,67 @@ impl SidecarSpawnConfig {
         }
     }
 
+    /// The production command: `<app folder>\pyenv\python\python.exe -m
+    /// transcription serve --port 0 --config <config_path>`, launched
+    /// through the bundled, relocatable interpreter `app_paths` resolves
+    /// (T4's baked runtime -- R2), per the Architecture overview's
+    /// Configuration contract. `TRANSCRIBER_APP_DIR` and
+    /// `TRANSCRIBER_MODEL_PATH` are derived from `app_dir` via `app_paths`
+    /// rather than trusted verbatim from `settings.model.path` -- every
+    /// value read back from `config.json` is untrusted input the same way a
+    /// caller-supplied IPC argument is (desktop profile).
+    ///
+    /// Fails with [`SidecarError::MissingRuntime`], naming the exact path
+    /// that does not exist, when the baked tree is absent under `app_dir` --
+    /// this is what lets [`plan_sidecar`] detect "no bundled runtime here"
+    /// and fall back to [`SidecarSpawnConfig::dev`] instead of building a
+    /// command that could only ever fail once actually spawned.
+    pub fn production(
+        settings: &Settings,
+        config_path: &Path,
+        app_dir: &Path,
+    ) -> Result<Self, SidecarError> {
+        let python_exe = app_paths::bundled_python_exe(app_dir);
+        if !python_exe.is_file() {
+            return Err(SidecarError::MissingRuntime {
+                path: python_exe.display().to_string(),
+            });
+        }
+
+        let model_dir = app_paths::model_dir(app_dir, settings.model.path.as_deref());
+
+        let mut envs = vec![
+            (
+                "TRANSCRIBER_APP_DIR".to_string(),
+                app_dir.display().to_string(),
+            ),
+            (
+                "TRANSCRIBER_MODEL_PATH".to_string(),
+                model_dir.display().to_string(),
+            ),
+        ];
+        if let Some(root) = settings.meetings_root.as_ref() {
+            envs.push(("TRANSCRIBER_ALLOWED_ROOTS".to_string(), root.clone()));
+        }
+        if let Some(id) = settings.model.id.as_ref() {
+            envs.push(("TRANSCRIBER_MODEL".to_string(), id.clone()));
+        }
+
+        Ok(SidecarSpawnConfig {
+            program: python_exe.display().to_string(),
+            args: vec![
+                "-m".to_string(),
+                "transcription".to_string(),
+                "serve".to_string(),
+                "--port".to_string(),
+                "0".to_string(),
+                "--config".to_string(),
+                config_path.display().to_string(),
+            ],
+            envs,
+        })
+    }
+
     /// Builds the real `tokio::process::Command` this config describes.
     /// stdin is closed, stdout/stderr are piped so the supervisor can read
     /// the ready line and drain diagnostics without a shell in between.
@@ -118,14 +180,25 @@ pub enum SidecarPlan {
 
 /// Decides whether to spawn F2 or connect to a configured URL. A non-empty
 /// `settings.service.base_url` means "do not spawn, use this URL" (FR-12);
-/// otherwise builds the dev spawn command from `settings`, `config_path`
-/// (where F2 should read `config.json` from) and `app_dir`.
+/// otherwise picks between the production and dev spawn commands by
+/// checking whether T4's baked runtime is actually present under `app_dir`
+/// (T9): a real install always has `<app_dir>\pyenv\python\python.exe`, and
+/// a `tauri dev` checkout never does, so this detection is robust across
+/// both without depending on `cfg!(debug_assertions)` (which only reflects
+/// how *this* Rust binary was built, not whether the Python payload was ever
+/// baked next to it). `TRANSCRIBER_FAKE_SERVICE`/`--fake-service` short-
+/// circuits before this function is ever called (`lib.rs`), so dev mode
+/// with the fake service keeps working unchanged.
 pub fn plan_sidecar(settings: &Settings, config_path: &Path, app_dir: &Path) -> SidecarPlan {
     match settings.service.base_url.as_deref() {
         Some(base_url) if !base_url.trim().is_empty() => SidecarPlan::UseExisting {
             base_url: base_url.to_string(),
         },
-        _ => SidecarPlan::Spawn(SidecarSpawnConfig::dev(settings, config_path, app_dir)),
+        _ => {
+            let config = SidecarSpawnConfig::production(settings, config_path, app_dir)
+                .unwrap_or_else(|_| SidecarSpawnConfig::dev(settings, config_path, app_dir));
+            SidecarPlan::Spawn(config)
+        }
     }
 }
 
@@ -199,6 +272,10 @@ pub enum SidecarError {
     /// The stream ended (or a real I/O error occurred) before a ready line
     /// was seen.
     Io { message: String },
+    /// [`SidecarSpawnConfig::production`] could not find the bundled
+    /// interpreter -- names the exact missing path rather than panicking or
+    /// silently falling through to a partially-built command (F3 NFR-6).
+    MissingRuntime { path: String },
 }
 
 impl std::fmt::Display for SidecarError {
@@ -208,6 +285,9 @@ impl std::fmt::Display for SidecarError {
                 write!(f, "timed out waiting for \"{command}\" to report ready")
             }
             SidecarError::Io { message } => write!(f, "{message}"),
+            SidecarError::MissingRuntime { path } => {
+                write!(f, "bundled Python runtime not found at \"{path}\"")
+            }
         }
     }
 }
@@ -563,6 +643,179 @@ mod tests {
             env.get("TRANSCRIBER_MODEL").map(String::as_str),
             Some("large-v3")
         );
+    }
+
+    // -- SidecarSpawnConfig::production (T9) ------------------------------
+
+    /// Creates `<app_dir>\pyenv\python\python.exe` (an empty stand-in file
+    /// -- `production` only checks for its existence, it never executes it
+    /// in these tests) so `production`/`plan_sidecar` can be exercised as if
+    /// a real installed app folder were present.
+    fn write_fake_bundled_python(app_dir: &Path) {
+        let python_dir = app_dir.join("pyenv").join("python");
+        std::fs::create_dir_all(&python_dir).expect("create fake pyenv/python dir");
+        std::fs::write(python_dir.join("python.exe"), b"not a real interpreter")
+            .expect("write fake python.exe");
+    }
+
+    #[test]
+    fn production_builds_the_documented_argv_and_env_when_the_bundled_runtime_exists() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        write_fake_bundled_python(app_dir.path());
+
+        // No `model.path` override here (unlike `settings_with`'s dev-test
+        // default of "C:\\models") -- this exercises production's *default*
+        // model directory, computed from `app_dir` via `app_paths::model_dir`
+        // rather than trusted verbatim from settings.
+        let mut settings = settings_with(Some("D:\\Meetings"), None);
+        settings.model.path = None;
+        let config_path = app_dir.path().join("config.json");
+
+        let config = SidecarSpawnConfig::production(&settings, &config_path, app_dir.path())
+            .expect("production must succeed when the bundled runtime exists");
+
+        assert_eq!(
+            config.program,
+            app_dir
+                .path()
+                .join("pyenv")
+                .join("python")
+                .join("python.exe")
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            config.args,
+            vec![
+                "-m",
+                "transcription",
+                "serve",
+                "--port",
+                "0",
+                "--config",
+                &config_path.display().to_string(),
+            ]
+        );
+
+        let env: std::collections::HashMap<_, _> = config.envs.into_iter().collect();
+        assert_eq!(
+            env.get("TRANSCRIBER_APP_DIR").map(String::as_str),
+            Some(app_dir.path().display().to_string()).as_deref()
+        );
+        assert_eq!(
+            env.get("TRANSCRIBER_MODEL_PATH").map(String::as_str),
+            Some(
+                app_dir
+                    .path()
+                    .join("models")
+                    .join("faster-whisper-large-v3")
+                    .display()
+                    .to_string()
+            )
+            .as_deref()
+        );
+        assert_eq!(
+            env.get("TRANSCRIBER_ALLOWED_ROOTS").map(String::as_str),
+            Some("D:\\Meetings")
+        );
+        assert_eq!(
+            env.get("TRANSCRIBER_MODEL").map(String::as_str),
+            Some("large-v3")
+        );
+    }
+
+    #[test]
+    fn production_never_lets_a_crafted_model_path_escape_the_app_folder() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        write_fake_bundled_python(app_dir.path());
+
+        let mut settings = settings_with(Some("D:\\Meetings"), None);
+        settings.model.path = Some(r"..\..\..\Windows\System32".to_string());
+        let config_path = app_dir.path().join("config.json");
+
+        let config = SidecarSpawnConfig::production(&settings, &config_path, app_dir.path())
+            .expect("production must succeed");
+
+        let env: std::collections::HashMap<_, _> = config.envs.into_iter().collect();
+        let model_path = env
+            .get("TRANSCRIBER_MODEL_PATH")
+            .expect("TRANSCRIBER_MODEL_PATH must be set");
+        assert!(
+            Path::new(model_path).starts_with(app_dir.path().join("models")),
+            "expected {model_path:?} to stay under {:?}",
+            app_dir.path().join("models")
+        );
+    }
+
+    #[test]
+    fn production_fails_with_a_typed_error_naming_the_missing_path_when_pyenv_is_absent() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        // Deliberately no `pyenv/python/python.exe` written under app_dir.
+
+        let settings = settings_with(Some("D:\\Meetings"), None);
+        let config_path = app_dir.path().join("config.json");
+
+        let err = SidecarSpawnConfig::production(&settings, &config_path, app_dir.path())
+            .expect_err("production must fail when the bundled runtime is missing");
+
+        match err {
+            SidecarError::MissingRuntime { path } => {
+                let expected = app_dir
+                    .path()
+                    .join("pyenv")
+                    .join("python")
+                    .join("python.exe")
+                    .display()
+                    .to_string();
+                assert_eq!(path, expected);
+            }
+            other => panic!("expected MissingRuntime, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_sidecar_spawns_the_production_command_when_the_bundled_runtime_exists() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        write_fake_bundled_python(app_dir.path());
+
+        let settings = settings_with(Some("D:\\Meetings"), None);
+        let config_path = app_dir.path().join("config.json");
+
+        let plan = plan_sidecar(&settings, &config_path, app_dir.path());
+
+        match plan {
+            SidecarPlan::Spawn(config) => {
+                assert_eq!(
+                    config.program,
+                    app_dir
+                        .path()
+                        .join("pyenv")
+                        .join("python")
+                        .join("python.exe")
+                        .display()
+                        .to_string()
+                );
+            }
+            SidecarPlan::UseExisting { .. } => {
+                panic!("expected a Spawn plan against the bundled runtime")
+            }
+        }
+    }
+
+    #[test]
+    fn plan_sidecar_falls_back_to_dev_when_no_bundled_runtime_is_present() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        // No pyenv/python/python.exe written -- this is the dev-machine case.
+
+        let settings = settings_with(Some("D:\\Meetings"), None);
+        let config_path = app_dir.path().join("config.json");
+
+        let plan = plan_sidecar(&settings, &config_path, app_dir.path());
+
+        match plan {
+            SidecarPlan::Spawn(config) => assert_eq!(config.program, "uv"),
+            SidecarPlan::UseExisting { .. } => panic!("expected a Spawn plan"),
+        }
     }
 
     #[test]

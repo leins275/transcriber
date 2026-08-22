@@ -11,6 +11,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     service_base_url: null,
     supported_extensions: [".mp4", ".wav"],
     config_error: null,
+    default_meetings_root: null,
     ...overrides,
   };
 }

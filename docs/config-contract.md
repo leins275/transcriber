@@ -115,12 +115,76 @@ used for `Authorization: Bearer <token>` on every request to F2. A
 sidecar is spawned, and that URL is used directly (with no token, since none
 was issued by a sidecar this app did not start).
 
+## Supersession note (F4 — windows-installer-build spec FR-11)
+
+`specs/windows-installer-build/spec.md`'s **FR-11** originally says the vault
+root is "persisted to a single JSON configuration file **in the application
+folder**". That text is superseded, per the batch decision recorded in
+`specs/windows-installer-build/plan.md`'s Architecture overview, by what this
+document already describes above and what the merged code actually
+implements: the one config file lives at
+`%APPDATA%\com.transcriber.desktop\config.json` — **not** anywhere under the
+per-user application folder (`%LOCALAPPDATA%\Programs\Transcriber\`, Q4-A).
+F4 does not introduce a second, application-folder-local config file.
+
+What replaces FR-11's original mechanism:
+
+- The Rust app resolves the application folder itself (`app_paths.rs`,
+  `app_dir()`) and passes it to the sidecar explicitly at spawn time via the
+  `TRANSCRIBER_APP_DIR` env var documented above, plus
+  `TRANSCRIBER_MODEL_PATH` derived from `app_paths::model_dir()` — the
+  service never guesses or independently locates the application folder.
+  `app_paths::model_dir()` also never resolves outside
+  `<app folder>\models\`, even given a crafted `model.path` value from
+  `config.json` (path-traversal hardening, since every config value is
+  untrusted input to a native-command surface).
+- The env var handshake this file already documents
+  (`TRANSCRIBER_CONFIG_PATH`, `TRANSCRIBER_APP_DIR`, `TRANSCRIBER_ALLOWED_ROOTS`,
+  `TRANSCRIBER_MODEL_PATH`, `TRANSCRIBER_MODEL`) is exactly F2's accepted
+  `TRANSCRIBER_*` override contract — this feature adds no new env vars of
+  its own for the production/installed sidecar.
+- The service's fallback, used only when `TRANSCRIBER_APP_DIR` is absent
+  (a developer running the service standalone, outside the app), is the
+  directory of the running executable — the same rule `app_paths::app_dir()`
+  applies on the Rust side.
+- **The installer's silent mode** (`installer/installer_hooks.nsh`,
+  `/VAULT=<path>`, see `installer/README.md`) writes directly into this same
+  `%APPDATA%\com.transcriber.desktop\config.json` file — a full overwrite
+  (schema v1, `meetings_root` set, `service`/`model` left `null`) matching
+  the schema above exactly, so a silent install lands in precisely the state
+  the in-app first-run wizard would produce. A plain reinstall/upgrade
+  *without* `/VAULT=` never touches `config.json` at all, because the file
+  lives outside `$INSTDIR` and nothing in the installer's upgrade path
+  reaches it — this is what makes the vault root and the downloaded model
+  survive a version bump unconditionally (FR-16).
+- **Installed runtime layout deviation to note here too:** the baked Python
+  runtime and service tree land at `<install dir>\pyenv\python\`,
+  `\pyenv\site-packages\`, `\pyenv\service\` — under `pyenv\` directly at the
+  install root, not under a `resources\pyenv\` subfolder, despite the source
+  tree being `apps/desktop/src-tauri/resources/pyenv/` before bundling (see
+  `docs/setup.md`'s "Known gaps"). `TRANSCRIBER_APP_DIR` and
+  `TRANSCRIBER_MODEL_PATH` are unaffected by this — both are resolved
+  relative to the application folder itself, not to `resources\`.
+
 ## What F4 must do with this
 
+*(Status: done, verified against `installer/installer_hooks.nsh` and
+`apps/desktop/src-tauri/src/sidecar.rs` as of this task — see the
+supersession note above for the specifics of how each bullet below was
+actually satisfied.)*
+
 - Write the initial `config.json` at
-  `%APPDATA%\com.transcriber.desktop\config.json` (creating the directory)
-  at install time, setting at least `meetings_root` and, if pointing at an
-  externally-managed service, `service.base_url`.
+  `%APPDATA%\com.transcriber.desktop\config.json` (creating the directory),
+  setting at least `meetings_root` and, if pointing at an externally-managed
+  service, `service.base_url`. **Two paths satisfy this, not one:** the
+  installer itself writes it at install time only when `/VAULT=` is
+  supplied (silent or interactive — `installer_hooks.nsh` does not gate the
+  write on `IfSilent`); an interactive install with no `/VAULT=` leaves
+  `config.json` absent, and F3's already-built first-run folder-picker
+  writes it the moment the user picks a vault folder (`docs/setup.md`'s dev
+  inner loop describes this: "With no `config.json` present yet, the app
+  shows the first-run folder-picker state"). Both paths produce the same
+  schema.
 - Any additional keys F4 needs to persist (e.g. an installer-only bookkeeping
   field) can be added at the top level or under `service`/`model` — the
   app's own reads/writes will never delete them.

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
 import { JobList } from "./components/JobList";
+import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
 import { SettingsBar } from "./components/SettingsBar";
 import {
@@ -18,6 +19,7 @@ import {
   onServiceStatus,
   safeUnlisten,
 } from "./api";
+import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { useJobs } from "./state/useJobs";
 import type { AppError, ServiceStatusView, SettingsView } from "./types";
 
@@ -32,6 +34,11 @@ function App() {
   const [serviceStatus, setServiceStatus] = useState<ServiceStatusView>(INITIAL_SERVICE_STATUS);
   const [dropState, setDropState] = useState<DropZoneState>("idle");
   const [lastError, setLastError] = useState<AppError | null>(null);
+  // First-run model-download step (T13, FR-12, FR-16, FR-17). `null` means
+  // "not fetched yet" -- rendering stays gated on a real status so a fetch
+  // failure (service not yet ready) never flashes a false "model missing".
+  const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
+  const [modelSkipped, setModelSkipped] = useState(false);
   const { jobs, enqueue } = useJobs();
 
   useEffect(() => {
@@ -64,6 +71,26 @@ function App() {
       safeUnlisten(unlisten);
     };
   }, []);
+
+  // Fetches the model-download status once the sidecar is reachable (T13,
+  // FR-17) -- gating on "ready" rather than firing at mount avoids a
+  // spurious call while the service is still starting up.
+  useEffect(() => {
+    if (serviceStatus.state !== "ready") return;
+    api
+      .modelDownloadStatus()
+      .then(setModelStatus)
+      .catch(() => {
+        // Unreachable/unsupported: stays `null`, so the step simply does not
+        // render yet rather than showing a false "missing" state.
+      });
+  }, [serviceStatus.state]);
+
+  const modelDownloadCommands = useRef({
+    start: () => api.startModelDownload(),
+    cancel: () => api.cancelModelDownload(),
+    status: () => api.modelDownloadStatus(),
+  }).current;
 
   const submitPaths = useCallback(
     async (paths: string[]) => {
@@ -137,14 +164,14 @@ function App() {
 
   const handleChooseFolder = useCallback(async () => {
     try {
-      const folder = await chooseMeetingsFolder();
+      const folder = await chooseMeetingsFolder(settings?.default_meetings_root);
       if (!folder) return;
       const updated = await api.setMeetingsRoot(folder);
       setSettings(updated);
     } catch (error) {
       setLastError(error as AppError);
     }
-  }, []);
+  }, [settings?.default_meetings_root]);
 
   const handleReveal = useCallback((jobId: string) => {
     api.revealJob(jobId).catch((error: AppError) => setLastError(error));
@@ -170,6 +197,17 @@ function App() {
         ) : (
           <FirstRun onChooseFolder={handleChooseFolder} />
         ))}
+      {settings && meetingsRoot && modelStatus && (
+        <ModelDownloadStep
+          commands={modelDownloadCommands}
+          initialStatus={modelStatus}
+          compact={modelSkipped}
+          onModelPresent={() =>
+            setModelStatus((current) => (current ? { ...current, model_present: true } : current))
+          }
+          onSkip={() => setModelSkipped(true)}
+        />
+      )}
       <section aria-label="Jobs" role="region">
         <JobList jobs={jobs} onReveal={handleReveal} />
       </section>

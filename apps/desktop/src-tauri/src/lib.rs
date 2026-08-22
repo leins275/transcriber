@@ -9,6 +9,11 @@
 /// not edit outside this task).
 pub mod error;
 
+/// Resolves the application folder and every path that hangs off it: the
+/// bundled Python runtime, the model directory, and `models\`/`logs\`/
+/// `data\` (T9, FR-8, FR-11-as-superseded).
+pub mod app_paths;
+
 /// `config.json` load/save/validate (FR-16..18).
 pub mod config;
 
@@ -70,7 +75,14 @@ impl commands::ServiceStatusSink for TauriEventSink {
 fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     let config_dir = app.path().app_config_dir()?;
-    let app_dir = config_dir.clone();
+    // T9 / FR-8, FR-11-as-superseded: the application folder is the
+    // installed app's own directory (Q4-A's `%LOCALAPPDATA%\Programs\
+    // Transcriber\`), not `%APPDATA%\<identifier>\` -- that is where the
+    // bundled Python runtime, `models\`/`logs\`/`data\` and the sidecar's
+    // resolved model path all actually live. `config_dir` (above) stays the
+    // one place `config.json` itself is read from/written to, per the
+    // Configuration contract's "one config.json in %APPDATA%" split.
+    let app_dir = app_paths::app_dir();
     // E3 / NFR-6: a malformed or unreadable `config.json` must never keep
     // the window from opening -- fall back to first-run defaults and carry
     // the error forward so `get_settings` can render it as an actionable
@@ -185,6 +197,9 @@ pub fn run() {
             commands::list_jobs,
             commands::service_status,
             commands::reveal_job,
+            commands::model::model_download_status,
+            commands::model::start_model_download,
+            commands::model::cancel_model_download,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

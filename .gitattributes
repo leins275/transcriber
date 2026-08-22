@@ -1,0 +1,15 @@
+# E15: git's own checkout-time newline translation (`core.autocrlf=true` on
+# this Windows checkout) is what re-introduces CRLF into the JSON manifests
+# Prettier wants as LF (`apps/desktop/package.json`,
+# `apps/desktop/src-tauri/tauri.conf.json`) every time the tree is cloned or
+# reset, even after `scripts/sync_version.py` and `make format` both agree
+# on LF. `text=auto` lets git normalize line endings for anything it
+# detects as text; the explicit `eol=lf` rules below pin the file types
+# `apps/desktop`'s Prettier config actually reformats to LF specifically, so
+# that normalization never flips them back to CRLF on this platform.
+* text=auto
+
+apps/desktop/**/*.json text eol=lf
+apps/desktop/**/*.ts text eol=lf
+apps/desktop/**/*.tsx text eol=lf
+apps/desktop/**/*.md text eol=lf

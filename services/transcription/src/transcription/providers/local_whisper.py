@@ -39,18 +39,25 @@ def _cuda_device_count() -> int:
         return 0
 
 
-def _resolve_device_and_compute_type(config: Any) -> tuple[str, str]:
-    """Resolve `device`/`compute_type`, honouring an explicit device over the probe."""
+def _resolve_device_and_compute_type(config: Any) -> tuple[str, str, bool]:
+    """Resolve `device`/`compute_type`, honouring an explicit device over the
+    probe. The third element records whether `device` was resolved from
+    `"auto"` rather than named explicitly -- only an auto-resolved `cuda`
+    is eligible for `_ensure_model`'s CPU fallback (E4): an operator who
+    names `device: cuda` explicitly gets exactly what they asked for, never
+    a silent downgrade.
+    """
     device = getattr(config, "device", "auto") or "auto"
     compute_type = getattr(config, "compute_type", None)
+    is_auto = device == "auto"
 
-    if device == "auto":
+    if is_auto:
         device = "cuda" if _cuda_device_count() > 0 else "cpu"
 
     if not compute_type:
         compute_type = "float16" if device == "cuda" else "int8"
 
-    return device, compute_type
+    return device, compute_type, is_auto
 
 
 # Substrings of a raw exception message that indicate a CTranslate2/CUDA
@@ -70,14 +77,22 @@ _MODEL_LOAD_ERROR_MARKERS = (
 )
 
 
+def _looks_like_cuda_runtime_failure(exc: Exception) -> bool:
+    """Whether `exc`'s message names a CUDA/CTranslate2 runtime-load problem
+    (a missing/unloadable cuBLAS/cuDNN, not a genuine decode failure) --
+    shared between `_classify_transcribe_failure` (below) and
+    `_ensure_model`'s CPU-fallback decision (E4)."""
+    message = str(exc).lower()
+    return any(marker in message for marker in _MODEL_LOAD_ERROR_MARKERS)
+
+
 def _classify_transcribe_failure(exc: Exception) -> ErrorKind:
     """Distinguish a CUDA/CTranslate2 runtime-load failure from a genuine
     decode failure: a missing/unloadable CUDA runtime is `model_load`, never
     `audio_decode` -- mislabeling it points the operator at the audio file
     for what is actually an environment problem (FR-7, FR-8).
     """
-    message = str(exc).lower()
-    if any(marker in message for marker in _MODEL_LOAD_ERROR_MARKERS):
+    if _looks_like_cuda_runtime_failure(exc):
         return ErrorKind.MODEL_LOAD
     return ErrorKind.AUDIO_DECODE
 
@@ -116,7 +131,9 @@ class LocalWhisperProvider:
         self.config = config
         self._model: Any = None
         self._model_state: str = "unloaded"
-        self._device, self._compute_type = _resolve_device_and_compute_type(config)
+        self._device, self._compute_type, self._device_is_auto = _resolve_device_and_compute_type(
+            config
+        )
         self._model_id: str = getattr(config, "model", "base") or "base"
         self._model_path: str | None = getattr(config, "model_path", "") or None
         self._word_timestamps: bool = bool(getattr(config, "word_timestamps", False))
@@ -136,29 +153,77 @@ class LocalWhisperProvider:
             return self._model
 
         self._model_state = "loading"
-        kwargs: dict[str, Any] = {
-            "model_size_or_path": self._model_id,
-            "device": self._device,
-            "compute_type": self._compute_type,
-            "download_root": self._model_path,
-            # Never silently fetch weights over the network (FR-3
-            # acceptance: "loads the model with no network access"). The
-            # model directory is populated by F4's installer; if it isn't
-            # there, this raises instead of downloading, and is reported as
-            # `model_load` below, naming `model_path`.
-            "local_files_only": True,
-        }
-        if self._device == "cpu":
-            kwargs["cpu_threads"] = getattr(self.config, "cpu_threads", 4)
+        # `self._model_path` (`config.model_path`/`TRANSCRIBER_MODEL_PATH`)
+        # is the literal, already-model-specific snapshot directory -- not a
+        # parent "models" directory (`docs/config-contract.md`: the app
+        # derives it via `app_paths::model_dir()`, which already names the
+        # exact `<app folder>\models\faster-whisper-large-v3\` directory;
+        # `model_download.py` writes its flat snapshot straight into
+        # whatever `models_dir` it is given, for the same reason). Passing
+        # that directory as `model_size_or_path` hits
+        # `faster_whisper.WhisperModel.__init__`'s `os.path.isdir(...)`
+        # branch, which loads it directly and bypasses the Hugging Face Hub
+        # cache convention entirely -- T14's real-machine verification
+        # (`docs/verification-installer.md` "Blocker 2") found the previous
+        # `model_size_or_path=self._model_id` (the bare model name) routed
+        # through that hub-cache mechanism instead, which
+        # `model_download.py`'s on-disk layout never matched.
+        # `download_root`/`local_files_only` are still passed so the
+        # *fallback* branch (the directory not existing yet -- a fresh
+        # install with no model downloaded) still refuses to fetch anything
+        # over the network (FR-3 acceptance: "loads the model with no
+        # network access"), instead surfacing as `model_load` below.
+        model_size_or_path = self._model_path or self._model_id
+
+        def _construct_kwargs(device: str, compute_type: str) -> dict[str, Any]:
+            kwargs: dict[str, Any] = {
+                "model_size_or_path": model_size_or_path,
+                "device": device,
+                "compute_type": compute_type,
+                "download_root": self._model_path,
+                "local_files_only": True,
+            }
+            if device == "cpu":
+                kwargs["cpu_threads"] = getattr(self.config, "cpu_threads", 4)
+            return kwargs
 
         try:
-            model = WhisperModel(**kwargs)
+            model = WhisperModel(**_construct_kwargs(self._device, self._compute_type))
         except Exception as exc:
-            self._model_state = "unloaded"
-            raise ServiceError(
-                ErrorKind.MODEL_LOAD,
-                f"failed to load model {self._model_id!r} from {self._model_path!r}: {exc}",
-            ) from exc
+            # E4: an `auto`-resolved `cuda` that turns out not to be
+            # actually loadable (missing driver, or the first-run CUDA
+            # runtime download never completed) is the documented
+            # best-effort-CPU-fallback case (spec "Out of scope: CPU-only
+            # optimization" -- "CPU fallback is best-effort, not a tested or
+            # optimized target"), not a broken install. An *explicit*
+            # `device: cuda` in config is a deliberate operator override, so
+            # it never falls back -- honouring an explicit choice literally,
+            # the same rule `_resolve_device_and_compute_type` already
+            # applies to the probe.
+            if (
+                self._device == "cuda"
+                and self._device_is_auto
+                and _looks_like_cuda_runtime_failure(exc)
+            ):
+                fallback_compute_type = "int8"
+                try:
+                    model = WhisperModel(**_construct_kwargs("cpu", fallback_compute_type))
+                except Exception as cpu_exc:
+                    self._model_state = "unloaded"
+                    raise ServiceError(
+                        ErrorKind.MODEL_LOAD,
+                        f"failed to load model {self._model_id!r} from "
+                        f"{self._model_path!r} on cpu fallback (after cuda failed: "
+                        f"{exc}): {cpu_exc}",
+                    ) from cpu_exc
+                self._device = "cpu"
+                self._compute_type = fallback_compute_type
+            else:
+                self._model_state = "unloaded"
+                raise ServiceError(
+                    ErrorKind.MODEL_LOAD,
+                    f"failed to load model {self._model_id!r} from {self._model_path!r}: {exc}",
+                ) from exc
 
         self._model = model
         self._model_state = "loaded"

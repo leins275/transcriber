@@ -1,0 +1,29 @@
+.step {
+  padding: 1rem;
+  border: 1px dashed var(--border-color, #888);
+  border-radius: 2px;
+}
+
+.step[data-state="error"] {
+  border-color: var(--warning-color, #b91c1c);
+  border-style: solid;
+}
+
+.step[data-state="downloading"],
+.step[data-state="verifying"] {
+  border-color: var(--busy-color, #b45309);
+}
+
+.notice {
+  padding: 0.5rem;
+  border: 1px solid var(--warning-color, #b91c1c);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}

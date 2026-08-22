@@ -24,10 +24,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from transcription.api.model_routes import build_download
 from transcription.config import Config, ConfigError, load_config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.jobs import TERMINAL_STATUSES, JobManager, JobState
 from transcription.ledger import Ledger, LedgerError
+from transcription.model_download import DownloadState
+from transcription.runtime_dlls import register_cuda_dll_dirs
 from transcription.server import run_server
 
 # Verbatim from the plan's error-taxonomy table (`CLI exit` column).
@@ -86,6 +89,15 @@ def _build_parser() -> argparse.ArgumentParser:
     transcribe_parser.add_argument("--out", required=True, dest="output_dir")
     transcribe_parser.set_defaults(func=_cmd_transcribe)
 
+    download_model_parser = subparsers.add_parser(
+        "download-model", help="download the pinned whisper model and exit"
+    )
+    _add_common_flags(download_model_parser)
+    download_model_parser.add_argument(
+        "--out", dest="output_dir", default=None, help="override the models directory"
+    )
+    download_model_parser.set_defaults(func=_cmd_download_model)
+
     return parser
 
 
@@ -123,6 +135,56 @@ def _cmd_transcribe(args: argparse.Namespace, config: Config) -> int:
         return EXIT_CODES[ErrorKind.AUDIO_DECODE]
 
     return asyncio.run(_run_transcribe(config, str(audio_path), args.output_dir))
+
+
+def _cmd_download_model(args: argparse.Namespace, config: Config) -> int:
+    """`download-model`: reuse the same core the HTTP API wraps, in-process
+    (cli profile: JSON on stdout, diagnostics on stderr, distinct exit
+    codes per failure class -- F2 FR-10)."""
+    try:
+        download = build_download(config, out_dir=args.output_dir)
+    except ServiceError as exc:
+        print(redact(exc.message), file=sys.stderr)
+        return EXIT_CODES.get(exc.kind, EXIT_CODES[ErrorKind.INTERNAL])
+
+    last_reported: float | None = None
+
+    def on_progress(event: dict[str, object]) -> None:
+        nonlocal last_reported
+        rounded = round(float(event["percent"]), 2)  # type: ignore[arg-type]
+        if rounded != last_reported:
+            print(
+                f"progress: {rounded:.2f}% file={event['file']} state={event['state']}",
+                file=sys.stderr,
+            )
+            last_reported = rounded
+
+    try:
+        download.start(on_progress=on_progress, progress_interval_sec=1.0)
+    except ServiceError:
+        pass  # `download.state`/`download.error` already carry the failure below
+
+    if download.state is DownloadState.CANCELLED:
+        print("model download cancelled", file=sys.stderr)
+        return EXIT_CODES[ErrorKind.CANCELLED]
+
+    if download.state is not DownloadState.COMPLETE:
+        error = download.error
+        kind = error.kind if error is not None else ErrorKind.INTERNAL
+        message = error.message if error is not None else "model download failed"
+        print(redact(message), file=sys.stderr)
+        return EXIT_CODES.get(kind, EXIT_CODES[ErrorKind.INTERNAL])
+
+    summary = {
+        "state": download.state.value,
+        "repo_id": download.repo_id,
+        "revision": download.revision,
+        "downloaded_bytes": download.downloaded_bytes,
+        "total_bytes": download.total_bytes,
+        "models_dir": args.output_dir or config.model_path,
+    }
+    sys.stdout.write(json.dumps(summary) + "\n")
+    return 0
 
 
 async def _run_transcribe(config: Config, audio_path: str, output_dir: str) -> int:
@@ -191,7 +253,16 @@ def _report_result(config: Config, job: JobState) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for the `transcription-service` console script (FR-1)."""
+    """Entry point for the `transcription-service` console script (FR-1).
+
+    Registers the bundled CUDA runtime's DLL directories (windows-installer-
+    build R3) before anything else, so the search path is already in place
+    the first time the local provider seam lazily loads its native backend
+    -- covering both the `serve` and `transcribe` subcommands, and the
+    `python -m transcription` entry point (`__main__.py` calls this `main`).
+    """
+    register_cuda_dll_dirs()
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 

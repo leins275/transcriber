@@ -21,6 +21,35 @@ pub trait TranscriptionService: Send + Sync {
     /// Submit a job; returns F2's `job_id`.
     async fn submit(&self, req: SubmitRequest) -> Result<String, ServiceError>;
     async fn status(&self, job_id: &str) -> Result<JobStatus, ServiceError>;
+
+    /// `GET /v1/model/download` (T13, FR-12, FR-17). Default: unsupported --
+    /// only `http::HttpTranscriptionService` and `fake::FakeService`
+    /// override this; every other implementor of this trait (in particular
+    /// the job-pipeline test fakes in `jobs.rs`, which this task does not
+    /// own) inherits this default instead of needing an edit just to keep
+    /// compiling.
+    async fn model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/model/download` -- starts a transfer, or returns the
+    /// already-running one's status (F2 never starts a second parallel
+    /// transfer). Default: unsupported (see `model_download_status`).
+    async fn start_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/model/download` -- cancels a transfer, leaving it in a
+    /// retryable state. Default: unsupported (see `model_download_status`).
+    async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "model download is not supported by this service".to_string(),
+        })
+    }
 }
 
 /// `POST /v1/jobs` request body (F2's `JobCreate`, minus the fields this
@@ -103,6 +132,59 @@ impl JobStatus {
 pub struct ServiceHealth {
     pub ready: bool,
     pub detail: Option<String>,
+    /// F2's `model_present` field (T13, FR-17) -- whether the pinned whisper
+    /// snapshot's `.ready` marker already exists, so the app can detect a
+    /// missing model without guessing.
+    pub model_present: bool,
+    /// F2's `cuda_runtime_present` field (E13) -- `None` on a host F2 itself
+    /// judged GPU-less (never prompt about a runtime that machine could
+    /// never use), `Some(bool)` otherwise: whether the CUDA runtime wheels'
+    /// `.ready` marker exists under the app folder's `runtime/`.
+    pub cuda_runtime_present: Option<bool>,
+}
+
+/// Wire-level model-download state (mirrors F2's `DownloadState`, T13,
+/// FR-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelDownloadState {
+    Idle,
+    Downloading,
+    Verifying,
+    Complete,
+    Cancelled,
+    Error,
+}
+
+impl ModelDownloadState {
+    /// Maps one of F2's six wire status strings. Returns `None` for
+    /// anything undocumented, so callers never guess at an unrecognised
+    /// state.
+    pub fn from_wire(state: &str) -> Option<Self> {
+        match state {
+            "idle" => Some(ModelDownloadState::Idle),
+            "downloading" => Some(ModelDownloadState::Downloading),
+            "verifying" => Some(ModelDownloadState::Verifying),
+            "complete" => Some(ModelDownloadState::Complete),
+            "cancelled" => Some(ModelDownloadState::Cancelled),
+            "error" => Some(ModelDownloadState::Error),
+            _ => None,
+        }
+    }
+}
+
+/// `GET`/`POST`/`DELETE /v1/model/download` response (T13, FR-12, FR-17).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDownloadStatus {
+    pub state: ModelDownloadState,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: f64,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    /// F2's `cuda_warning` field (E13) -- set once a `SetupDownload`'s
+    /// CUDA-runtime phase has failed and the setup continued into the model
+    /// phase anyway (E4). Verbatim backend text, never re-worded here.
+    pub cuda_warning: Option<String>,
 }
 
 /// Every way a `TranscriptionService` call can fail (FR-13, FR-14, NFR-6).
