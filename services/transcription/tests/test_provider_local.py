@@ -101,6 +101,7 @@ def make_fake_model_factory(
                 raise raise_on_construct
 
         def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, _FWInfo]:
+            state["transcribe_kwargs"] = kwargs
             if raise_on_transcribe is not None:
                 raise raise_on_transcribe
             if counting:
@@ -109,6 +110,32 @@ def make_fake_model_factory(
 
     _Model.state = state  # type: ignore[attr-defined]
     return _Model
+
+
+class _FakeBatchedPipeline:
+    """Stands in for `faster_whisper.BatchedInferencePipeline`: records the
+    wrapped model and forwards `transcribe` to it, the same delegation shape
+    as the real class."""
+
+    instances: list[_FakeBatchedPipeline] = []
+
+    def __init__(self, *, model: Any) -> None:
+        self.model = model
+        self.transcribe_kwargs: dict[str, Any] | None = None
+        _FakeBatchedPipeline.instances.append(self)
+
+    def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, Any]:
+        self.transcribe_kwargs = kwargs
+        forwarded = {key: value for key, value in kwargs.items() if key != "batch_size"}
+        return self.model.transcribe(path, **forwarded)
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test runs against the fake pipeline class with a clean slate:
+    the real `BatchedInferencePipeline` must never wrap a fake model."""
+    _FakeBatchedPipeline.instances = []
+    monkeypatch.setattr(local_whisper, "BatchedInferencePipeline", _FakeBatchedPipeline)
 
 
 def test_model_not_constructed_at_provider_construction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,6 +550,100 @@ def test_cancel_after_second_segment_stops_iteration_without_exhausting_generato
 
     assert exc_info.value.kind == ErrorKind.CANCELLED
     assert len(progress) == 2
+
+
+def test_decode_disables_context_conditioning_and_tunes_vad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quality tuning: each window is decoded without previous-text bias
+    (run-on / repetition-loop prevention) and VAD breaks segments at real
+    conversational pauses."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    kwargs = model_cls.state["transcribe_kwargs"]
+    assert kwargs["condition_on_previous_text"] is False
+    assert kwargs["vad_filter"] is True
+    assert kwargs["vad_parameters"]["min_silence_duration_ms"] == 500
+    assert kwargs["vad_parameters"]["speech_pad_ms"] == 400
+    # CPU keeps the sequential path: no batch_size leaks into the model call.
+    assert "batch_size" not in kwargs
+
+
+def test_cuda_uses_batched_pipeline_with_configured_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    monkeypatch.setattr(local_whisper, "_cuda_device_count", lambda: 1)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="auto", batch_size=4))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert len(_FakeBatchedPipeline.instances) == 1
+    pipeline = _FakeBatchedPipeline.instances[0]
+    assert pipeline.transcribe_kwargs is not None
+    assert pipeline.transcribe_kwargs["batch_size"] == 4
+    assert pipeline.transcribe_kwargs["condition_on_previous_text"] is False
+
+
+def test_cpu_never_constructs_batched_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="cpu", batch_size=8))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert _FakeBatchedPipeline.instances == []
+
+
+def test_batch_size_of_one_keeps_sequential_path_on_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    monkeypatch.setattr(local_whisper, "_cuda_device_count", lambda: 1)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="auto", batch_size=1))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert _FakeBatchedPipeline.instances == []
+
+
+def test_word_timestamps_resegment_multi_utterance_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The headline fix: one Whisper segment spanning several utterances
+    comes back as one segment per utterance."""
+    words = [
+        _FWWord(word=" Привет.", start=0.0, end=0.4, probability=0.9),
+        _FWWord(word=" Как", start=0.5, end=0.7, probability=0.9),
+        _FWWord(word=" дела?", start=0.7, end=1.0, probability=0.9),
+        _FWWord(word=" Хорошо", start=2.0, end=2.5, probability=0.9),
+    ]
+    segments = [_FWSegment(start=0.0, end=2.5, text=" Привет. Как дела? Хорошо", words=list(words))]
+    model_cls = make_fake_model_factory(segments=segments, info=_FWInfo(duration=2.5))
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config(word_timestamps=True))
+    result = provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert [seg["text"] for seg in result.segments] == [" Привет.", " Как дела?", " Хорошо"]
+    assert [seg["id"] for seg in result.segments] == [0, 1, 2]
+    assert result.text == " Привет. Как дела? Хорошо"
 
 
 def test_cost_usd_and_currency_are_none_for_local_provider(

@@ -162,9 +162,9 @@ export function RecordingPage({
             >
               {copied ? "Copied" : "Copy all"}
             </button>
-            {!entry.has_transcript && entry.has_source && (
+            {entry.has_source && (
               <button type="button" className="btn" disabled={busy} onClick={transcribe}>
-                {busy ? "Queueing…" : "Transcribe"}
+                {busy ? "Queueing…" : entry.has_transcript ? "Re-transcribe" : "Transcribe"}
               </button>
             )}
             <button type="button" className="btn btn-ghost" onClick={() => onReveal(entry.id)}>

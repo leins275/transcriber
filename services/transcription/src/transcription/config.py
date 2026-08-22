@@ -70,6 +70,20 @@ class Config:
     token: str = ""
     language: str | None = None
     filter_hallucinations: bool = True
+    # Word-level timestamps feed the utterance re-segmentation pass (and are
+    # kept in transcript.json for future diarization); on by default because
+    # segmentation quality depends on them.
+    word_timestamps: bool = True
+    # Batched decoding on CUDA (faster_whisper.BatchedInferencePipeline).
+    # <= 1 disables batching; ignored on CPU, where memory is tighter and
+    # the sequential path is the tested one.
+    batch_size: int = 8
+    # VAD: how much silence ends a speech chunk. Lower = segments break at
+    # conversational pauses instead of bridging them.
+    vad_min_silence_ms: int = 500
+    # Re-segmentation: a pause between words at least this long starts a new
+    # segment (utterance), in addition to sentence-ending punctuation.
+    resegment_gap_sec: float = 0.6
     max_cloud_upload_mb: int = 25
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
@@ -84,6 +98,8 @@ class Config:
             "cloud_model": self.cloud_model,
             "language": self.language,
             "filter_hallucinations": self.filter_hallucinations,
+            "word_timestamps": self.word_timestamps,
+            "batch_size": self.batch_size,
             "max_cloud_upload_mb": self.max_cloud_upload_mb,
             "log_level": self.log_level,
         }
@@ -240,6 +256,14 @@ def load_config(
         values["job_timeout_sec"] = int(values["job_timeout_sec"])
     if "filter_hallucinations" in values:
         values["filter_hallucinations"] = _parse_bool(values["filter_hallucinations"])
+    if "word_timestamps" in values:
+        values["word_timestamps"] = _parse_bool(values["word_timestamps"])
+    if "batch_size" in values:
+        values["batch_size"] = int(values["batch_size"])
+    if "vad_min_silence_ms" in values:
+        values["vad_min_silence_ms"] = int(values["vad_min_silence_ms"])
+    if "resegment_gap_sec" in values:
+        values["resegment_gap_sec"] = float(values["resegment_gap_sec"])
 
     token = values.get("token") or secrets.token_hex(32)
     values["token"] = token
