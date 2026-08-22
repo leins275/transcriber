@@ -65,6 +65,24 @@ CI runs on Windows only, and that is not caution: the Rust side imports
 `std::os::windows::process::CommandExt` and shells out to `explorer.exe`, so
 it does not compile on Linux at all.
 
+### The installer is the release
+
+`release.yml` will not publish a release without the installer attached, and
+checks that twice. Before tagging, it resolves the artifact name from
+`sync_version.artifact_name` — the same function `build_installer.py` names
+the file with, so the workflow cannot drift from the builder — and fails if
+the `.exe`, its `.sha256` or `build-manifest.json` is missing, empty, or
+implausibly small for an NSIS build that exited 0. After publishing, it reads
+the release back from the API and confirms the installer is actually
+attached, because `gh release create` can create the release object and
+still have an upload rejected.
+
+The first check sits *before* the tag push, for the same reason the tag comes
+after the build: a tag pointing at a release with no installer makes a
+version look shipped when nothing is installable. The second necessarily runs
+after publishing — it is the one that catches an upload the API accepted the
+release for and then dropped.
+
 `release.yml` triggers on **state, not on a commit message**: it reads
 `version.txt` and asks whether `v<version>` is already tagged. A squashed
 merge, a rebase, a hand-edited `version.txt` or a re-run all behave the same

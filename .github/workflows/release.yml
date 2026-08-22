@@ -94,6 +94,42 @@ jobs:
       - name: Build installer
         run: uv run scripts/build_installer.py
 
+      # Between the build and the tag, on purpose. `gh release create` would
+      # fail on a missing asset anyway -- but by then the tag is pushed, and a
+      # tag pointing at a release that never published is the worst outcome
+      # available: the version looks shipped and nothing is installable.
+      #
+      # The installer's name comes from `sync_version.artifact_name`, the same
+      # function `build_installer.py` names the file with, so the workflow
+      # cannot drift from the builder by spelling the pattern out itself.
+      - name: Verify the release assets exist
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          installer="dist/$(uv run scripts/sync_version.py --print-artifact-name)"
+          missing=0
+          for asset in "$installer" "$installer.sha256" dist/build-manifest.json; do
+            if [ ! -s "$asset" ]; then
+              echo "::error::release asset missing or empty: $asset"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "dist/ contains:"
+            ls -la dist/ || echo "  (no dist directory at all)"
+            exit 1
+          fi
+          # An NSIS installer that is somehow a few KB is a failed build that
+          # exited 0. Anything real here is tens of megabytes.
+          size=$(stat -c%s "$installer")
+          if [ "$size" -lt 10000000 ]; then
+            echo "::error::installer is only $size bytes -- that is not a real build"
+            exit 1
+          fi
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
+          echo "verified $installer ($size bytes) plus its checksum and manifest"
+
       - name: Extract this version's changelog section
         id: notes
         shell: bash
@@ -130,6 +166,28 @@ jobs:
           gh release create "v$version" \
             --title "Transcriber $version" \
             --notes-file release-notes.md \
-            "dist/Transcriber_${version}_x64-setup.exe" \
-            "dist/Transcriber_${version}_x64-setup.exe.sha256" \
+            "${{ steps.assets.outputs.installer }}" \
+            "${{ steps.assets.outputs.installer }}.sha256" \
             "dist/build-manifest.json"
+
+      # `gh release create` can succeed with a partial upload if an asset is
+      # rejected after the release object is made. Read the published release
+      # back and confirm the installer is actually attached and non-empty --
+      # the whole point of the release is that one file.
+      - name: Confirm the installer is attached to the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.check.outputs.version }}"
+          installer_name=$(basename "${{ steps.assets.outputs.installer }}")
+          size=$(gh release view "v$version" \
+            --json assets \
+            --jq ".assets[] | select(.name == \"$installer_name\") | .size")
+          if [ -z "$size" ]; then
+            echo "::error::v$version published without $installer_name attached"
+            gh release view "v$version" --json assets --jq '.assets[].name'
+            exit 1
+          fi
+          echo "v$version has $installer_name attached ($size bytes)"
