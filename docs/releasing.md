@@ -57,7 +57,7 @@ files fails CI rather than surfacing later as a confusing lockfile error.
 
 | File | Runs on | Does |
 |---|---|---|
-| `.github/workflows/ci.yml` | every PR and push to `main` | format / lint / type / test across Rust, TypeScript and Python, on `windows-latest` |
+| `.github/workflows/ci.yml` | every PR | format / lint / type / test across Rust, TypeScript and Python, in four parallel jobs |
 | `.github/workflows/release-pr.yml` | push to `main` | computes the next version; opens or force-updates the `chore/release` PR |
 | `.github/workflows/release.yml` | push to `main` | if `version.txt` has no matching `v*` tag: builds the installer, tags, publishes the Release |
 
@@ -82,6 +82,26 @@ after the build: a tag pointing at a release with no installer makes a
 version look shipped when nothing is installable. The second necessarily runs
 after publishing — it is the one that catches an upload the API accepted the
 release for and then dropped.
+
+### Why CI does not run on `main`
+
+A `pull_request` event builds `refs/pull/N/merge` — the branch already
+merged into main. The PR run therefore tests the exact tree that merging
+produces, and running the same gate again on the push to main reaches the
+same answer at the cost of a second set of Windows runners.
+
+That leaves one real gap: anything pushed straight to `main`, bypassing a
+pull request, is never gated. **Close it with branch protection**, not by
+paying for every run twice:
+
+```
+gh api -X PUT repos/:owner/:repo/branches/main/protection   -F required_pull_request_reviews.required_approving_review_count=0   -F required_status_checks.strict=true   -F 'required_status_checks.contexts[]=Rust'   -F 'required_status_checks.contexts[]=Frontend'   -F 'required_status_checks.contexts[]=Python service'   -F 'required_status_checks.contexts[]=Build system'   -F enforce_admins=false   -F restrictions=null
+```
+
+`strict=true` is the load-bearing part: it requires a branch to be up to
+date with main before merging, which is what makes "the PR run tested the
+merge result" true rather than merely usually true. Without it, main can
+move after a PR is validated and the merge produces a tree nothing built.
 
 `release.yml` triggers on **state, not on a commit message**: it reads
 `version.txt` and asks whether `v<version>` is already tagged. A squashed
