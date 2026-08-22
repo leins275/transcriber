@@ -1,4 +1,5 @@
 import styles from "./Sidebar.module.css";
+import { Logo } from "./Logo";
 import { SettingsBar } from "./SettingsBar";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
@@ -36,7 +37,10 @@ export function Sidebar({
     <aside className={styles.sidebar}>
       <div>
         <div className={styles.kicker}>Local · Nothing uploaded</div>
-        <div className={styles.brand}>Transcriber</div>
+        <div className={styles.brandRow}>
+          <Logo size={30} />
+          <div className={styles.brand}>Transcriber</div>
+        </div>
       </div>
       <div className={styles.divider} />
 
