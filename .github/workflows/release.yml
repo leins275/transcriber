@@ -1,32 +1,35 @@
-# Cuts the release once the release PR lands on `main`.
+# Builds and publishes the release for a `v*` tag.
 #
-# The trigger is deliberately *state*, not a commit message: on every push to
-# main this reads `version.txt` and asks whether a `v<version>` tag already
-# exists. If it does not, that version has never been released, and this
-# workflow tags it, builds the installer and publishes the GitHub Release.
+# The tag is the trigger and the single source of truth: `tag.yml` creates
+# one on every bump-worthy merge to main (and dispatches this workflow at
+# it, because tags pushed with the built-in GITHUB_TOKEN never fire `on:
+# push` themselves), and a human pushing a `v*` tag by hand lands here the
+# same way.
 #
-# Reading state rather than parsing `chore(release):` out of a subject line
-# means a hand-edited version.txt, a squashed merge, a rebase, or a re-run
-# all behave identically — and re-running this workflow on an
-# already-released commit is a no-op instead of a duplicate release.
+# The tag existing before the build is the price of that simplicity: if the
+# installer build fails, the version looks cut but nothing is published.
+# The recovery is cheap and safe -- fix whatever broke the runner and re-run
+# this workflow on the same tag; the `check` job below makes a re-run of an
+# already-published version a no-op instead of a duplicate release.
 
 name: Release
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
-  group: release
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  # Cheap gate on a Linux runner, so an ordinary merge to main never spins up
-  # the Windows builder just to discover there is nothing to do.
+  # Cheap gate on a Linux runner: guard against a mis-aimed manual dispatch
+  # and against double-publishing, so the ~30-minute Windows builder only
+  # ever spins up with real work to do.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -35,20 +38,37 @@ jobs:
       release: ${{ steps.decide.outputs.release }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
 
       - id: decide
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(tr -d '[:space:]' < version.txt)
+          set -euo pipefail
+          # A manual dispatch aimed at a branch has no version to release;
+          # failing loudly beats guessing one from version.txt and publishing
+          # a release no tag points at.
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "::error::this workflow releases tags; dispatch it with --ref refs/tags/vX.Y.Z (got $GITHUB_REF)"
+              exit 1
+              ;;
+          esac
+          version="${GITHUB_REF_NAME#v}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already tagged — nothing to release"
+          # The tag and the tree it points at must agree on the version, or
+          # the installer would be built claiming a different version than
+          # the release it is attached to.
+          tree_version=$(tr -d '[:space:]' < version.txt)
+          if [ "$tree_version" != "$version" ]; then
+            echo "::error::tag v$version points at a tree whose version.txt says $tree_version"
+            exit 1
+          fi
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$version is already published — nothing to release"
             echo "release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "v$version has no tag yet — releasing"
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -101,10 +121,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: uv run scripts/build_installer.py
 
-      # Between the build and the tag, on purpose. `gh release create` would
-      # fail on a missing asset anyway -- but by then the tag is pushed, and a
-      # tag pointing at a release that never published is the worst outcome
-      # available: the version looks shipped and nothing is installable.
+      # `gh release create` would fail on a missing asset anyway -- but with
+      # a clear error naming the asset, before the release object exists,
+      # rather than a partial release a user can already see.
       #
       # The installer's name comes from `sync_version.artifact_name`, the same
       # function `build_installer.py` names the file with, so the workflow
@@ -206,18 +225,6 @@ jobs:
         env:
           VERSION: ${{ needs.check.outputs.version }}
           REPO: ${{ github.repository }}
-
-      # Tag only after the build has succeeded. A tag on a commit whose
-      # installer never built is worse than no tag: it makes a version look
-      # released when nothing exists to install.
-      - name: Tag the release
-        shell: bash
-        run: |
-          version="${{ needs.check.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "v$version" -m "Transcriber $version"
-          git push origin "v$version"
 
       - name: Publish the GitHub Release
         env:

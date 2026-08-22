@@ -1,0 +1,105 @@
+# Turns a merge to `main` into a version tag.
+#
+# On every push to `main`, git-cliff (via `prepare_release.py`) reads the
+# conventional commits since the most recent `v*` tag and decides whether a
+# release is due. If it is, this job writes the new version everywhere
+# (version.txt, the five manifests, both lockfiles' workspace entries),
+# regenerates CHANGELOG.md, commits that as `chore(release): X.Y.Z` on main,
+# tags it `vX.Y.Z`, and pushes both.
+#
+# The release itself is `release.yml`'s job, triggered by the tag. One
+# GitHub quirk makes that hand-off explicit: refs pushed with the built-in
+# GITHUB_TOKEN never trigger other workflows (loop prevention), so the tag
+# push alone would go unnoticed. The last step therefore dispatches the
+# Release workflow at the tag directly. The same quirk is also why this
+# workflow cannot re-trigger itself with its own bump commit.
+#
+# There is no human gate in this flow: every merge to `main` that contains a
+# bump-worthy commit (feat/fix/perf/breaking) releases. Batching still
+# works -- it just moves to the PR: stack the work in one branch and merge
+# once, and the whole branch becomes one release.
+
+name: Tag release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize, never cancel: two quick merges must produce two orderly bumps
+# (the second run sees the first run's tag and computes only what is left),
+# not two runs racing to push to main.
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  # `gh workflow run` needs this to dispatch release.yml.
+  actions: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # `ref: main` rather than the triggering SHA, deliberately: a run that
+      # queued behind another (see the concurrency group) must see the bump
+      # commit and tag that run pushed, or it would recompute a version that
+      # is already taken and fail the push. Full history *and* tags: git-cliff
+      # computes the bump from the range since the last `v*` tag, so a shallow
+      # clone would silently produce a changelog covering the wrong commits.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Compute next version and write it everywhere
+        id: prepare
+        run: |
+          set +e
+          version=$(uv run scripts/prepare_release.py)
+          code=$?
+          set -e
+          # 3 is `prepare_release.py`'s documented "nothing to release" code:
+          # a main branch carrying only docs/chore commits is the normal
+          # state between releases, not a failure.
+          if [ "$code" -eq 3 ]; then
+            echo "nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the bump and push the tag
+        if: steps.prepare.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          version="${{ steps.prepare.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore(release): $version"
+          git tag -a "v$version" -m "Transcriber $version"
+          # One atomic push: main moving without its tag (or the reverse)
+          # would leave the next run computing from a half-applied release.
+          git push --atomic origin main "v$version"
+
+      - name: Dispatch the Release workflow at the tag
+        if: steps.prepare.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run release.yml \
+            --repo "${{ github.repository }}" \
+            --ref "refs/tags/v${{ steps.prepare.outputs.version }}"
