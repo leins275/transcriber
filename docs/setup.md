@@ -12,7 +12,7 @@ verified on the operator's machine — not a generic Tauri guide.
 | Windows SDK | present — `10.0.26100.0` (`C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0`) | |
 | WebView2 runtime | present — `151.0.4129.93` (`C:\Program Files (x86)\Microsoft\EdgeWebView\Application\151.0.4129.93`) | Tauri 2 on Windows renders through the installed WebView2 runtime; no bundled Chromium. |
 | Node / npm | present — Node v22.17.1, npm 11.5.1 | `npm` is the package manager for this feature (not pnpm/bun, per FR-1); `bun` 1.3.14 is also present on this host but unused. |
-| `uv` | present — `C:\Users\feitr\.local\bin\uv.exe` (`uv 0.8.17`) | Used to run F2 (`services/transcription`) as the dev-mode sidecar; see `docs/config-contract.md` for the exact command. |
+| `uv` | present — `C:\Users\<user>\.local\bin\uv.exe` (`uv 0.8.17`) | Used to run F2 (`services/transcription`) as the dev-mode sidecar; see `docs/config-contract.md` for the exact command. |
 | **rustup / cargo** | **installed** (`~/.cargo/bin`, `stable-x86_64-pc-windows-msvc`) as of this task | The spec recorded rustup as **absent** at spec time — "must be installed before any work starts". It has since been installed (verified: `rustup show` reports `stable-x86_64-pc-windows-msvc` as the active, default toolchain with that target). A clean checkout on a machine without it must still install it first; see below. |
 
 ### Installing rustup (only if `cargo`/`rustup` are not already on `PATH`)

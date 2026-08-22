@@ -18,7 +18,7 @@ Three facts about the operator's machine, probed directly, shape this feature:
 
 - **No Rust toolchain**: `cargo`, `rustc` and `rustup` are all absent from PATH. Tauri (F3) cannot be built until this is fixed.
 - **No `make`**: neither `make` nor `mingw32-make` is on PATH. The SDD pipeline probes `make -n format|lint|type|test`, so the build system must supply both the `Makefile` and a way to get GNU Make installed.
-- **No real Python; `uv` is present**: `python --version` prints an empty version — the Microsoft Store stub. `uv 0.8.17` is installed at `C:\Users\feitr\.local\bin\uv.exe`. Available and usable: `node v22.17.1`, `npm 11.5.1`, `git 2.47.0`, `curl 8.10.1`. Absent: `pnpm`, `aria2c`, `makensis`.
+- **No real Python; `uv` is present**: `python --version` prints an empty version — the Microsoft Store stub. `uv 0.8.17` is installed at `C:\Users\<user>\.local\bin\uv.exe`. Available and usable: `node v22.17.1`, `npm 11.5.1`, `git 2.47.0`, `curl 8.10.1`. Absent: `pnpm`, `aria2c`, `makensis`.
 
 That last point generalizes to the end user: the installer cannot assume a Python interpreter exists on the target machine. The Python runtime is part of the payload, not a prerequisite.
 
@@ -164,7 +164,7 @@ Makefile QA targets present: **none** — there is no Makefile, and `make` itsel
 
 Under the strict rule — keep only rows whose Signal is observed in this repository — **no toolkit row currently qualifies**, because no payload code exists yet. One row is listed anyway, because this feature is precisely the layer that creates its signal:
 
-- `devops-toolkit:devops-rollout-plan` — Packaging/Release layer. Selected by the `desktop` profile's "installer / bundle config" row and the `cli` profile's "published package or binary" row. The signal (a bundle configuration) does not exist yet; FR-7 creates it. **This plugin is not installed** — `C:\Users\feitr\.claude\plugins\cache\its-marketplace\` contains only `sdd` and `workflow-toolkit`. Downstream agents should degrade gracefully and the final report should surface the gap.
+- `devops-toolkit:devops-rollout-plan` — Packaging/Release layer. Selected by the `desktop` profile's "installer / bundle config" row and the `cli` profile's "published package or binary" row. The signal (a bundle configuration) does not exist yet; FR-7 creates it. **This plugin is not installed** — `C:\Users\<user>\.claude\plugins\cache\its-marketplace\` contains only `sdd` and `workflow-toolkit`. Downstream agents should degrade gracefully and the final report should surface the gap.
 
 The `web` profile's UI rows do not apply to this feature as scoped: the installer's UI is native (NSIS dialogs), not React. If Q1 is resolved toward a first-run wizard built as app UI, that one task moves into `web`'s UI domain and picks up its mandatory skill.
 

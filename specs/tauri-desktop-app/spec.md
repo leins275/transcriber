@@ -197,7 +197,7 @@ Union of `desktop` and `web`, filtered to the layers this feature actually build
 - `testing-toolkit:e2e-testing-patterns` — E2E driving the Tauri webview (FR-20). Signal: webview-rendered UI. **Not installed.** Note the profile's Playwright assumption does not hold for Tauri on Windows; the pattern guidance transfers, the tool does not (use `tauri-driver` + Edge Driver).
 - `devops-toolkit:devops-rollout-plan` — the `tauri.conf.json` bundle block. Signal: packaging config. Applies only marginally here since **F4 owns packaging**; listed for completeness. **Not installed.**
 
-Only `sdd` and `workflow-toolkit` are present in `C:\Users\feitr\.claude\plugins\cache\its-marketplace\`. Every toolkit above resolves to nothing today; downstream agents should degrade gracefully and the final report should surface the gap. The `desktop` profile has no ITS toolkit at all and carries its IPC/path-traversal/shell-execution rules inline — FR-3, FR-11, FR-15 and NFR-6 encode them directly.
+Only `sdd` and `workflow-toolkit` are present in `C:\Users\<user>\.claude\plugins\cache\its-marketplace\`. Every toolkit above resolves to nothing today; downstream agents should degrade gracefully and the final report should surface the gap. The `desktop` profile has no ITS toolkit at all and carries its IPC/path-traversal/shell-execution rules inline — FR-3, FR-11, FR-15 and NFR-6 encode them directly.
 
 **Mandatory skills**:
 
