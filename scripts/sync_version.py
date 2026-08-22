@@ -6,13 +6,15 @@ of the version and never edits anything else in those files: it rewrites
 only the ``version`` field, preserving key order, indentation and any other
 content byte-for-byte.
 
-``Cargo.lock`` carries a sixth and seventh copy -- one ``version`` line per
-workspace member -- and is synced here too. That is not tidiness: the
-release build runs ``tauri build --locked``, and cargo refuses a lockfile
-whose recorded member version disagrees with the member's ``Cargo.toml``.
-Without this, every version bump would break the installer build with an
-error ("the lock file needs to be updated") that names neither this script
-nor the bump that caused it.
+The two lockfiles carry their own copies as well -- ``Cargo.lock`` has one
+``version`` line per workspace member, and ``services/transcription/uv.lock``
+one for the ``transcription`` project -- and both are synced here. That is
+not tidiness. The release build runs ``tauri build --locked`` and
+``uv export --frozen``, and both tools refuse a lockfile whose recorded
+version disagrees with the manifest beside it. Without this, every version
+bump breaks the installer build with an error ("the lock file needs to be
+updated") that names neither this script nor the bump that caused it --
+which is exactly how it was found.
 
 Usage:
     uv run scripts/sync_version.py --check
@@ -44,20 +46,26 @@ class Manifest:
 
 @dataclass(frozen=True)
 class LockPackage:
-    """One ``[[package]]`` entry in ``Cargo.lock`` for a workspace member."""
+    """One ``[[package]]`` entry in a lockfile, for a locally-owned package.
 
+    Cargo and uv write the same two-line shape here (``name = "..."`` then
+    ``version = "..."``), which is why one rewriter serves both.
+    """
+
+    path: Path
     name: str
 
 
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
+UV_LOCK = REPO_ROOT / "services/transcription/uv.lock"
 
-# The workspace members from the root Cargo.toml. A path dependency's own
-# recorded version is what `--locked` compares against its `Cargo.toml`;
-# every other entry in the lockfile is a registry crate this script must
-# never touch.
+# Only packages this repository owns. Every other entry in either lockfile
+# is a third-party dependency whose version has nothing to do with the
+# product version, and must never be touched.
 LOCK_PACKAGES: list[LockPackage] = [
-    LockPackage("transcriber-desktop"),
-    LockPackage("vault"),
+    LockPackage(CARGO_LOCK, "transcriber-desktop"),
+    LockPackage(CARGO_LOCK, "vault"),
+    LockPackage(UV_LOCK, "transcription"),
 ]
 
 
@@ -155,20 +163,25 @@ def _write_toml_version(path: Path, section: str, version: str) -> None:
 
 
 def lock_version(package: LockPackage) -> str:
-    text = CARGO_LOCK.read_text(encoding="utf-8")
+    text = package.path.read_text(encoding="utf-8")
     match = _lock_version_re(package.name).search(text)
     if not match:
-        raise ValueError(f'no [[package]] entry for "{package.name}" in {CARGO_LOCK}')
+        raise ValueError(f'no [[package]] entry for "{package.name}" in {package.path}')
     return match.group(2)
 
 
 def set_lock_version(package: LockPackage, version: str) -> None:
-    newline = _detect_newline(CARGO_LOCK)
-    text = CARGO_LOCK.read_text(encoding="utf-8")
+    newline = _detect_newline(package.path)
+    text = package.path.read_text(encoding="utf-8")
     new_text, count = _lock_version_re(package.name).subn(rf"\g<1>{version}\g<3>", text, count=1)
     if count == 0:
-        raise ValueError(f'no [[package]] entry for "{package.name}" in {CARGO_LOCK}')
-    CARGO_LOCK.write_text(new_text, encoding="utf-8", newline=newline)
+        raise ValueError(f'no [[package]] entry for "{package.name}" in {package.path}')
+    package.path.write_text(new_text, encoding="utf-8", newline=newline)
+
+
+def _lock_label(package: LockPackage) -> str:
+    """How a drifting lock entry is named in ``--check``'s output."""
+    return f"{package.path.relative_to(REPO_ROOT).as_posix()} ({package.name})"
 
 
 def manifest_version(manifest: Manifest) -> str:
@@ -202,10 +215,10 @@ def check(version: str | None = None) -> list[str]:
         try:
             actual = lock_version(package)
         except (OSError, ValueError):
-            drifting.append(f"Cargo.lock ({package.name})")
+            drifting.append(_lock_label(package))
             continue
         if actual != expected:
-            drifting.append(f"Cargo.lock ({package.name})")
+            drifting.append(_lock_label(package))
     return drifting
 
 

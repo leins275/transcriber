@@ -87,7 +87,9 @@ def test_set_then_check_syncs_every_manifest_and_is_idempotent():
     # Cargo.lock is restored too: `--set` now writes the workspace members'
     # versions there as well, so a snapshot without it leaves the lockfile
     # dirty at the test's scratch version.
-    tracked = [version_txt, sync_version.CARGO_LOCK] + [m.path for m in sync_version.MANIFESTS]
+    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(tracked)
     try:
         result = _run("--set", "9.9.9")
@@ -153,7 +155,9 @@ def test_print_artifact_name_embeds_the_version():
     # Cargo.lock is restored too: `--set` now writes the workspace members'
     # versions there as well, so a snapshot without it leaves the lockfile
     # dirty at the test's scratch version.
-    tracked = [version_txt, sync_version.CARGO_LOCK] + [m.path for m in sync_version.MANIFESTS]
+    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(tracked)
     try:
         _run("--set", "1.2.3")
@@ -206,7 +210,9 @@ def test_check_fails_when_only_cargo_lock_drifts():
 
 def test_set_syncs_cargo_lock_members_without_touching_registry_crates():
     lock = sync_version.CARGO_LOCK
-    paths = [REPO_ROOT / "version.txt", lock] + [m.path for m in sync_version.MANIFESTS]
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(paths)
     try:
         before = lock.read_text(encoding="utf-8")
@@ -227,14 +233,17 @@ def test_set_syncs_cargo_lock_members_without_touching_registry_crates():
         changed = [
             (a, b) for a, b in zip(before.splitlines(), after.splitlines(), strict=True) if a != b
         ]
-        assert len(changed) == len(sync_version.LOCK_PACKAGES), changed
+        cargo_packages = [p for p in sync_version.LOCK_PACKAGES if p.path == lock]
+        assert len(changed) == len(cargo_packages), changed
     finally:
         _restore(snapshot)
 
 
 def test_set_preserves_cargo_locks_newline_style():
     lock = sync_version.CARGO_LOCK
-    paths = [REPO_ROOT / "version.txt", lock] + [m.path for m in sync_version.MANIFESTS]
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(paths)
     try:
         had_crlf = b"\r\n" in lock.read_bytes()
@@ -242,5 +251,62 @@ def test_set_preserves_cargo_locks_newline_style():
         sync_version.set_version("9.9.9")
 
         assert (b"\r\n" in lock.read_bytes()) is had_crlf
+    finally:
+        _restore(snapshot)
+
+
+def test_uv_lock_project_entry_matches_version_txt():
+    # `uv export --frozen` in the pyenv bake refuses a lockfile whose project
+    # version disagrees with pyproject.toml -- the release build's first real
+    # failure, before this was synced.
+    version = sync_version.read_version()
+    transcription = next(
+        package
+        for package in sync_version.LOCK_PACKAGES
+        if package.path == sync_version.UV_LOCK
+    )
+    assert sync_version.lock_version(transcription) == version
+
+
+def test_check_fails_when_only_uv_lock_drifts():
+    lock = sync_version.UV_LOCK
+    snapshot = _snapshot([lock])
+    try:
+        text = lock.read_text(encoding="utf-8")
+        pattern = sync_version._lock_version_re("transcription")
+        lock.write_text(
+            pattern.sub(r"\g<1>9.9.9\g<3>", text, count=1),
+            encoding="utf-8",
+            newline=sync_version._detect_newline(lock),
+        )
+
+        result = _run("--check")
+
+        assert result.returncode == 1
+        assert "services/transcription/uv.lock (transcription)" in result.stderr
+    finally:
+        _restore(snapshot)
+
+
+def test_set_syncs_the_uv_lock_project_without_touching_dependencies():
+    lock = sync_version.UV_LOCK
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.CARGO_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
+    snapshot = _snapshot(paths)
+    try:
+        before = lock.read_text(encoding="utf-8")
+
+        sync_version.set_version("9.9.9")
+
+        after = lock.read_text(encoding="utf-8")
+        changed = [
+            (a, b)
+            for a, b in zip(before.splitlines(), after.splitlines(), strict=True)
+            if a != b
+        ]
+        # Exactly one line: the project's own version. Every other
+        # `[[package]]` in that file is a third-party dependency.
+        assert len(changed) == 1, changed
     finally:
         _restore(snapshot)
