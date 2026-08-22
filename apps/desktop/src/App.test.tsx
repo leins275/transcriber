@@ -221,11 +221,16 @@ describe("App reveal", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
 
+    // Deliberately a *failed* job, not a done one: under the unified list a
+    // finished job has become a recording and stops being pinned, while a
+    // failed transcription stays -- its recording is filed but the list
+    // alone cannot explain that (FR-13).
     await emit(
       "jobs://updated",
       buildJob({
         id: "job-done",
-        state: "done",
+        state: "failed",
+        message: "service unavailable",
         transcript_path: "D:\\Meetings\\ELS\\260812\\transcript.json",
       }),
     );
@@ -264,8 +269,10 @@ describe("App vault browser", () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
-    expect(screen.getByText("260812 - Security issue")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Security issue")).toBeInTheDocument();
     await settle();
   });
 
@@ -315,7 +322,7 @@ describe("App vault browser", () => {
     // The Vault panel itself always mounts (its Service log tab has to stay
     // reachable with an empty vault) -- what the first listing lacks is the
     // meeting.
-    expect(screen.queryByText("260812 - Security issue")).not.toBeInTheDocument();
+    expect(screen.queryByText("Security issue")).not.toBeInTheDocument();
 
     await emit(
       "jobs://updated",
@@ -327,7 +334,7 @@ describe("App vault browser", () => {
       }),
     );
 
-    await waitFor(() => expect(screen.getByText("260812 - Security issue")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
     await settle();
   });
 
@@ -349,7 +356,9 @@ describe("App vault browser", () => {
 
     const user = userEvent.setup();
     render(<App />);
-    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
+    );
 
     await user.click(screen.getByRole("button", { name: /reveal/i }));
 

@@ -2,6 +2,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-height: 0;
 }
 
 .toolbar {
@@ -10,69 +11,110 @@
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
+  padding-bottom: var(--space-2);
 }
 
-.provenance {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
+/* One bordered segmented control, not two buttons: the two views are
+   mutually exclusive, and separate buttons read as separate actions. */
 .views {
-  display: flex;
-  gap: 2px;
+  display: inline-flex;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
-/* the selected view reads as pressed rather than as a second button */
-.views :global(.btn)[aria-pressed="true"] {
-  border-color: var(--accent);
+.viewButton {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: var(--text-sm) / 1.6 var(--font-body);
+  padding: 2px 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.viewButton[aria-pressed="true"] {
   background: var(--accent-tint);
   color: var(--accent-deep);
+  font-weight: 600;
 }
 
-/* A transcript is long by nature: cap the reading area and scroll inside it
-   so the row below stays reachable without paging through an hour of speech. */
-.segments {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  max-height: 420px;
-  overflow: auto;
-  border-top: 1px solid var(--divider);
-}
-
-.segment {
-  display: grid;
-  grid-template-columns: 62px 1fr;
-  gap: var(--space-3);
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--divider);
-  align-items: baseline;
-}
-
-.time {
-  font-size: 11px;
+.find {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  padding: 2px 10px;
   color: var(--text-faint);
+}
+
+.findInput {
+  border: none;
+  background: none;
+  color: var(--text);
+  font: var(--text-sm) / 1.6 var(--font-body);
+  width: 18ch;
+  outline: none;
+}
+
+.matchCount {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   font-feature-settings: "tnum";
 }
 
+/* A book measure. Prose set the full width of a 1100px window is markedly
+   harder to read, and a transcript is prose. */
+.turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow: auto;
+}
+
+/* Speaker above the paragraph, timecode in the margin beside it. */
+.turn {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 2px var(--space-3);
+}
+
+.speakerCell {
+  grid-column: 2;
+}
+
+.time {
+  grid-column: 1;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-feature-settings: "tnum";
+  padding-top: 4px;
+}
+
 .text {
+  grid-column: 2;
+  margin: 0;
   font-size: var(--text-md);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .plain {
   width: 100%;
-  min-height: 260px;
-  max-height: 420px;
+  max-width: 640px;
+  min-height: 320px;
   resize: vertical;
   padding: var(--space-3);
   border: 1px solid var(--divider);
   border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--text);
-  font: var(--text-md) / 1.6 var(--font-body);
+  font: var(--text-md) / 1.7 var(--font-body);
 }
 
 .empty {

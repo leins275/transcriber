@@ -1,43 +1,24 @@
 import styles from "./VaultList.module.css";
 import { VaultRow } from "./VaultRow";
-import type { MeetingUpdate, TranscriptView, VaultMeetingView } from "../types";
+import type { VaultMeetingView } from "../types";
 
 export type VaultListProps = {
   entries: VaultMeetingView[];
-  /** Project codes already in the vault, passed through to each row's
-   * editor so re-filing offers the projects that exist. */
-  projects: string[];
+  onOpen: (entryId: string) => void;
   onReveal: (entryId: string) => void;
-  onReadTranscript: (entryId: string) => Promise<TranscriptView>;
-  onUpdate: (entryId: string, update: MeetingUpdate) => Promise<void>;
-  onDelete: (entryId: string) => Promise<void>;
 };
 
 /**
- * Renders the vault listing in the order the caller already put it in
+ * Renders the recordings in the order the caller already put them in
  * (newest meeting date first — see `vault::list_meetings`), keyed by id.
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function VaultList({
-  entries,
-  projects,
-  onReveal,
-  onReadTranscript,
-  onUpdate,
-  onDelete,
-}: VaultListProps) {
+export function VaultList({ entries, onOpen, onReveal }: VaultListProps) {
   return (
     <ul className={styles.list}>
       {entries.map((entry) => (
         <li key={entry.id}>
-          <VaultRow
-            entry={entry}
-            projects={projects}
-            onReveal={onReveal}
-            onReadTranscript={onReadTranscript}
-            onUpdate={onUpdate}
-            onDelete={onDelete}
-          />
+          <VaultRow entry={entry} onOpen={onOpen} onReveal={onReveal} />
         </li>
       ))}
     </ul>

@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
-import { JobsPanel } from "./components/JobsPanel";
+import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
 import { Sidebar } from "./components/Sidebar";
@@ -22,6 +22,7 @@ import {
   safeUnlisten,
 } from "./api";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
+import { projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
 import { useVault } from "./state/useVault";
 import type { AppError, MeetingUpdate, ServiceStatusView, SettingsView } from "./types";
@@ -42,7 +43,7 @@ function App() {
   // failure (service not yet ready) never flashes a false "model missing".
   const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
   const [modelSkipped, setModelSkipped] = useState(false);
-  const { jobs, enqueue } = useJobs();
+  const { jobs, enqueue, upsert: upsertJob } = useJobs();
   // Vault browser: a persistent list of already-ingested meetings (the
   // "after reopen I don't see already uploaded recordings" problem), plus
   // the per-meeting actions over them.
@@ -51,10 +52,16 @@ function App() {
     refresh: refreshVault,
     reveal: revealVaultEntry,
     readTranscript,
+    readSummary,
+    saveSpeakers,
     update: updateVaultEntry,
     remove: deleteVaultEntry,
     loadServiceLog,
   } = useVault();
+  // Which recording is open, or `null` for the library. A single piece of
+  // state rather than a router: this app has exactly two places to be, and
+  // a URL would be a fiction in a window with no address bar.
+  const [openEntryId, setOpenEntryId] = useState<string | null>(null);
 
   useEffect(() => {
     api
@@ -238,8 +245,26 @@ function App() {
   );
 
   const handleDeleteVaultEntry = useCallback(
-    (entryId: string) => deleteVaultEntry(entryId),
+    async (entryId: string) => {
+      await deleteVaultEntry(entryId);
+      // The page the operator is on has just ceased to exist.
+      setOpenEntryId((current) => (current === entryId ? null : current));
+    },
     [deleteVaultEntry],
+  );
+
+  const handleCancelJob = useCallback((jobId: string) => {
+    api.cancelJob(jobId).catch((error: AppError) => setLastError(error));
+  }, []);
+
+  const handleTranscribe = useCallback(
+    async (entryId: string) => {
+      const snapshot = await api.transcribeVaultEntry(entryId);
+      // Show it in the pinned list immediately; its later transitions
+      // arrive through `jobs://updated` like any other job's.
+      upsertJob(snapshot);
+    },
+    [upsertJob],
   );
 
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
@@ -254,6 +279,11 @@ function App() {
   // preceded it. Once a folder is chosen, setup continues until the model
   // is present or the operator explicitly skips it.
   const inSetup = !meetingsRoot || (!modelSkipped && modelKnown && !modelPresent);
+
+  // Derived, never stored: `update` replaces the entry in place and a
+  // refresh reissues every id, so holding the entry itself would leave the
+  // page rendering a stale copy of a meeting that has since moved.
+  const openEntry = vaultEntries.find((entry) => entry.id === openEntryId) ?? null;
 
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
@@ -300,32 +330,47 @@ function App() {
             <>
               <ServiceBanner status={serviceStatus} />
               {modelStepElement}
-              {jobs.length === 0 ? (
-                <DropZone
-                  variant="hero"
-                  state={dropState}
-                  disabled={false}
-                  onChooseFile={handleChooseFile}
+              {openEntry ? (
+                <RecordingPage
+                  entry={openEntry}
+                  projects={projectCodes(vaultEntries)}
+                  onBack={() => setOpenEntryId(null)}
+                  onReveal={handleRevealVaultEntry}
+                  onReadTranscript={readTranscript}
+                  onReadSummary={readSummary}
+                  onSaveSpeakers={saveSpeakers}
+                  onUpdate={handleUpdateVaultEntry}
+                  onDelete={handleDeleteVaultEntry}
+                  onTranscribe={handleTranscribe}
                 />
               ) : (
                 <>
-                  <DropZone
-                    variant="strip"
-                    state={dropState}
-                    disabled={false}
-                    onChooseFile={handleChooseFile}
+                  {vaultEntries.length === 0 && jobs.length === 0 ? (
+                    <DropZone
+                      variant="hero"
+                      state={dropState}
+                      disabled={false}
+                      onChooseFile={handleChooseFile}
+                    />
+                  ) : (
+                    <DropZone
+                      variant="strip"
+                      state={dropState}
+                      disabled={false}
+                      onChooseFile={handleChooseFile}
+                    />
+                  )}
+                  <VaultPanel
+                    entries={vaultEntries}
+                    jobs={jobs}
+                    onOpen={setOpenEntryId}
+                    onReveal={handleRevealVaultEntry}
+                    onRevealJob={handleReveal}
+                    onCancelJob={handleCancelJob}
+                    onLoadServiceLog={loadServiceLog}
                   />
-                  <JobsPanel jobs={jobs} onReveal={handleReveal} />
                 </>
               )}
-              <VaultPanel
-                entries={vaultEntries}
-                onReveal={handleRevealVaultEntry}
-                onReadTranscript={readTranscript}
-                onUpdate={handleUpdateVaultEntry}
-                onDelete={handleDeleteVaultEntry}
-                onLoadServiceLog={loadServiceLog}
-              />
             </>
           ))}
 

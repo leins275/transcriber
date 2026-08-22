@@ -1,0 +1,75 @@
+.tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 20px;
+}
+
+.name,
+.unassigned,
+.other {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.name {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+/* An unattributed turn reads as an invitation, not as a speaker called
+   "Add speaker" -- so it is quieter than a real name, never bolder. */
+.unassigned {
+  color: var(--text-faint);
+}
+
+.name:hover,
+.unassigned:hover {
+  color: var(--accent-strong);
+}
+
+/* Offered alternatives sit behind the current name and stay recessive until
+   hovered, so a labelled transcript reads as prose rather than as a row of
+   buttons. */
+.other {
+  color: var(--text-faint);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 6px;
+  opacity: 0;
+}
+
+.tag:hover .other,
+.other:focus-visible {
+  opacity: 1;
+  border-color: var(--divider);
+}
+
+.input {
+  width: 12ch;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: 600 11px/1.6 var(--font-body);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hint {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+}

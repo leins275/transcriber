@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { VaultList } from "./VaultList";
-import type { TranscriptView, VaultMeetingView } from "../types";
+import type { VaultMeetingView } from "../types";
 
 function buildEntry(id: string, meeting_name: string): VaultMeetingView {
   return {
@@ -14,24 +14,9 @@ function buildEntry(id: string, meeting_name: string): VaultMeetingView {
   };
 }
 
-const transcript: TranscriptView = {
-  entry_id: "a",
-  meeting_name: "260812 - One",
-  language: null,
-  created_at: null,
-  duration_sec: null,
-  model: null,
-  device: null,
-  text: "",
-  segments: [],
-};
-
 const actions = {
-  projects: ["ELS"],
+  onOpen: () => {},
   onReveal: () => {},
-  onReadTranscript: () => Promise.resolve(transcript),
-  onUpdate: () => Promise.resolve(),
-  onDelete: () => Promise.resolve(),
 };
 
 describe("VaultList", () => {
@@ -45,9 +30,9 @@ describe("VaultList", () => {
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(3);
     expect(items.map((item) => item.textContent)).toEqual([
-      expect.stringContaining("260812 - One"),
-      expect.stringContaining("260811 - Two"),
-      expect.stringContaining("260810 - Three"),
+      expect.stringContaining("One"),
+      expect.stringContaining("Two"),
+      expect.stringContaining("Three"),
     ]);
   });
 

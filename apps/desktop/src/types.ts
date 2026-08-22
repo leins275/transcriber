@@ -95,6 +95,21 @@ export type TranscriptView = {
   device: string | null;
   text: string;
   segments: TranscriptSegmentView[];
+  /** `segment id -> speaker name`, from the meeting's `speakers.json`.
+   * Empty for a transcript nobody has labelled yet. */
+  speakers: Record<string, string>;
+  /** Where `transcript.json` actually is, for the reading view's footer. */
+  transcript_path: string;
+};
+
+/** A meeting's `summary.md`, if anything has written one. Nothing in this
+ * app generates summaries -- that needs a language model -- but the vault
+ * has reserved the name since F1's first spec, so one written by hand is
+ * readable here. */
+export type SummaryView = {
+  entry_id: string;
+  path: string;
+  markdown: string | null;
 };
 
 /** A meeting's requested new identity. `project: null` files it under

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VaultPanel } from "./VaultPanel";
-import type { LedgerJobView, TranscriptView, VaultMeetingView } from "../types";
+import type { JobSnapshot, LedgerJobView, VaultMeetingView } from "../types";
 
 function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView {
   return {
@@ -16,60 +16,99 @@ function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView
   };
 }
 
-const transcript: TranscriptView = {
-  entry_id: "a",
-  meeting_name: "260812 - Security issue",
-  language: null,
-  created_at: null,
-  duration_sec: null,
-  model: null,
-  device: null,
-  text: "",
-  segments: [],
-};
+function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
+  return {
+    id: "job-1",
+    source_path: "C:\\Downloads\\ELS - 260822 - Incident review.mp4",
+    file_name: "ELS - 260822 - Incident review.mp4",
+    state: "running",
+    classification: "sorted",
+    meeting_dir: "D:\\Meetings\\ELS\\260822 - Incident review",
+    source_dest: null,
+    transcript_path: null,
+    progress: 0.4,
+    message: null,
+    error_kind: null,
+    created_at: "2026-08-22T15:00:00Z",
+    ...overrides,
+  };
+}
 
 function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {}) {
   const defaults = {
     entries: [buildEntry()],
+    jobs: [] as JobSnapshot[],
+    onOpen: () => {},
     onReveal: () => {},
-    onReadTranscript: () => Promise.resolve(transcript),
-    onUpdate: () => Promise.resolve(),
-    onDelete: () => Promise.resolve(),
+    onRevealJob: () => {},
+    onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),
   };
   return render(<VaultPanel {...defaults} {...props} />);
 }
 
 describe("VaultPanel", () => {
-  it("exposes a Vault region and the entry count", () => {
-    renderPanel({ entries: [buildEntry({ id: "a" }), buildEntry({ id: "b" })] });
-    expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument();
-    expect(screen.getByText(/2 in vault/i)).toBeInTheDocument();
-  });
-
-  it("offers Projects, Unsorted and Service log as tabs", () => {
+  it("is one Recordings region, not a Jobs panel and a Vault panel", () => {
     renderPanel();
-    expect(screen.getByRole("tab", { name: /projects/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /unsorted/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /service log/i })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument();
   });
 
-  it("opens on Projects and shows only that project's recordings", () => {
+  it("counts recordings, and says how many are in flight", () => {
+    renderPanel({
+      entries: [buildEntry({ id: "a" }), buildEntry({ id: "b" })],
+      jobs: [buildJob()],
+    });
+    expect(screen.getByText(/2 recordings · 1 in flight/i)).toBeInTheDocument();
+  });
+
+  it("omits the in-flight count when nothing is running", () => {
+    renderPanel();
+    expect(screen.queryByText(/in flight/i)).not.toBeInTheDocument();
+  });
+
+  it("pins a live job above the list", () => {
+    renderPanel({ jobs: [buildJob()] });
+    expect(screen.getByText("ELS - 260822 - Incident review.mp4")).toBeInTheDocument();
+  });
+
+  it("drops a finished job from the pinned section — it is a recording now", () => {
+    renderPanel({ jobs: [buildJob({ state: "done" })] });
+    expect(screen.queryByText("ELS - 260822 - Incident review.mp4")).not.toBeInTheDocument();
+  });
+
+  it("keeps a rejected job visible, since it never became a recording", () => {
+    renderPanel({ jobs: [buildJob({ state: "rejected", message: "unsupported extension" })] });
+    expect(screen.getByText("ELS - 260822 - Incident review.mp4")).toBeInTheDocument();
+  });
+
+  it("cancels a running job by id", async () => {
+    const onCancelJob = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ jobs: [buildJob({ id: "job-7" })], onCancelJob });
+
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(onCancelJob).toHaveBeenCalledWith("job-7");
+  });
+
+  it("groups recordings under their project", () => {
     renderPanel({
       entries: [
         buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
         buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
-        buildEntry({ id: "c", project: null, meeting_name: "260810 - loose file" }),
       ],
     });
 
-    expect(screen.getByRole("tab", { name: /projects/i })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText("260812 - Els meeting")).toBeInTheDocument();
-    expect(screen.queryByText("260811 - Gis meeting")).not.toBeInTheDocument();
-    expect(screen.queryByText("260810 - loose file")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
+      "ELS",
+      "GIS",
+    ]);
+    // Both visible at once: grouped, not filtered down to one.
+    expect(screen.getByText("Els meeting")).toBeInTheDocument();
+    expect(screen.getByText("Gis meeting")).toBeInTheDocument();
   });
 
-  it("switches project through the selector", async () => {
+  it("narrows to one project through the picker", async () => {
     const user = userEvent.setup();
     renderPanel({
       entries: [
@@ -80,11 +119,16 @@ describe("VaultPanel", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: /project/i }), "GIS");
 
-    expect(screen.getByText("260811 - Gis meeting")).toBeInTheDocument();
-    expect(screen.queryByText("260812 - Els meeting")).not.toBeInTheDocument();
+    expect(screen.getByText("Gis meeting")).toBeInTheDocument();
+    expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
   });
 
-  it("shows unsorted recordings only on the Unsorted tab, with its own count", async () => {
+  it("offers no picker for a single project — there is nothing to choose", () => {
+    renderPanel();
+    expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps unsorted recordings on their own tab, with a count", async () => {
     const user = userEvent.setup();
     renderPanel({
       entries: [
@@ -95,25 +139,22 @@ describe("VaultPanel", () => {
 
     const unsortedTab = screen.getByRole("tab", { name: /unsorted/i });
     expect(unsortedTab).toHaveTextContent("1");
+    expect(screen.queryByText("loose file")).not.toBeInTheDocument();
 
     await user.click(unsortedTab);
 
-    expect(screen.getByText("260810 - loose file")).toBeInTheDocument();
-    expect(screen.queryByText("260812 - Els meeting")).not.toBeInTheDocument();
+    expect(screen.getByText("loose file")).toBeInTheDocument();
+    expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
   });
 
-  it("teaches the naming convention when the vault holds no projects yet", () => {
-    renderPanel({ entries: [buildEntry({ id: "c", project: null })] });
-    expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
-  });
-
-  it("says so plainly when nothing is unsorted", async () => {
+  it("opens a recording by id", async () => {
+    const onOpen = vi.fn();
     const user = userEvent.setup();
-    renderPanel({ entries: [buildEntry({ project: "ELS" })] });
+    renderPanel({ entries: [buildEntry({ id: "v-42" })], onOpen });
 
-    await user.click(screen.getByRole("tab", { name: /unsorted/i }));
+    await user.click(screen.getByRole("button", { name: /^transcript$/i }));
 
-    expect(screen.getByText(/nothing unsorted/i)).toBeInTheDocument();
+    expect(onOpen).toHaveBeenCalledWith("v-42");
   });
 
   it("loads the service log only once its tab is opened", async () => {
@@ -130,7 +171,7 @@ describe("VaultPanel", () => {
 
   it("still mounts with an empty vault, so the service log stays reachable", () => {
     renderPanel({ entries: [] });
-    expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /service log/i })).toBeInTheDocument();
   });
 });

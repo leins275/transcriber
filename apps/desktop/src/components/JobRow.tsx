@@ -6,6 +6,9 @@ export type JobRowProps = {
   job: JobSnapshot;
   /** Calls the Rust side by job id (FR-15) — never with a raw path string. */
   onReveal: (jobId: string) => void;
+  /** Optional: offered only while the job is still running, and only when
+   * the caller can actually cancel. */
+  onCancel?: (jobId: string) => void;
 };
 
 const STATE_TEXT: Record<JobState, string> = {
@@ -115,7 +118,7 @@ function StateIcon({ state }: { state: JobState }) {
 }
 
 /** Presentational only: no invoke, no listen, no fetch (T6). */
-export function JobRow({ job, onReveal }: JobRowProps) {
+export function JobRow({ job, onReveal, onCancel }: JobRowProps) {
   // The most specific path known for this job yet -- mirrors the Rust
   // side's own fallback order in `reveal_job_handler`
   // (transcript_path -> source_dest -> meeting_dir), so Reveal is offered
@@ -158,6 +161,14 @@ export function JobRow({ job, onReveal }: JobRowProps) {
         {revealablePath && (
           <button type="button" className="btn btn-secondary" onClick={() => onReveal(job.id)}>
             Reveal
+          </button>
+        )}
+        {/* Only while there is something to stop. A queued job has been
+            handed to the service and can still be withdrawn; a finished one
+            cannot, and offering the button anyway would be a lie. */}
+        {onCancel && (job.state === "queued" || job.state === "running") && (
+          <button type="button" className="btn btn-ghost" onClick={() => onCancel(job.id)}>
+            Cancel
           </button>
         )}
       </div>

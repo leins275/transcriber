@@ -19,6 +19,7 @@ import type {
   MeetingUpdate,
   ServiceStatusView,
   SettingsView,
+  SummaryView,
   TranscriptView,
   VaultMeetingView,
 } from "./types";
@@ -75,6 +76,21 @@ export const api = {
     }),
   deleteVaultEntry: (entryId: string): Promise<void> =>
     call<void>("delete_vault_entry", { entryId }),
+  /** Replaces a meeting's speaker labels wholesale -- renaming a speaker is
+   * by definition an edit to every segment they hold, so sending the whole
+   * map keeps that one operation atomic. */
+  setSpeakerLabels: (entryId: string, assignments: Record<string, string>): Promise<void> =>
+    call<void>("set_speaker_labels", { entryId, assignments }),
+  readSummary: (entryId: string): Promise<SummaryView> =>
+    call<SummaryView>("read_summary", { entryId }),
+  /** Re-runs transcription over a recording already filed in the vault --
+   * never a second ingest, which would file a duplicate under a suffixed
+   * name. */
+  transcribeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("transcribe_vault_entry", { entryId }),
+  /** Resolves `false` when there was nothing left to cancel (the job never
+   * reached the service, or already finished) -- information, not an error. */
+  cancelJob: (jobId: string): Promise<boolean> => call<boolean>("cancel_job", { jobId }),
   // F2's own sqlite job ledger, newest first (`GET /v1/jobs` behind the
   // Rust proxy). `limit` is clamped Rust-side to what F2 accepts.
   listServiceJobs: (limit?: number): Promise<LedgerJobView[]> =>

@@ -26,11 +26,26 @@
   display: inline-block;
 }
 
+/* The name is the target for opening the recording, so it is a real
+   button -- keyboard reachable, and announced as the action it is -- while
+   looking like the text it sits in. */
 .content {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.content:hover .name {
+  color: var(--accent-deep);
 }
 
 .name {
