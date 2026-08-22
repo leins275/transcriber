@@ -163,18 +163,22 @@ jobs:
       - name: dependency locks committed
         run: uv run scripts/verify_locks.py --check
 
-      # `-m "not slow"` excludes `test_build_pyenv`'s real bake: it downloads a
-      # managed CPython and installs the frozen dependency tree, several
-      # minutes and a few hundred MB, which is not what a per-push gate is
-      # for. It skips itself locally when `uv` is off PATH, but a runner
-      # always has uv, so it has to be excluded explicitly.
+      # Two markers excluded, for two different reasons.
       #
-      # The bake is not left untested -- `release.yml` runs the real one as a
-      # stage of the installer build. And it runs it *before* the tag is
-      # pushed, so a bake that fails on a runner means no release is
-      # published, never a broken one.
+      # `slow` is `test_build_pyenv`'s real bake: a managed CPython download
+      # plus the frozen dependency tree, minutes and hundreds of megabytes,
+      # which is not what a per-push gate is for. It is not left untested --
+      # `release.yml` runs the real bake as a stage of the installer build,
+      # and does so *before* the tag is pushed, so a bake that fails on a
+      # runner means no release is published rather than a broken one.
+      #
+      # `host` is `test_bootstrap`, which its own docstring calls an
+      # integration test of the operator's machine. A runner is not that
+      # machine -- it has a real Python where those tests assert a Microsoft
+      # Store stub. Making them pass here would mean changing what they
+      # assert, which would delete the only thing they are for.
       - name: pytest (scripts)
-        run: uv run --with pytest -- pytest scripts/tests -q -m "not slow"
+        run: uv run --with pytest -- pytest scripts/tests -q -m "not slow and not host"
 
       # These suites bake fixtures into the tree; NFR-6 requires them to
       # clean up after themselves, and a dirty tree here would mean a

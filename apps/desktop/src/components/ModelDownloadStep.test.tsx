@@ -239,8 +239,13 @@ describe("ModelDownloadStep", () => {
 
     await user.click(screen.getByRole("button", { name: /retry gpu setup/i }));
 
+    // Both waited for, and for different reasons. The alert clears as soon
+    // as `start` resolves and the warning goes; the *status* notice only
+    // clears once a poll reports the runtime installed, which is a 10ms
+    // timer away. Asserting that one synchronously passed on a fast machine
+    // and failed on a CI runner -- a race in the test, not in the component.
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 
   it("starting a download renders bytes and percent, and updates as status polls arrive (FR-12)", async () => {
