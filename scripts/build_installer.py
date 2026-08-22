@@ -331,6 +331,30 @@ def stage_pyenv_bake(ctx: BuildContext) -> None:
         ctx.pyenv_manifest = build_pyenv.bake(ctx.pyenv_out, extras=ctx.extras)
     except build_pyenv.BuildPyenvError as exc:
         raise BuildInstallerError(f"pyenv bake failed: {exc}") from exc
+    _restore_gitkeep(ctx.pyenv_out)
+
+
+def _restore_gitkeep(pyenv_out: Path) -> None:
+    """Put back the tracked `.gitkeep` the bake just deleted.
+
+    `build_pyenv.bake` replaces its output directory wholesale
+    (`shutil.rmtree`), which is right for a build artifact -- but when that
+    directory is `apps/desktop/src-tauri/resources/pyenv/` it also removes a
+    *tracked* file. The .gitignore there ignores the directory's contents and
+    keeps exactly this one placeholder, because `tauri-build`'s
+    `bundleResources` errors out if the source path does not exist on a clean
+    checkout. Without this, every release build left `git status` reporting a
+    deleted file nobody deleted, and a clean clone that had built once could
+    no longer build.
+
+    Only ever recreated inside the tracked resources directory: a standalone
+    `build_pyenv.py --out somewhere/else` has no placeholder to restore.
+    """
+    if pyenv_out != DEFAULT_PYENV_OUT:
+        return
+    gitkeep = pyenv_out / ".gitkeep"
+    if not gitkeep.exists():
+        gitkeep.touch()
 
 
 def stage_tauri_build(ctx: BuildContext) -> None:
