@@ -46,6 +46,44 @@ passing.
       Expected: the meetings-root chosen in step 2 is still shown — no
       re-prompt for first-run, no reset to a default.
 
+### Vault browser, transcript viewer and re-filing
+
+Added with the vault-management pass; every step below is **pending** a real
+GUI run for the same reason steps 2-5 are (no `tauri-driver` on this host).
+Each names the automated coverage that stands in for it in the meantime.
+
+- [ ] **8. Drop `els - 260812 - Weekly sync.mp4`** (lowercase project code).
+      Expected: filed under `<meetings-root>\ELS\` — the project is decoded
+      from the filename and always capitalized — reusing an existing `ELS`
+      folder whatever its case, not creating a second one beside it.
+      Automated: `vault::code` (case-insensitive validate), `vault::parse`,
+      `vault::manage::tests::reuses_an_existing_project_folder_whatever_its_case`.
+- [ ] **9. Vault tabs.** Expected: `Projects` opens with a project picker
+      showing one project's recordings at a time; `Unsorted` shows only
+      `unsorted/` meetings with its own count; `Service log` shows F2's
+      sqlite job ledger newest-first, and stays reachable with an empty
+      vault. Automated: `VaultPanel.test.tsx`, `lib/vaultGroups.test.ts`.
+- [ ] **10. Transcript.** Open a Russian-language meeting's transcript in
+      the app. Expected: Cyrillic renders as letters (not `\uXXXX`), the
+      timeline shows one timestamped segment per line, and `Plain text`
+      offers the same content selectable for copying. Automated:
+      `commands::meetings` (parse, both encodings), `TranscriptViewer.test.tsx`,
+      `test_transcript.py::test_write_atomic_writes_non_latin_text_as_utf8_not_escapes`.
+- [ ] **11. Rename / re-file.** Rename an unsorted recording into a project
+      (new or existing), change its date and title. Expected: the folder and
+      everything in it moves in one step; the row updates in place; an
+      emptied project folder disappears from the picker; an unusable name is
+      refused with the backend's own message and nothing moves. Automated:
+      `vault::manage::tests`, `commands::tests::update_vault_entry_*`,
+      `MeetingEditor.test.tsx`.
+- [ ] **12. Delete.** Delete a meeting and confirm. Expected: the folder is
+      in the Windows Recycle Bin (restorable), not erased; the row
+      disappears. Automated: `vault::manage::tests::delete_moves_the_meeting_out_of_the_vault_and_prunes_its_project`,
+      `commands::tests::delete_vault_entry_removes_the_meeting_and_retires_its_id`.
+- [ ] **13. App icon.** Expected: the taskbar, window and installer show the
+      waveform-into-text mark, not the Tauri default. Automated: none — this
+      is an OS shell rendering check.
+
 ## Execution log
 
 | Step | Status | Evidence | Date | Notes |
