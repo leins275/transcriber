@@ -17,7 +17,10 @@ export type ParsedMeetingName = {
   title: string;
 };
 
-const MEETING_NAME = /^(\d{6}) - (.+)$/;
+// Whitespace around the `-` separator is optional, the same rule the
+// filename convention follows (`fileName.ts`, `vault::parse`): a
+// hand-renamed `260812-Title` folder still parses.
+const MEETING_NAME = /^(\d{6}) *- *(.+)$/;
 
 /**
  * Splits a meeting folder name into its date and title, or returns `null`
@@ -28,7 +31,7 @@ export function parseMeetingName(meetingName: string): ParsedMeetingName | null 
   const match = MEETING_NAME.exec(meetingName);
   if (!match) return null;
   const [, date, title] = match;
-  return { date, title };
+  return { date, title: title.trim() };
 }
 
 /**

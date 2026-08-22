@@ -123,13 +123,24 @@ fn fr02_fr03_pure_parser_splits_on_first_two_separators_with_no_filesystem() {
         other => panic!("expected Sorted, got {other:?}"),
     }
 
-    for name in ["recording_final(1).mp4", "ELS-260812-Security.mp4"] {
+    for name in ["recording_final(1).mp4", "just one - separator.mp4"] {
         match vault::classify_filename(name).unwrap() {
             Classified::Unsorted { reason, .. } => {
                 assert_eq!(reason, Rejection::MissingSeparator, "for {name:?}")
             }
             other => panic!("expected Unsorted for {name:?}, got {other:?}"),
         }
+    }
+
+    // Whitespace around the separator is optional: the compact form is
+    // sorted, not a missing-separator rejection.
+    match vault::classify_filename("ELS-260812-Security.mp4").unwrap() {
+        Classified::Sorted(parsed) => {
+            assert_eq!(parsed.project, "ELS");
+            assert_eq!(parsed.date, "260812");
+            assert_eq!(parsed.title, "Security");
+        }
+        other => panic!("expected Sorted, got {other:?}"),
     }
 }
 

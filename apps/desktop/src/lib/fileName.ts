@@ -12,15 +12,23 @@ export type ParsedFileName = {
   title: string;
 };
 
-const NAMING_CONVENTION = /^(.+?) - (\d{6}) - (.+)$/;
-
 /** Returns `null` when `fileName` does not follow the convention -- callers
  * should only trust the result for a job whose `classification` is already
- * `"sorted"` (an unsorted job's name may coincidentally match). */
+ * `"sorted"` (an unsorted job's name may coincidentally match).
+ *
+ * Mirrors the Rust side (`vault::parse::classify_filename`): split on the
+ * first two `-` separators -- the whitespace around them is optional --
+ * and trim spaces from each part. Only the first two hyphens are
+ * structural, so a title may itself contain `-`. */
 export function parseFileName(fileName: string): ParsedFileName | null {
   const withoutExtension = fileName.replace(/\.[^./\\]+$/, "");
-  const match = NAMING_CONVENTION.exec(withoutExtension);
-  if (!match) return null;
-  const [, project, date, title] = match;
+  const firstDash = withoutExtension.indexOf("-");
+  const secondDash = firstDash === -1 ? -1 : withoutExtension.indexOf("-", firstDash + 1);
+  if (secondDash === -1) return null;
+  const project = withoutExtension.slice(0, firstDash).trim();
+  const date = withoutExtension.slice(firstDash + 1, secondDash).trim();
+  const title = withoutExtension.slice(secondDash + 1).trim();
+  if (project.length === 0 || title.length === 0) return null;
+  if (!/^\d{6}$/.test(date)) return null;
   return { project, date, title };
 }

@@ -14,8 +14,11 @@
 //! <Project code> - <date> - <Title>.<ext>
 //! ```
 //!
-//! split on the **first two** occurrences of the separator `" - "` (space,
-//! hyphen, space), so a title may itself contain `" - "`. `<Project code>`
+//! split on the **first two** occurrences of the separator `-` — the
+//! spaces around it are optional, so `ELS-260812-Title.mp4` parses the
+//! same as `ELS - 260812 - Title.mp4` — and each part is trimmed of
+//! surrounding spaces. Only the first two hyphens act as separators, so a
+//! title may itself contain `-`. `<Project code>`
 //! matches `^[A-Za-z][A-Za-z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
 //! is exactly six digits in `YYMMDD` form denoting a real calendar date,
 //! `<Title>` is any non-empty, Windows-legal string that is not a reserved

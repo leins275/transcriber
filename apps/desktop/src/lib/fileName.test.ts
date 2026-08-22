@@ -22,4 +22,25 @@ describe("parseFileName", () => {
     expect(parseFileName("zoom_recording_2026_08_14.mp4")).toBeNull();
     expect(parseFileName("Screen Recording 2026-08-01 at 14.22.31.mov")).toBeNull();
   });
+
+  it("treats whitespace around the separators as optional", () => {
+    expect(parseFileName("ELS-260812-Security issue.mp4")).toEqual({
+      project: "ELS",
+      date: "260812",
+      title: "Security issue",
+    });
+    expect(parseFileName("ELS -260812- Security issue.mp4")).toEqual({
+      project: "ELS",
+      date: "260812",
+      title: "Security issue",
+    });
+  });
+
+  it("leaves hyphens after the second separator to the title in compact form", () => {
+    expect(parseFileName("ELS-260812-follow-up call.mp4")).toEqual({
+      project: "ELS",
+      date: "260812",
+      title: "follow-up call",
+    });
+  });
 });
