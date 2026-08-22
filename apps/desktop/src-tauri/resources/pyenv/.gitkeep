@@ -1,0 +1,4 @@
+# Placeholder so this directory exists on a clean checkout -- tauri-build's
+# bundleResources errors if the configured resource path is missing.
+# The release build (scripts/build_pyenv.py, invoked by `make installer`)
+# replaces this directory's contents with the baked Python runtime.

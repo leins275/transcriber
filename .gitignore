@@ -11,5 +11,8 @@ __pycache__/
 # The baked CUDA runtime + service tree (T4/T8) -- multi-GB, deterministic
 # from services/transcription/uv.lock, never meant to be tracked (found
 # untracked-and-unignored during T14's real build; see docs/setup.md's
-# "Known gaps").
-apps/desktop/src-tauri/resources/pyenv/
+# "Known gaps"). The directory itself must still exist on a clean checkout
+# (tauri-build's bundleResources errors if the source path is missing), so
+# ignore its contents but keep the .gitkeep tracked.
+apps/desktop/src-tauri/resources/pyenv/*
+!apps/desktop/src-tauri/resources/pyenv/.gitkeep

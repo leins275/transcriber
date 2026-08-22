@@ -1,1 +1,1 @@
-﻿{"phase": "design", "spec_approved": true, "plan_approved": false, "base_ref": null}
+{"phase": "done", "spec_approved": true, "plan_approved": true, "base_ref": "6d0fce75f5cc49a0b46c6eb6c052d4029ab06f7d", "merged": "wip", "unresolved": ["E18 major: health endpoint reports unresolved config literals until first job resolves a provider"]}

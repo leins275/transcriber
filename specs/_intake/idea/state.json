@@ -1,1 +1,1 @@
-﻿{"mode": "batch", "phase": "plan", "source": "IDEA.md", "batch_base_ref": null, "features": ["meeting-vault-layout", "transcription-service", "tauri-desktop-app", "windows-installer-build"]}
+﻿{"mode": "batch", "phase": "done", "source": "IDEA.md", "batch_base_ref": "6d0fce75f5cc49a0b46c6eb6c052d4029ab06f7d", "features": ["meeting-vault-layout", "transcription-service", "tauri-desktop-app", "windows-installer-build"]}

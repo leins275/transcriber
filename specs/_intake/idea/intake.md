@@ -13,7 +13,7 @@ status: approved
 
 ## Features
 
-### [p] F1: Meeting vault layout and naming convention  (slug: meeting-vault-layout)
+### [x] F1: Meeting vault layout and naming convention  (slug: meeting-vault-layout)
 
 **Task text** (verbatim from the source):
 
@@ -52,7 +52,7 @@ status: approved
 
 ---
 
-### [p] F2: Python transcription microservice  (slug: transcription-service)
+### [!] F2: Python transcription microservice  (slug: transcription-service)
 
 **Task text** (verbatim from the source):
 
@@ -70,7 +70,7 @@ status: approved
 
 ---
 
-### [p] F3: Tauri 2 desktop app with drag-and-drop processing  (slug: tauri-desktop-app)
+### [!] F3: Tauri 2 desktop app with drag-and-drop processing  (slug: tauri-desktop-app)
 
 **Task text** (verbatim from the source):
 
@@ -85,7 +85,7 @@ status: approved
 
 ---
 
-### [p] F4: Windows installer and build system  (slug: windows-installer-build)
+### [x] F4: Windows installer and build system  (slug: windows-installer-build)
 
 **Task text** (verbatim from the source):
 

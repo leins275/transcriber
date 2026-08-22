@@ -117,16 +117,22 @@ def test_check_exits_zero_even_with_gaps():
     assert result.returncode == 0, result.stderr
 
 
-def test_make_row_reports_missing_with_concrete_install_command():
+def test_make_row_reports_absent_or_present_consistently():
+    # Whether GNU make happens to be installed on the operator's machine is
+    # not something this suite pins: it only asserts the script's contract
+    # for each branch of `present`, whichever one the live machine is in.
     result = _run("-Check", "-Json")
     report = json.loads(result.stdout)
     rows = _rows_by_name(report)
     make_row = rows["make"]
-    # Machine truth for this operator's environment: GNU make is absent.
-    assert make_row["present"] is False
-    assert make_row["found_version"] is None
-    assert make_row["install_command"], "make row must carry a concrete install command"
-    assert isinstance(make_row["install_command"], str)
+    assert make_row["present"] in (True, False)
+    if make_row["present"] is False:
+        assert make_row["found_version"] is None
+        assert make_row["install_command"], "make row must carry a concrete install command"
+        assert isinstance(make_row["install_command"], str)
+    else:
+        assert make_row["found_version"], "a present make row must report its version"
+        assert make_row["install_command"] is None
 
 
 def test_rust_row_reports_present_via_toolchain_detection():
@@ -142,14 +148,22 @@ def test_rust_row_reports_present_via_toolchain_detection():
     assert rust_row["found_version"], "a present rust row must report its version"
 
 
-def test_tauri_cli_row_reports_missing_with_concrete_install_command():
+def test_tauri_cli_row_reports_absent_or_present_consistently():
+    # Same rationale as the make row above: whether `tauri-cli` happens to
+    # be installed (e.g. via `cargo install tauri-cli`) is live machine
+    # state, not something this suite should pin.
     result = _run("-Check", "-Json")
     report = json.loads(result.stdout)
     rows = _rows_by_name(report)
     tauri_row = rows["tauri-cli"]
-    assert tauri_row["present"] is False
-    assert tauri_row["install_command"]
-    assert "tauri-cli" in tauri_row["install_command"]
+    assert tauri_row["present"] in (True, False)
+    if tauri_row["present"] is False:
+        assert tauri_row["found_version"] is None
+        assert tauri_row["install_command"]
+        assert "tauri-cli" in tauri_row["install_command"]
+    else:
+        assert tauri_row["found_version"], "a present tauri-cli row must report its version"
+        assert tauri_row["install_command"] is None
 
 
 def test_python_row_reports_store_stub_not_present_and_never_recommends_the_stub():
@@ -181,9 +195,10 @@ def test_node_npm_uv_rows_report_present_with_versions():
 def test_dry_run_exits_nonzero_when_a_required_tool_is_still_missing():
     # Plain (non -Check) invocation attempts installs and then re-checks;
     # -DryRun proves that "still missing after the attempt" path without
-    # mutating the machine (make and tauri-cli are known-absent here and
-    # a dry run performs no real install, so the post-attempt check must
-    # still report them missing and the script must exit non-zero).
+    # mutating the machine. This relies on at least one required tool
+    # (typically make and/or tauri-cli) being absent on the operator's
+    # machine; since a dry run performs no real install, the post-attempt
+    # check must still report it missing and the script must exit non-zero.
     result = _run("-DryRun", "-Json")
     assert result.returncode != 0, result.stdout + result.stderr
 
