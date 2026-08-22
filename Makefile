@@ -77,7 +77,7 @@ next-version:
 
 # Write that version into version.txt, the five manifests and Cargo.lock, and
 # regenerate CHANGELOG.md. Normally CI's own job (.github/workflows/
-# release-pr.yml) rather than something run by hand -- this target exists so
+# tag.yml) rather than something run by hand -- this target exists so
 # the pipeline can be reproduced locally when it misbehaves.
 #
 # Direct equivalent:
