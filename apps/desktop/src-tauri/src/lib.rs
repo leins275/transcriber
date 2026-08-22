@@ -189,6 +189,13 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // The updater checks a signed manifest on GitHub Releases and can
+        // install a newer build; `process` is what lets it relaunch
+        // afterwards. Both are inert without the signing public key in
+        // tauri.conf.json, so a fork that has not set one up cannot be
+        // silently updated by anybody else.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(setup_app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,

@@ -1,12 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability set for the main window, pruned in T11 from T1's candidate list. core:event:default lets the frontend listen to jobs://updated and service://status (and backs the window's own drag-drop event delivery). core:window:default and core:webview:default carry window drag-drop events (FR-4) and window control. dialog:allow-open backs the meetings-root folder picker (FR-16) and the Choose file... button (FR-7). core:app:default was in T1's candidate list but is dropped here: neither the frontend (no @tauri-apps/api/app import anywhere under src/) nor any Rust command exposes a version/about surface, so it is unused -- kept out per this task's 'confirm a flow breaks before keeping a permission' rule (nothing breaks; it stays out). No fs, shell, opener, http or process permission is granted: all filesystem work, the Explorer reveal and all HTTP happen in the privileged process behind validated commands.",
+  "description": "Minimal capability set for the main window, pruned in T11 from T1's candidate list. core:event:default lets the frontend listen to jobs://updated and service://status (and backs the window's own drag-drop event delivery). core:window:default and core:webview:default carry window drag-drop events (FR-4) and window control. dialog:allow-open backs the meetings-root folder picker (FR-16) and the Choose file... button (FR-7). core:app:default was in T1's candidate list but is dropped here: neither the frontend (no @tauri-apps/api/app import anywhere under src/) nor any Rust command exposes a version/about surface, so it is unused -- kept out per this task's 'confirm a flow breaks before keeping a permission' rule (nothing breaks; it stays out). No fs, shell, opener, http or process permission is granted: all filesystem work, the Explorer reveal and all HTTP happen in the privileged process behind validated commands. updater:default and process:allow-restart are added for the launch-time update check: the plugin needs to reach its own endpoint and, once an update has been installed, relaunch the app. process:allow-restart is granted rather than process:default, which would also expose process:allow-exit -- nothing in this app closes itself, and a webview that can terminate the process mid-transcription is a strictly worse position to be in for no gain.",
   "windows": ["main"],
   "permissions": [
     "core:event:default",
     "core:window:default",
     "core:webview:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

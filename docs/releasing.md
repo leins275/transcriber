@@ -91,6 +91,47 @@ duplicate release. It also tags *after* the build succeeds — a tag on a
 commit whose installer never built is worse than no tag, because it makes a
 version look released when nothing exists to install.
 
+## Updates
+
+The installed app checks for a newer release once at launch and offers it;
+nothing installs without a click. There is no background poll — this app is
+opened to deal with a recording and then closed, and a timer would mean
+network activity at a moment nobody asked for it.
+
+How it fits together:
+
+| Piece | Where |
+|---|---|
+| Signing keypair | private key in the `TAURI_SIGNING_PRIVATE_KEY` repo secret; public key in `tauri.conf.json` |
+| Signed archive + `.sig` | produced by `createUpdaterArtifacts` during the normal NSIS build |
+| `latest.json` | assembled by `release.yml` and attached to the Release |
+| The check | `state/useUpdate.ts` at launch, rendered by `UpdateNotice` |
+
+`latest.json` is built in the release job rather than by the bundler,
+because only that job knows the URL the assets will end up at. It is written
+from the signature file the build actually produced, so a manifest can never
+claim a signature that was not made for those bytes, and it is assembled in
+Python rather than shell — `notes` is arbitrary prose from CHANGELOG.md, and
+a manifest a client cannot parse reads as "no update available" and fails
+silently forever.
+
+Two things this deliberately does not do:
+
+- **It is not code signing.** The minisign key proves an update came from
+  this pipeline. It does nothing about SmartScreen, which will still warn on
+  a fresh install — that needs a paid certificate.
+- **There are no delta updates.** Each update downloads the whole ~90 MB
+  installer. The model and the vault are untouched by it.
+
+### If the signing key is ever lost
+
+Every published `latest.json` was signed with it, and a client only accepts
+an update whose signature matches the public key baked into the build it is
+already running. Losing the key means shipping a new public key in a new
+build, which existing installs cannot update themselves into — every user
+reinstalls by hand once. Keep a copy somewhere durable, not only in the
+repo secret.
+
 ## Running it by hand
 
 ```

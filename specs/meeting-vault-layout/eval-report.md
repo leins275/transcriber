@@ -78,7 +78,7 @@ Two minors are open rather than accepted. **E4 is reopened**: its deferral ratio
   ```
   ingest: OK
     meeting_dir chars=178  utf16=298     <- check_len measured 178, passed
-    C:\Users\feitr\AppData\Local\Temp\e4c\r\unsorted\260821 - 😀…😀
+    C:\Users\<user>\AppData\Local\Temp\e4c\r\unsorted\260821 - 😀…😀
   ```
 
   Then, standing in for F2:

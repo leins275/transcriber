@@ -11,14 +11,20 @@ read-only, and the "installer was attempted but a tool is still missing"
 branch is exercised via `-DryRun`, which reports what it would run without
 executing package-manager commands.
 
-Marked `host` for that reason, and excluded from CI. A GitHub runner is not
-the operator's machine: it has a real Python rather than the Microsoft Store
-stub these assert on, and a different set of tools on PATH. Making them pass
-there would mean changing what they assert, which would delete the only
-thing they are for. Some assertions in here (the report's JSON shape, the
-exit codes) *are* host-independent and would be worth extracting into a
-module that can run anywhere -- that is a refactor, not a reason to keep
-running the rest against the wrong machine.
+Two kinds of test live here, and only one of them is about this machine.
+
+Most assert the script's *contract* whatever the machine happens to hold:
+the report is one row per prerequisite with a fixed key set, `-Check` exits
+zero even with gaps, stdout is pure JSON, and a row is internally consistent
+in either branch of `present` (a version and no remedy, or a remedy and no
+version). Those run anywhere with PowerShell, CI included.
+
+The rest assert what is true of *the operator's* machine -- that `python`
+is the Microsoft Store stub, that node/npm/uv are installed, that rustup
+resolved a toolchain, that at least one required tool is still missing.
+Those are marked `host` and excluded from CI: a GitHub runner has a real
+Python where they expect a stub, and making them pass there would mean
+changing what they assert, which would delete the only thing they exist for.
 """
 
 from __future__ import annotations
@@ -33,8 +39,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap.ps1"
-
-pytestmark = pytest.mark.host
 
 REQUIRED_ROW_NAMES = {"rust", "node", "npm", "uv", "make", "tauri-cli"}
 ALL_ROW_NAMES = REQUIRED_ROW_NAMES | {"python"}
@@ -146,6 +150,7 @@ def test_make_row_reports_absent_or_present_consistently():
         assert make_row["install_command"] is None
 
 
+@pytest.mark.host
 def test_rust_row_reports_present_via_toolchain_detection():
     # Machine truth for this operator's environment: rustup has installed
     # the stable-x86_64-pc-windows-msvc toolchain (cargo/rustc live under
@@ -177,6 +182,7 @@ def test_tauri_cli_row_reports_absent_or_present_consistently():
         assert tauri_row["install_command"] is None
 
 
+@pytest.mark.host
 def test_python_row_reports_store_stub_not_present_and_never_recommends_the_stub():
     result = _run("-Check", "-Json")
     report = json.loads(result.stdout)
@@ -193,6 +199,7 @@ def test_python_row_reports_store_stub_not_present_and_never_recommends_the_stub
     assert "python.org" not in remedy.lower()
 
 
+@pytest.mark.host
 def test_node_npm_uv_rows_report_present_with_versions():
     result = _run("-Check", "-Json")
     report = json.loads(result.stdout)
@@ -203,6 +210,7 @@ def test_node_npm_uv_rows_report_present_with_versions():
         assert row["found_version"], f"{name} row missing a found_version"
 
 
+@pytest.mark.host
 def test_dry_run_exits_nonzero_when_a_required_tool_is_still_missing():
     # Plain (non -Check) invocation attempts installs and then re-checks;
     # -DryRun proves that "still missing after the attempt" path without

@@ -18,7 +18,7 @@ Repository state at spec time: the repo is **greenfield** — `D:\Local\Git\tran
 
 Machine probes (2026-08-21):
 - GPU: **NVIDIA GeForce RTX 4070, 12282 MiB, driver 591.86** (`nvidia-smi`) — CUDA path is viable; large-v3 in `float16` fits comfortably.
-- `uv 0.8.17` at `C:\Users\feitr\.local\bin\uv.exe`; CPython **3.12.11** and 3.13.7 already managed by uv.
+- `uv 0.8.17` at `C:\Users\<user>\.local\bin\uv.exe`; CPython **3.12.11** and 3.13.7 already managed by uv.
 - **`ffmpeg` is NOT on PATH** — this drives FR-7.
 - `make` is not installed — QA entrypoints must be `uv run …` first, Makefile second.
 
@@ -72,7 +72,7 @@ Because the repository is empty, detection was run against the machine and again
 | Accelerator | CUDA on RTX 4070 12 GB, CPU fallback | `nvidia-smi`: `NVIDIA GeForce RTX 4070, 12282 MiB, 591.86` |
 | Provider layer (cloud) | litellm (audio transcription API + cost hooks) | operator requirement; no prior art in vexa |
 | Storage | SQLite (stdlib `sqlite3`, WAL) | operator requirement |
-| Package/dep manager | `uv` | `uv 0.8.17` at `C:\Users\feitr\.local\bin\uv.exe`; global user preference mandates `uv` over `python`/`pip` |
+| Package/dep manager | `uv` | `uv 0.8.17` at `C:\Users\<user>\.local\bin\uv.exe`; global user preference mandates `uv` over `python`/`pip` |
 | Testing | pytest (+ `fastapi.testclient`) | chosen; port of `vexa\core\meetings\services\transcription\tests\conftest.py` |
 | Consumer | Tauri 2 / Rust (F3) over localhost HTTP | batch boundary; not in this feature's package |
 | OS target | Windows 11 only | operator decision; `# Ключевая функциональность` "начать можно с винды" |
