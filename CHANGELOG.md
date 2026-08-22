@@ -17,6 +17,7 @@ commits by git-cliff — edit the commit messages, not this file.
 
 ### Build & CI
 
+- Replace the standing release PR with a tag-driven release flow
 - Stop running the gate twice for every merge
 - Run the gate as four parallel jobs instead of one serial one
 - Refuse to publish a release without the installer attached
