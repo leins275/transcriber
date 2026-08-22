@@ -83,7 +83,7 @@ describe("App first-run", () => {
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByText(/choose a meetings folder to begin/i)).toBeInTheDocument(),
+      expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument(),
     );
     expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
 
@@ -221,11 +221,16 @@ describe("App reveal", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
 
+    // Deliberately a *failed* job, not a done one: under the unified list a
+    // finished job has become a recording and stops being pinned, while a
+    // failed transcription stays -- its recording is filed but the list
+    // alone cannot explain that (FR-13).
     await emit(
       "jobs://updated",
       buildJob({
         id: "job-done",
-        state: "done",
+        state: "failed",
+        message: "service unavailable",
         transcript_path: "D:\\Meetings\\ELS\\260812\\transcript.json",
       }),
     );
@@ -234,6 +239,130 @@ describe("App reveal", () => {
     await user.click(revealButton);
 
     expect(revealCalls).toEqual([{ jobId: "job-done" }]);
+    await settle();
+  });
+});
+
+describe("App vault browser", () => {
+  function buildVaultEntry(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: "v-1",
+      project: "ELS",
+      meeting_name: "260812 - Security issue",
+      meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+      has_source: true,
+      has_transcript: true,
+      ...overrides,
+    };
+  }
+
+  it("loads the vault listing once settings resolve with an existing meetings root", async () => {
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry()];
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Security issue")).toBeInTheDocument();
+    await settle();
+  });
+
+  it("does not fetch the vault listing before a meetings root is configured (first-run)", async () => {
+    const listVaultCalls: unknown[] = [];
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings")
+          return buildSettings({ meetings_root: null, meetings_root_exists: false });
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") {
+          listVaultCalls.push(cmd);
+          return [];
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument(),
+    );
+    await flush();
+    expect(listVaultCalls).toHaveLength(0);
+    await settle();
+  });
+
+  it("refetches the vault listing after a job reaches a terminal filed state", async () => {
+    let listVaultCallCount = 0;
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") {
+          listVaultCallCount += 1;
+          return listVaultCallCount === 1 ? [] : [buildVaultEntry()];
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+    await waitFor(() => expect(listVaultCallCount).toBeGreaterThanOrEqual(1));
+    // The Vault panel itself always mounts (its Service log tab has to stay
+    // reachable with an empty vault) -- what the first listing lacks is the
+    // meeting.
+    expect(screen.queryByText("Security issue")).not.toBeInTheDocument();
+
+    await emit(
+      "jobs://updated",
+      buildJob({
+        id: "job-done",
+        state: "done",
+        meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+        transcript_path: "D:\\Meetings\\ELS\\260812 - Security issue\\transcript.json",
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
+    await settle();
+  });
+
+  it("invokes reveal_vault_entry with the entry id when a vault row's Reveal is clicked", async () => {
+    const revealCalls: unknown[] = [];
+    mockIPC(
+      (cmd, payload) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry({ id: "v-9" })];
+        if (cmd === "reveal_vault_entry") {
+          revealCalls.push(payload);
+          return null;
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: /reveal/i }));
+
+    expect(revealCalls).toEqual([{ entryId: "v-9" }]);
     await settle();
   });
 });
@@ -280,7 +409,7 @@ describe("App settings", () => {
     expect(screen.getByText(/expected value at line 1 column 1/i)).toBeInTheDocument();
     // The app still opens into the (first-run) functional state -- never a
     // blank window and never a crash.
-    expect(screen.getByText(/choose a meetings folder to begin/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument();
     await settle();
   });
 });
@@ -314,7 +443,7 @@ describe("App model download wiring (T13)", () => {
     };
   }
 
-  it("shows the download step after the vault-folder step once the model is reported missing (FR-17)", async () => {
+  it("shows the setup card's model step once a folder is chosen but the model is reported missing (FR-17)", async () => {
     mockIPC((cmd) => {
       if (cmd === "get_settings") return buildSettings();
       if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
@@ -324,8 +453,11 @@ describe("App model download wiring (T13)", () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    // The setup card takes over the main pane until the model is present or
+    // skipped (spec.md 2a) -- the drop zone does not coexist with it.
     await waitFor(() => expect(screen.getByText(/model is missing/i)).toBeInTheDocument());
+    expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
     await settle();
   });
 

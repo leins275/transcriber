@@ -38,6 +38,17 @@ use tokio::process::{Child, ChildStdout, Command};
 use crate::app_paths;
 use crate::config::Settings;
 
+/// `CREATE_NO_WINDOW` (winbase.h) — every console-subsystem child this
+/// module spawns (the `uv`/bundled-Python sidecar, `taskkill`) must pass
+/// this to `creation_flags` so Windows never allocates a new console
+/// window for it. Without it, a console-subsystem child spawned from this
+/// GUI-subsystem app (see `main.rs`'s `windows_subsystem = "windows"`)
+/// still gets its own fresh console, which is exactly the visible flash a
+/// field report caught. GUI-subsystem children (none spawned by this
+/// module) never need this flag — it only suppresses console
+/// *allocation*, which GUI apps never trigger in the first place.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// How long the supervisor waits for F2's ready line before giving up
 /// (FR-13). Spawning itself never blocks window creation (NFR-3); this
 /// timeout only governs when the "service starting" state degrades into
@@ -165,6 +176,12 @@ impl SidecarSpawnConfig {
         command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
+        // Bug fix (field report): `uv`/the bundled `python.exe` are
+        // console-subsystem programs; spawned without this flag from this
+        // windows-subsystem app, Windows allocates them a brand-new,
+        // visible console window (see the CREATE_NO_WINDOW doc comment
+        // above).
+        command.creation_flags(CREATE_NO_WINDOW);
         command
     }
 }
@@ -472,6 +489,9 @@ async fn kill_process_tree_by_pid(pid: u32) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // Bug fix (field report): taskkill.exe is a console-subsystem
+        // program -- see the CREATE_NO_WINDOW doc comment above.
+        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .await;
     if let Err(err) = result {
@@ -485,6 +505,53 @@ mod tests {
     use crate::config::Settings;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    // -- CREATE_NO_WINDOW (field report: a console window flashed on launch) --
+
+    #[test]
+    fn create_no_window_is_the_documented_win32_flag_value() {
+        // winbase.h's CREATE_NO_WINDOW -- a typo'd magic number here would
+        // silently stop suppressing the console window without any other
+        // test noticing.
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+    }
+
+    #[test]
+    fn every_console_subsystem_child_this_module_spawns_uses_create_no_window() {
+        // Source-contract regression test (this crate is Windows-only, so
+        // there is no cross-platform harness to spawn a child and inspect
+        // its console state from the outside): every call site in this file
+        // that builds a `Command` for a real console-subsystem program
+        // (`uv`/the bundled python.exe via `to_command`, `taskkill` via
+        // `kill_process_tree_by_pid`) must apply `.creation_flags(CREATE_NO_WINDOW)`
+        // on the same builder, or the fix silently regresses if a future
+        // edit adds a new spawn site without it.
+        let source = include_str!("sidecar.rs");
+
+        let to_command_body = source
+            .split("fn to_command(&self) -> Command {")
+            .nth(1)
+            .expect("expected to find to_command's body")
+            .split("\n    }\n")
+            .next()
+            .expect("expected to find to_command's closing brace");
+        assert!(
+            to_command_body.contains(".creation_flags(CREATE_NO_WINDOW)"),
+            "to_command() must apply CREATE_NO_WINDOW to the uv/python spawn"
+        );
+
+        let kill_fn_body = source
+            .split("async fn kill_process_tree_by_pid(pid: u32) {")
+            .nth(1)
+            .expect("expected to find kill_process_tree_by_pid's body")
+            .split("\n}\n")
+            .next()
+            .expect("expected to find kill_process_tree_by_pid's closing brace");
+        assert!(
+            kill_fn_body.contains(".creation_flags(CREATE_NO_WINDOW)"),
+            "kill_process_tree_by_pid must apply CREATE_NO_WINDOW to the taskkill spawn"
+        );
+    }
 
     fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         tokio::runtime::Runtime::new()

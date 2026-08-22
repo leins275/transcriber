@@ -1,0 +1,131 @@
+# Releasing
+
+How a change gets from a commit to an installer someone can download.
+
+## The short version
+
+1. Merge work into `main` with a [conventional commit](#commit-messages)
+   subject.
+2. CI opens (or updates) a PR titled `chore(release): X.Y.Z`.
+3. Merge that PR when you want to ship.
+4. CI tags `vX.Y.Z`, builds the Windows installer, and publishes a GitHub
+   Release with the installer attached.
+
+Nothing releases without step 3. Every merge to `main` before that just
+accumulates into the pending release PR.
+
+## Commit messages
+
+The version number is derived from commit subjects, so the subject line is
+load-bearing:
+
+| Subject starts with | Effect on the next version |
+|---|---|
+| `feat:` / `feat(scope):` | minor bump — `0.1.0` → `0.2.0` |
+| `fix:`, `perf:` | patch bump — `0.1.0` → `0.1.1` |
+| `feat!:` or a `BREAKING CHANGE:` footer | major bump — `0.1.0` → `1.0.0` |
+| `docs:`, `test:`, `refactor:`, `chore:`, `ci:` | no bump; still appears in the changelog |
+
+A subject that follows no convention at all is kept in the changelog under
+**Other** and never moves the version — a subject nobody wrote to a
+convention cannot be read as a promise about compatibility.
+
+`feat` bumps the *minor* even below 1.0. That is deliberate: this app is
+pre-1.0 and ships user-visible features regularly, and burying those in a
+patch number would make the version say nothing.
+
+## Who owns what
+
+The pipeline has two halves that deliberately do not know about each other:
+
+| Concern | Owner |
+|---|---|
+| *What* the next version is, and the changelog | `cliff.toml` (git-cliff, pinned in `scripts/prepare_release.py`) |
+| *Where* the version is written | `version.txt` + `scripts/sync_version.py` |
+| Joining the two | `scripts/prepare_release.py` |
+
+`version.txt` remains the single source of truth. `sync_version.py`
+propagates it into five manifests **and** both `Cargo.lock` workspace-member
+entries — that last one matters, because the release build runs
+`tauri build --locked` and cargo refuses a lockfile whose recorded member
+version disagrees with its `Cargo.toml`.
+
+`make lint` runs `sync_version.py --check`, so drift between any of those
+files fails CI rather than surfacing later as a confusing lockfile error.
+
+## The workflows
+
+| File | Runs on | Does |
+|---|---|---|
+| `.github/workflows/ci.yml` | every PR and push to `main` | format / lint / type / test across Rust, TypeScript and Python, on `windows-latest` |
+| `.github/workflows/release-pr.yml` | push to `main` | computes the next version; opens or force-updates the `chore/release` PR |
+| `.github/workflows/release.yml` | push to `main` | if `version.txt` has no matching `v*` tag: builds the installer, tags, publishes the Release |
+
+CI runs on Windows only, and that is not caution: the Rust side imports
+`std::os::windows::process::CommandExt` and shells out to `explorer.exe`, so
+it does not compile on Linux at all.
+
+### The installer is the release
+
+`release.yml` will not publish a release without the installer attached, and
+checks that twice. Before tagging, it resolves the artifact name from
+`sync_version.artifact_name` — the same function `build_installer.py` names
+the file with, so the workflow cannot drift from the builder — and fails if
+the `.exe`, its `.sha256` or `build-manifest.json` is missing, empty, or
+implausibly small for an NSIS build that exited 0. After publishing, it reads
+the release back from the API and confirms the installer is actually
+attached, because `gh release create` can create the release object and
+still have an upload rejected.
+
+The first check sits *before* the tag push, for the same reason the tag comes
+after the build: a tag pointing at a release with no installer makes a
+version look shipped when nothing is installable. The second necessarily runs
+after publishing — it is the one that catches an upload the API accepted the
+release for and then dropped.
+
+`release.yml` triggers on **state, not on a commit message**: it reads
+`version.txt` and asks whether `v<version>` is already tagged. A squashed
+merge, a rebase, a hand-edited `version.txt` or a re-run all behave the same
+way, and re-running it on an already-released commit is a no-op rather than a
+duplicate release. It also tags *after* the build succeeds — a tag on a
+commit whose installer never built is worse than no tag, because it makes a
+version look released when nothing exists to install.
+
+## Running it by hand
+
+```
+make next-version     # what would the next release be called?
+make release-prep     # write that version everywhere + regenerate CHANGELOG.md
+make installer        # build dist/Transcriber_<version>_x64-setup.exe
+```
+
+`make next-version` exits `3` when there is nothing to release. That is a
+documented code, not a failure — see `scripts/prepare_release.py`.
+
+## One-time setup on a fresh clone or a new remote
+
+The bump is computed from the range since the most recent `v*` tag, so that
+tag has to exist:
+
+```
+git tag -a v0.1.0 <sha of the commit that shipped 0.1.0> -m "Transcriber 0.1.0"
+git push origin v0.1.0
+```
+
+`cliff.toml`'s `initial_tag` covers a clone that has no tags at all, but only
+so the tooling fails with something intelligible rather than a tag-pattern
+error — it is not a substitute for the real baseline tag.
+
+`release.yml` needs no secrets: it uses the workflow's own `GITHUB_TOKEN`.
+`release-pr.yml` needs **Settings → Actions → General → Workflow permissions
+→ Allow GitHub Actions to create and approve pull requests**, or its
+`create-pull-request` step is refused.
+
+## Runner cost
+
+`ci.yml` is roughly 10–15 minutes on a warm Rust cache; `release.yml` is
+longer (it bakes a relocatable CPython, installs the frozen dependency tree,
+builds Rust in release mode and runs NSIS). Windows minutes bill at 2× on
+private repositories — which is the main reason `release-pr.yml` runs on
+Linux and the installer build happens once per release rather than once per
+merge.

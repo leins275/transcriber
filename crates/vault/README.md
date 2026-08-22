@@ -45,6 +45,18 @@ the source.
 - `summary.md` — a placeholder only; nothing in this crate creates or writes
   it (out of scope).
 
+## Scope extension: read-only listing
+
+The original spec (`specs/meeting-vault-layout/spec.md`, "Out of scope")
+explicitly excluded "browsing, listing, searching, renaming or re-filing
+existing vault content" from the MVP. The operator has since extended that
+scope for the vault-browser feature: `vault::list_meetings(root)` scans the
+vault read-only (two levels — `<root>/<PROJECT>/<meeting>` and
+`<root>/unsorted/<meeting>`) and returns every meeting folder found, newest
+date first. It creates, writes, renames and deletes nothing, and tolerates
+junk entries by skipping them rather than failing the whole call. See
+`src/list.rs` for the full contract.
+
 ## API (F3's usage)
 
 F3's Tauri `#[command]` links this crate directly and calls it synchronously

@@ -200,13 +200,37 @@ pub fn ensure_inside(root: &Path, candidate: &Path) -> Result<PathBuf, AppError>
         None => return Err(outside_root_error(candidate)),
     };
 
-    if !is_component_prefix(&normalized_root, &normalized_candidate) {
+    // The root is trusted configuration, not hostile input, so resolving it
+    // costs nothing this function was protecting against — the
+    // escape-before-existence rule (module docs) is about never touching the
+    // filesystem for `candidate`, and that still holds below.
+    let canonical_root = canonicalize_existing(root)?;
+
+    // A candidate may legitimately arrive spelled either way, and the two
+    // spellings are not textually comparable:
+    //
+    //   * `list_vault` builds its candidates by reading the *configured*
+    //     root's directory entries, so they carry the root's own spelling;
+    //   * ingest and reveal take theirs from F1, which canonicalizes.
+    //
+    // Those agree only while the configured root is already in canonical
+    // form. It often is not — an 8.3 short component (`C:\Users\RUNNER~1`,
+    // which is exactly how `%TEMP%` is exposed on a Windows CI runner) or a
+    // junction anywhere in the path both produce a root whose spelling
+    // differs from what `canonicalize` returns, and then a component-wise
+    // comparison against one spelling rejects every path built from the
+    // other. Accepting either is not a weakening: the authoritative check is
+    // the canonical `starts_with` below, and this only decides whether the
+    // candidate has earned the filesystem access needed to reach it.
+    let lexically_inside = is_component_prefix(&normalized_root, &normalized_candidate)
+        || lexical_normalize(&canonical_root)
+            .is_some_and(|canonical| is_component_prefix(&canonical, &normalized_candidate));
+    if !lexically_inside {
         return Err(outside_root_error(candidate));
     }
 
     // Only now — after the candidate has already been proven, lexically, to
     // resolve under root — do we touch the filesystem for it.
-    let canonical_root = canonicalize_existing(root)?;
     let canonical_candidate = canonicalize_existing(candidate)?;
 
     if !canonical_candidate.starts_with(&canonical_root) {
@@ -480,5 +504,76 @@ mod tests {
         assert!(list.contains(&"avi"));
         assert!(!list.contains(&"aac"));
         assert_eq!(list.len(), 10);
+    }
+
+    /// Creates a directory junction at `link` pointing at `target`, or
+    /// returns `false` if this environment will not make one.
+    ///
+    /// `mklink /J` rather than `std::os::windows::fs::symlink_dir`: a
+    /// junction needs no privilege, while a directory *symlink* needs either
+    /// admin or Developer Mode, which a CI runner may not have.
+    fn make_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn a_root_whose_spelling_is_not_canonical_still_contains_its_own_children() {
+        // The bug this pins: a configured root can be spelled differently
+        // from what `canonicalize` returns -- through a junction here, and
+        // through an 8.3 short component (`C:\Users\RUNNER~1\...`, how
+        // `%TEMP%` is exposed on a Windows CI runner) in the wild. Candidates
+        // reach `ensure_inside` in *both* spellings: `list_vault` reads the
+        // configured root's own directory entries, while ingest and reveal
+        // take theirs from F1, which canonicalizes. Comparing against only
+        // one spelling rejected every path built from the other, and the
+        // whole ingest pipeline failed with `outside_root`.
+        let dir = tempdir().expect("tempdir");
+        let real_root = dir.path().join("real-meetings-root");
+        fs::create_dir_all(&real_root).expect("create real root");
+        let meeting_dir = real_root.join("ELS").join("260812 - Security issue");
+        fs::create_dir_all(&meeting_dir).expect("create meeting dir");
+
+        let junction_root = dir.path().join("via-junction");
+        if !make_junction(&junction_root, &real_root) {
+            eprintln!("skipping: this environment will not create a junction");
+            return;
+        }
+
+        // The candidate spelled the way F1 hands it back (canonical).
+        let canonical_meeting = canonicalize_existing(&meeting_dir).expect("canonicalize meeting");
+        ensure_inside(&junction_root, &canonical_meeting)
+            .expect("a canonical child of a junction-spelled root is inside it");
+
+        // And spelled the way `list_vault` builds it (root's own spelling).
+        let via_junction = junction_root.join("ELS").join("260812 - Security issue");
+        ensure_inside(&junction_root, &via_junction)
+            .expect("a child built from the root's own spelling is inside it");
+    }
+
+    #[test]
+    fn a_non_canonical_root_still_refuses_a_sibling_outside_it() {
+        // The other half of the same change: accepting either spelling must
+        // not accept a path that is genuinely outside.
+        let dir = tempdir().expect("tempdir");
+        let real_root = dir.path().join("real-meetings-root");
+        fs::create_dir_all(&real_root).expect("create real root");
+        let outsider = dir.path().join("somewhere-else");
+        fs::create_dir_all(&outsider).expect("create outsider");
+
+        let junction_root = dir.path().join("via-junction");
+        if !make_junction(&junction_root, &real_root) {
+            eprintln!("skipping: this environment will not create a junction");
+            return;
+        }
+
+        let err = ensure_inside(&junction_root, &outsider)
+            .expect_err("a sibling of the root's target is not inside the root");
+        assert_eq!(err.kind(), crate::error::ErrorKind::OutsideRoot);
     }
 }

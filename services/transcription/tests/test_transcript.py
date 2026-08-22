@@ -166,6 +166,46 @@ def test_write_atomic_round_trips_and_leaves_no_partial_file(tmp_path: Path) -> 
     assert not any(p.suffix == ".tmp" for p in remaining)
 
 
+def test_write_atomic_writes_non_latin_text_as_utf8_not_escapes(tmp_path: Path) -> None:
+    r"""Cyrillic transcript text must be readable in the file, not `\uXXXX`."""
+    russian = "Да, ребят, всем привет."
+    segment = Segment(
+        id=0,
+        start=0.0,
+        end=1.5,
+        text=russian,
+        avg_logprob=-0.2,
+        no_speech_prob=0.01,
+        compression_ratio=1.1,
+        words=None,
+    )
+    doc = build_document(
+        source_path="C:/vault/unsorted/260822 - source/source.mp4",
+        duration_sec=90.0,
+        provider_name="local",
+        model="large-v3",
+        device="cuda",
+        compute_type="float16",
+        language="ru",
+        language_probability=0.99,
+        text=russian,
+        segments=[segment],
+        elapsed_sec=12.0,
+        realtime_factor=12.0 / 90.0,
+        cost_usd=None,
+        currency=None,
+    )
+    out_dir = tmp_path / "output"
+    out_dir.mkdir()
+
+    result_path = write_atomic(doc, out_dir)
+
+    raw = result_path.read_text(encoding="utf-8")
+    assert russian in raw
+    assert r"\u04" not in raw
+    assert json.loads(raw)["text"] == russian
+
+
 def test_write_atomic_overwrites_cleanly(tmp_path: Path) -> None:
     out_dir = tmp_path / "output"
     out_dir.mkdir()

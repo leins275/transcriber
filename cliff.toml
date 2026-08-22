@@ -1,0 +1,83 @@
+# git-cliff configuration — conventional commits in, CHANGELOG.md and the
+# next semver out.
+#
+# This file decides two things and nothing else:
+#
+#   1. What the next version is (`git-cliff --bumped-version`), from the
+#      conventional-commit types since the most recent `v*` tag.
+#   2. What CHANGELOG.md says (`git-cliff --bump -o CHANGELOG.md`).
+#
+# It deliberately does **not** know where the version is written. That stays
+# `version.txt` + `scripts/sync_version.py`, which is the single source of
+# truth for every manifest and for Cargo.lock. `scripts/prepare_release.py`
+# is the seam that joins the two.
+#
+# Run `uv run scripts/prepare_release.py --print-next` to see what the next
+# version would be without changing anything.
+
+[changelog]
+header = """
+# Changelog
+
+Every release of Transcriber, newest first. Generated from conventional
+commits by git-cliff — edit the commit messages, not this file.\n
+"""
+body = """
+{% if version -%}
+## {{ version | trim_start_matches(pat="v") }} — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## Unreleased
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+# Keep non-conventional history (this repo has `merge:` and `wip(...)`
+# subjects from its spec-driven phase) visible under "Other" rather than
+# silently dropping it -- but see `commit_parsers`: those types never drive
+# a version bump, because a subject nobody wrote to a convention cannot be
+# read as a promise about compatibility.
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9]*"
+topo_order = false
+sort_commits = "newest"
+
+commit_parsers = [
+  # Release commits this pipeline made itself: never in the changelog.
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^[Mm]erge (branch|pull request|remote)", skip = true },
+
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build|^ci", group = "Build & CI" },
+  { message = "^chore", group = "Chores" },
+  { message = "^revert", group = "Reverts" },
+  { message = ".*", group = "Other" },
+]
+
+[bump]
+# Only reached on a clone with no `v*` tag at all. The real baseline is the
+# `v0.1.0` tag on the commit that first shipped an installer; this keeps a
+# tagless checkout from failing the tag-pattern check instead of erroring
+# with something unrelated.
+initial_tag = "v0.1.0"
+# A `feat` moves the minor even below 1.0. That is the deliberate reading:
+# this app is pre-1.0 and shipping user-visible features regularly, and
+# burying those in a patch number would make the version say nothing.
+features_always_bump_minor = true
+breaking_always_bump_major = true

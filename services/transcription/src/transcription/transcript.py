@@ -51,12 +51,21 @@ def build_document(
 
 
 def write_atomic(doc: TranscriptDoc, output_dir: str | Path) -> Path:
-    """Write ``doc`` to ``output_dir/transcript.json`` atomically (NFR-5).
+    r"""Write ``doc`` to ``output_dir/transcript.json`` atomically (NFR-5).
 
     Uses ``tempfile.mkstemp`` (never a predictable temp name) inside
     ``output_dir`` itself so ``os.replace`` is a same-filesystem rename, and
     unlinks the temp file if anything raises before the replace lands --
     a reader never observes a partial file.
+
+    Serialized with ``ensure_ascii=False`` so non-Latin transcript text
+    (Russian, Chinese, ...) lands as real UTF-8 characters rather than
+    ``\uXXXX`` escapes. Both forms are valid JSON and decode identically,
+    but the escaped form is unreadable to a human opening
+    ``transcript.json`` in an editor -- and this file is a user-facing
+    artifact in their vault, not just a machine payload. The handle is
+    already opened ``encoding="utf-8"``, so the wider character set has a
+    well-defined place to land.
     """
     out_dir = Path(output_dir)
     target = out_dir / "transcript.json"
@@ -66,7 +75,7 @@ def write_atomic(doc: TranscriptDoc, output_dir: str | Path) -> Path:
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle)
+            json.dump(data, handle, ensure_ascii=False)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, target)

@@ -1,0 +1,109 @@
+.row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 4px 12px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--divider);
+  align-items: start;
+}
+
+/* an expanded row is visibly the one being worked on */
+.row[data-open]:not([data-open="none"]) {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.icon {
+  margin-top: 3px;
+  display: inline-flex;
+}
+
+.ring {
+  margin-top: 2px;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* The name is the target for opening the recording, so it is a real
+   button -- keyboard reachable, and announced as the action it is -- while
+   looking like the text it sits in. */
+.content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+
+.content:hover .name {
+  color: var(--accent-deep);
+}
+
+.name {
+  font-size: var(--text-lg);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.path {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The expanded panel spans the full row width, under all three columns. */
+.panel {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding: var(--space-3) 0 var(--space-1);
+  border-top: 1px solid var(--divider);
+}
+
+.status {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.confirmText {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.confirmActions {
+  display: flex;
+  gap: var(--space-2);
+}

@@ -30,8 +30,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    JobStatus, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest,
-    TranscriptionService,
+    JobStatus, LedgerJob, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth,
+    SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -202,6 +202,74 @@ impl ModelDownloadResponse {
     }
 }
 
+/// `GET /v1/jobs` response body -- one element per ledger row. F2 returns
+/// the sqlite row as-is (`SELECT *`), so this deserializes only the columns
+/// the UI shows and lets the rest through unread; every one is
+/// `#[serde(default)]` because the row is filled in over the job's lifetime
+/// (see [`LedgerJob`]).
+#[derive(Deserialize)]
+struct LedgerJobResponse {
+    job_id: String,
+    status: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    finished_at: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    device: Option<String>,
+    #[serde(default)]
+    source_path: Option<String>,
+    #[serde(default)]
+    output_path: Option<String>,
+    #[serde(default)]
+    audio_duration_sec: Option<f64>,
+    #[serde(default)]
+    elapsed_sec: Option<f64>,
+    #[serde(default)]
+    realtime_factor: Option<f64>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    segment_count: Option<i64>,
+    #[serde(default)]
+    error_kind: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    service_version: Option<String>,
+}
+
+impl From<LedgerJobResponse> for LedgerJob {
+    fn from(row: LedgerJobResponse) -> Self {
+        LedgerJob {
+            job_id: row.job_id,
+            status: row.status,
+            created_at: row.created_at,
+            started_at: row.started_at,
+            finished_at: row.finished_at,
+            provider: row.provider,
+            model: row.model,
+            device: row.device,
+            source_path: row.source_path,
+            output_path: row.output_path,
+            audio_duration_sec: row.audio_duration_sec,
+            elapsed_sec: row.elapsed_sec,
+            realtime_factor: row.realtime_factor,
+            language: row.language,
+            segment_count: row.segment_count,
+            error_kind: row.error_kind,
+            error_message: row.error_message,
+            service_version: row.service_version,
+        }
+    }
+}
+
 /// Reject any base URL that is not plain `http` on a loopback host (NFR-5),
 /// and normalize away a trailing slash so `endpoint()` never doubles one.
 fn validate_loopback_base_url(raw: &str) -> Result<String, ServiceError> {
@@ -359,6 +427,35 @@ impl TranscriptionService for HttpTranscriptionService {
                 message: err.to_string(),
             })?;
         parsed.into_status()
+    }
+
+    async fn cancel(&self, job_id: &str) -> Result<(), ServiceError> {
+        let request = self.authorize(
+            self.client
+                .delete(self.endpoint(&format!("/v1/jobs/{job_id}"))),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        Ok(())
+    }
+
+    async fn list_ledger_jobs(&self, limit: u32) -> Result<Vec<LedgerJob>, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint("/v1/jobs"))
+                .query(&[("limit", limit.to_string())]),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let rows: Vec<LedgerJobResponse> =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(rows.into_iter().map(LedgerJob::from).collect())
     }
 
     async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {

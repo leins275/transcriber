@@ -1,10 +1,20 @@
 """Product version single source of truth (FR-5).
 
 ``version.txt`` at the repo root is the single source of truth. This script
-propagates it into the four downstream manifests that carry their own copy
+propagates it into the five downstream manifests that carry their own copy
 of the version and never edits anything else in those files: it rewrites
 only the ``version`` field, preserving key order, indentation and any other
 content byte-for-byte.
+
+The two lockfiles carry their own copies as well -- ``Cargo.lock`` has one
+``version`` line per workspace member, and ``services/transcription/uv.lock``
+one for the ``transcription`` project -- and both are synced here. That is
+not tidiness. The release build runs ``tauri build --locked`` and
+``uv export --frozen``, and both tools refuse a lockfile whose recorded
+version disagrees with the manifest beside it. Without this, every version
+bump breaks the installer build with an error ("the lock file needs to be
+updated") that names neither this script nor the bump that caused it --
+which is exactly how it was found.
 
 Usage:
     uv run scripts/sync_version.py --check
@@ -34,6 +44,31 @@ class Manifest:
     section: str | None = None  # only meaningful for kind == "toml"
 
 
+@dataclass(frozen=True)
+class LockPackage:
+    """One ``[[package]]`` entry in a lockfile, for a locally-owned package.
+
+    Cargo and uv write the same two-line shape here (``name = "..."`` then
+    ``version = "..."``), which is why one rewriter serves both.
+    """
+
+    path: Path
+    name: str
+
+
+CARGO_LOCK = REPO_ROOT / "Cargo.lock"
+UV_LOCK = REPO_ROOT / "services/transcription/uv.lock"
+
+# Only packages this repository owns. Every other entry in either lockfile
+# is a third-party dependency whose version has nothing to do with the
+# product version, and must never be touched.
+LOCK_PACKAGES: list[LockPackage] = [
+    LockPackage(CARGO_LOCK, "transcriber-desktop"),
+    LockPackage(CARGO_LOCK, "vault"),
+    LockPackage(UV_LOCK, "transcription"),
+]
+
+
 MANIFESTS: list[Manifest] = [
     Manifest(REPO_ROOT / "apps/desktop/src-tauri/tauri.conf.json", "json"),
     Manifest(REPO_ROOT / "apps/desktop/package.json", "json"),
@@ -45,6 +80,18 @@ MANIFESTS: list[Manifest] = [
 _JSON_VERSION_RE = re.compile(r'("version"\s*:\s*)"([^"]*)"')
 _TOML_VERSION_LINE_RE = re.compile(r'(?m)^version\s*=\s*"([^"]*)"\s*$')
 _TOML_SECTION_HEADER_RE = re.compile(r"(?m)^\[(?P<name>[^\]]+)\]\s*$")
+
+
+def _lock_version_re(name: str) -> re.Pattern[str]:
+    """Match the ``version`` line that directly follows ``name = "<name>"``.
+
+    Anchored on the name line rather than searched for independently, so a
+    registry crate that happens to share a prefix (or a `version` line
+    belonging to some other `[[package]]`) can never be rewritten. Tolerates
+    either newline convention: cargo writes LF, but git checks this file out
+    as CRLF on Windows.
+    """
+    return re.compile(rf'(?m)^(name = "{re.escape(name)}"\r?\n' r'version = ")([^"]*)(")')
 
 
 def read_version() -> str:
@@ -115,6 +162,28 @@ def _write_toml_version(path: Path, section: str, version: str) -> None:
     path.write_text(text[:start] + new_body + text[end:], encoding="utf-8", newline=newline)
 
 
+def lock_version(package: LockPackage) -> str:
+    text = package.path.read_text(encoding="utf-8")
+    match = _lock_version_re(package.name).search(text)
+    if not match:
+        raise ValueError(f'no [[package]] entry for "{package.name}" in {package.path}')
+    return match.group(2)
+
+
+def set_lock_version(package: LockPackage, version: str) -> None:
+    newline = _detect_newline(package.path)
+    text = package.path.read_text(encoding="utf-8")
+    new_text, count = _lock_version_re(package.name).subn(rf"\g<1>{version}\g<3>", text, count=1)
+    if count == 0:
+        raise ValueError(f'no [[package]] entry for "{package.name}" in {package.path}')
+    package.path.write_text(new_text, encoding="utf-8", newline=newline)
+
+
+def _lock_label(package: LockPackage) -> str:
+    """How a drifting lock entry is named in ``--check``'s output."""
+    return f"{package.path.relative_to(REPO_ROOT).as_posix()} ({package.name})"
+
+
 def manifest_version(manifest: Manifest) -> str:
     if manifest.kind == "json":
         return _read_json_version(manifest.path)
@@ -142,6 +211,14 @@ def check(version: str | None = None) -> list[str]:
             continue
         if actual != expected:
             drifting.append(str(manifest.path.relative_to(REPO_ROOT)))
+    for package in LOCK_PACKAGES:
+        try:
+            actual = lock_version(package)
+        except (OSError, ValueError):
+            drifting.append(_lock_label(package))
+            continue
+        if actual != expected:
+            drifting.append(_lock_label(package))
     return drifting
 
 
@@ -155,6 +232,8 @@ def set_version(version: str) -> None:
     VERSION_FILE.write_text(version + "\n", encoding="utf-8", newline=newline)
     for manifest in MANIFESTS:
         set_manifest_version(manifest, version)
+    for package in LOCK_PACKAGES:
+        set_lock_version(package, version)
 
 
 def artifact_name(version: str | None = None) -> str:
@@ -169,7 +248,9 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--set", metavar="X.Y.Z", help="write this version everywhere")
     group.add_argument("--print", action="store_true", help="print version.txt")
     group.add_argument(
-        "--print-artifact-name", action="store_true", help="print the installer filename"
+        "--print-artifact-name",
+        action="store_true",
+        help="print the installer filename",
     )
     args = parser.parse_args(argv)
 

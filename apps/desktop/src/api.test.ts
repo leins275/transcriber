@@ -135,6 +135,44 @@ describe("api.revealJob", () => {
   });
 });
 
+describe("api vault-browser trio", () => {
+  it("listVault invokes list_vault with no arguments and returns the entries", async () => {
+    const entries = [
+      {
+        id: "v1",
+        project: "ELS",
+        meeting_name: "260812 - Security issue",
+        meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+        has_source: true,
+        has_transcript: true,
+      },
+    ];
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "list_vault") return entries;
+      return null;
+    });
+
+    const result = await api.listVault();
+
+    expect(result).toEqual(entries);
+    expect(seen).toContainEqual({ cmd: "list_vault", payload: {} });
+  });
+
+  it("revealVaultEntry invokes reveal_vault_entry with the entry id", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      return null;
+    });
+
+    await api.revealVaultEntry("v1");
+
+    expect(seen).toContainEqual({ cmd: "reveal_vault_entry", payload: { entryId: "v1" } });
+  });
+});
+
 describe("api model-download trio (T13)", () => {
   it("modelDownloadStatus invokes model_download_status with no arguments", async () => {
     const seen: Array<{ cmd: string; payload: unknown }> = [];

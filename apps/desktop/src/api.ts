@@ -12,7 +12,17 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AppError, JobSnapshot, ServiceStatusView, SettingsView } from "./types";
+import type {
+  AppError,
+  JobSnapshot,
+  LedgerJobView,
+  MeetingUpdate,
+  ServiceStatusView,
+  SettingsView,
+  SummaryView,
+  TranscriptView,
+  VaultMeetingView,
+} from "./types";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 
 /** Narrows an unknown IPC rejection into the frozen `AppError` shape (NFR-6). */
@@ -47,6 +57,44 @@ export const api = {
   listJobs: (): Promise<JobSnapshot[]> => call<JobSnapshot[]>("list_jobs"),
   serviceStatus: (): Promise<ServiceStatusView> => call<ServiceStatusView>("service_status"),
   revealJob: (jobId: string): Promise<void> => call<void>("reveal_job", { jobId }),
+  // Vault-browser trio (additive) -- lists already-ingested meetings on
+  // startup/after ingest, and reveals one by its server-issued id (never a
+  // raw path).
+  listVault: (): Promise<VaultMeetingView[]> => call<VaultMeetingView[]>("list_vault"),
+  revealVaultEntry: (entryId: string): Promise<void> =>
+    call<void>("reveal_vault_entry", { entryId }),
+  // Per-meeting commands (additive) -- all three name the meeting by the
+  // id `list_vault` issued, never by a path, exactly like `revealVaultEntry`.
+  readTranscript: (entryId: string): Promise<TranscriptView> =>
+    call<TranscriptView>("read_transcript", { entryId }),
+  updateVaultEntry: (entryId: string, update: MeetingUpdate): Promise<VaultMeetingView> =>
+    call<VaultMeetingView>("update_vault_entry", {
+      entryId,
+      project: update.project,
+      date: update.date,
+      title: update.title,
+    }),
+  deleteVaultEntry: (entryId: string): Promise<void> =>
+    call<void>("delete_vault_entry", { entryId }),
+  /** Replaces a meeting's speaker labels wholesale -- renaming a speaker is
+   * by definition an edit to every segment they hold, so sending the whole
+   * map keeps that one operation atomic. */
+  setSpeakerLabels: (entryId: string, assignments: Record<string, string>): Promise<void> =>
+    call<void>("set_speaker_labels", { entryId, assignments }),
+  readSummary: (entryId: string): Promise<SummaryView> =>
+    call<SummaryView>("read_summary", { entryId }),
+  /** Re-runs transcription over a recording already filed in the vault --
+   * never a second ingest, which would file a duplicate under a suffixed
+   * name. */
+  transcribeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("transcribe_vault_entry", { entryId }),
+  /** Resolves `false` when there was nothing left to cancel (the job never
+   * reached the service, or already finished) -- information, not an error. */
+  cancelJob: (jobId: string): Promise<boolean> => call<boolean>("cancel_job", { jobId }),
+  // F2's own sqlite job ledger, newest first (`GET /v1/jobs` behind the
+  // Rust proxy). `limit` is clamped Rust-side to what F2 accepts.
+  listServiceJobs: (limit?: number): Promise<LedgerJobView[]> =>
+    call<LedgerJobView[]>("list_service_jobs", { limit: limit ?? null }),
   // Model-download trio (T13, FR-12, FR-17) -- thin proxies over the Rust
   // commands, which themselves proxy the T11 HTTP endpoints. None takes a
   // path argument: the destination is resolved on the Rust side only.

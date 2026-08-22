@@ -7,8 +7,10 @@ export type ServiceBannerProps = {
 
 /**
  * Announces sidecar/service reachability (FR-13). Renders nothing when the
- * service is ready — noteworthy states only, never a transient toast.
- * Presentational only: no invoke, no listen, no fetch (T6).
+ * service is ready — noteworthy states only, never a transient toast. A
+ * degraded service reads as a note, not a failure: filing still works while
+ * transcription is down. Presentational only: no invoke, no listen, no
+ * fetch (T6).
  */
 export function ServiceBanner({ status }: ServiceBannerProps) {
   if (status.state === "ready") {
@@ -17,20 +19,24 @@ export function ServiceBanner({ status }: ServiceBannerProps) {
 
   if (status.state === "starting") {
     return (
-      <div className={styles.banner} data-state="starting" role="status">
+      <div className={`note ${styles.banner}`} data-state="starting" role="status">
+        <span className="note-kicker">Note</span>
         <p>Starting the transcription service...</p>
       </div>
     );
   }
 
   return (
-    <div className={styles.banner} data-state="unavailable" role="status">
-      <p>
-        Transcription service unavailable at{" "}
-        <span className="mono">{status.base_url ?? "(no address configured)"}</span>. Ingest keeps
-        working; recordings already filed are safe. Re-drop them once the service is back.
-      </p>
-      {status.detail && <p>{status.detail}</p>}
+    <div className={`note ${styles.banner}`} data-state="unavailable" role="status">
+      <span className="note-kicker">Note</span>
+      <div>
+        <p>
+          Transcription service unavailable at{" "}
+          <span className="mono">{status.base_url ?? "(no address configured)"}</span>. Ingest keeps
+          working; recordings already filed are safe. Re-drop them once the service is back.
+        </p>
+        {status.detail && <p>{status.detail}</p>}
+      </div>
     </div>
   );
 }

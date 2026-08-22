@@ -94,6 +94,7 @@ describe("JobRow", () => {
     const onReveal = vi.fn();
     const user = userEvent.setup();
     const job = buildJob({
+      file_name: "ELS - 260812 - Security issue.mp4",
       state: "failed",
       classification: "sorted",
       meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
@@ -105,7 +106,9 @@ describe("JobRow", () => {
     expect(
       screen.getByText("D:\\Meetings\\ELS\\260812 - Security issue\\source.mp4"),
     ).toBeInTheDocument();
-    expect(screen.getByText("sorted")).toBeInTheDocument();
+    // A sorted job never gets the "filed · unsorted" pill -- "sorted" is the
+    // absence of that pill, not a literal label (spec.md 5.6).
+    expect(screen.queryByText(/filed . unsorted/i)).not.toBeInTheDocument();
     const reveal = screen.getByRole("button", { name: /reveal/i });
     expect(reveal).toBeEnabled();
     await user.click(reveal);
@@ -120,6 +123,25 @@ describe("JobRow", () => {
     });
     render(<JobRow job={job} onReveal={() => {}} />);
     expect(screen.getByText("D:\\Meetings\\unsorted\\260821 - file")).toBeInTheDocument();
-    expect(screen.getByText("unsorted")).toBeInTheDocument();
+    expect(screen.getByText(/filed . unsorted/i)).toBeInTheDocument();
+  });
+
+  it("renders the real progress field as a bar and percentage while running (spec.md 5.6)", () => {
+    const job = buildJob({ state: "running", progress: 0.42 });
+    const { container } = render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByText(/42%/)).toBeInTheDocument();
+    const fill = container.querySelector('[style*="width"]');
+    expect(fill).toHaveStyle({ width: "42%" });
+  });
+
+  it("names the parsed project for a sorted job in progress", () => {
+    const job = buildJob({
+      file_name: "ELS - 260812 - Security issue.mp4",
+      state: "running",
+      classification: "sorted",
+      progress: 0.5,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByText(/Transcribing · 50% · ELS/)).toBeInTheDocument();
   });
 });

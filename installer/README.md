@@ -111,6 +111,26 @@ pass" section and `docs/manual-smoke-checklist.md`'s installer section:
    /S /D=<dir> /VAULT=<path>` completes with no UI and produces valid,
    correctly-resolving `config.json`.
 
+## Fixed: a stale remembered install location redirecting a real install (Bug 1)
+
+Tauri's generated template writes the last successful install's `$INSTDIR`
+to `HKCU\Software\${TRANSCRIBER_MANUFACTURER}\${TRANSCRIBER_PRODUCTNAME}`
+("") on every successful install, and reads that value back to pre-fill the
+directory page's default on the *next* install run (including a silent
+one with no `/D=`). It only clears this key on uninstall when the
+interactive "delete app data" checkbox was checked; a silent uninstall
+(the normal path for repeated `/S /D=...` verification installs, FR-18)
+leaves it in place. A verification install to a nonstandard directory
+(e.g. `C:\T14Verify`) therefore permanently redirected every later install
+-- including a real one with no `/D=` -- into that same directory.
+**Fix:** `NSIS_HOOK_POSTUNINSTALL` now unconditionally `DeleteRegKey`s this
+key (silent or interactive, upgrade or real uninstall). A following
+install's own successful write immediately re-populates it with wherever
+*that* install actually went, so this is safe for the upgrade path and
+closes the redirection for good. Covered by
+`test_postuninstall_clears_the_remembered_install_location_registry_key`
+in `scripts/tests/test_installer_hooks.py`.
+
 ## Silent-mode arguments (FR-18)
 
 ```

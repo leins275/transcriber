@@ -402,6 +402,41 @@ async def test_submit_outside_allowlist_raises_and_creates_no_ledger_row(
     assert ledger.list_jobs() == []
 
 
+async def test_submit_with_a_non_string_configured_model_raises_model_load_not_internal(
+    manager: JobManager,
+    ledger: Ledger,
+    audio_file: Path,
+    output_dir: Path,
+) -> None:
+    """Field report / Bug 3 regression: a malformed `Config.model` (a
+    `dict`, exactly what a config.json parsing bug once produced from F3's
+    real nested `"model": {"id": ..., "path": ...}` schema -- see
+    config.py) must be rejected here, before any ledger write, as a
+    classified `ServiceError(MODEL_LOAD)` -- never left to reach
+    `self._ledger.insert_job`, whose sqlite bind would raise an unhandled
+    `sqlite3.ProgrammingError` that FastAPI's generic exception handler
+    turns into an uninformative HTTP 500 `internal`.
+    """
+    providers.register("fake", FakeProvider)
+    manager._config = Config(
+        app_dir=manager._config.app_dir,
+        config_path=manager._config.config_path,
+        provider="fake",
+        model={"id": None, "path": None},  # type: ignore[arg-type]
+        allowed_roots=manager._config.allowed_roots,
+        db_path=manager._config.db_path,
+        token=manager._config.token,
+    )
+
+    with pytest.raises(ServiceError) as exc_info:
+        await manager.submit(
+            audio_path=str(audio_file), output_dir=str(output_dir), provider="fake"
+        )
+
+    assert exc_info.value.kind == ErrorKind.MODEL_LOAD
+    assert ledger.list_jobs() == []
+
+
 async def test_exactly_one_ledger_row_per_job_across_terminal_outcomes(
     manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:

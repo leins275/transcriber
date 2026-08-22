@@ -42,4 +42,19 @@ describe("DropZone", () => {
     expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /choose file/i })).not.toBeInTheDocument();
   });
+
+  it("in the hero variant, teaches the naming convention while idle", () => {
+    render(<DropZone state="idle" disabled={false} onChooseFile={() => {}} variant="hero" />);
+    const region = screen.getByRole("region", { name: /drop/i });
+    expect(region).toHaveAttribute("data-state", "idle");
+    expect(screen.getByText(/project - yymmdd - title/i)).toBeInTheDocument();
+    expect(screen.getByText(/ELS - 260812 - Security issue\.mp4/)).toBeInTheDocument();
+    expect(screen.getByText(/ever refused for its name/i)).toBeInTheDocument();
+  });
+
+  it("in the hero variant, the teaching content drops away once a file is dropped", () => {
+    render(<DropZone state="working" disabled={false} onChooseFile={() => {}} variant="hero" />);
+    expect(screen.getByRole("region", { name: /drop/i })).toHaveAttribute("data-state", "working");
+    expect(screen.queryByText(/project - yymmdd - title/i)).not.toBeInTheDocument();
+  });
 });

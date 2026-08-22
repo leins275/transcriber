@@ -1,32 +1,95 @@
 .row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 4px 12px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--divider);
+  align-items: start;
+}
+
+.icon {
+  margin-top: 3px;
+  display: inline-flex;
+}
+
+.spin {
+  animation: job-spin-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes job-spin-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.ring {
+  margin-top: 2px;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.content {
+  min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
-  padding: 0.25rem 0;
-  border-bottom: 1px solid var(--border-color, #ddd);
+  flex-direction: column;
+  gap: 2px;
 }
 
 .fileName {
-  flex: 0 0 auto;
+  font-size: var(--text-lg);
 }
 
-.state {
-  flex: 0 0 auto;
-  color: var(--muted-color, #555);
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-feature-settings: "tnum";
 }
 
-.classification {
-  flex: 0 0 auto;
-  color: var(--muted-color, #555);
-  text-transform: uppercase;
-  font-size: 0.75rem;
+.dangerMeta {
+  color: var(--danger);
+}
+
+.busy {
+  color: var(--accent-deep);
+  font-size: var(--text-sm);
+}
+
+.progressTrack {
+  height: 2px;
+  background: var(--track);
+  border-radius: 1px;
+  margin-top: 4px;
+  max-width: 520px;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 .message {
   margin: 0;
-  flex: 1 1 auto;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
-.busy {
-  color: var(--busy-color, #b45309);
+.path {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
 }

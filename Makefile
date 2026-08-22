@@ -11,7 +11,7 @@
 # exactly FR-2's fail-fast requirement -- so recipes here never use `&&` chains
 # or a `-` prefix to suppress a failure.
 
-.PHONY: format lint type test installer bootstrap
+.PHONY: format lint type test installer bootstrap release-prep next-version
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo fmt --all
@@ -66,3 +66,21 @@ installer:
 #   powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
 bootstrap:
 	powershell -ExecutionPolicy Bypass -File scripts/bootstrap.ps1
+
+# What version would a release cut right now carry? Prints nothing and exits
+# 3 when there is no feat/fix/breaking commit since the last `v*` tag.
+#
+# Direct equivalent:
+#   uv run scripts/prepare_release.py --print-next
+next-version:
+	uv run scripts/prepare_release.py --print-next
+
+# Write that version into version.txt, the five manifests and Cargo.lock, and
+# regenerate CHANGELOG.md. Normally CI's own job (.github/workflows/
+# release-pr.yml) rather than something run by hand -- this target exists so
+# the pipeline can be reproduced locally when it misbehaves.
+#
+# Direct equivalent:
+#   uv run scripts/prepare_release.py
+release-prep:
+	uv run scripts/prepare_release.py

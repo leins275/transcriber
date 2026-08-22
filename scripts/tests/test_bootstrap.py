@@ -10,6 +10,15 @@ No test in this module installs anything system-wide: `-Check` is fully
 read-only, and the "installer was attempted but a tool is still missing"
 branch is exercised via `-DryRun`, which reports what it would run without
 executing package-manager commands.
+
+Marked `host` for that reason, and excluded from CI. A GitHub runner is not
+the operator's machine: it has a real Python rather than the Microsoft Store
+stub these assert on, and a different set of tools on PATH. Making them pass
+there would mean changing what they assert, which would delete the only
+thing they are for. Some assertions in here (the report's JSON shape, the
+exit codes) *are* host-independent and would be worth extracting into a
+module that can run anywhere -- that is a refactor, not a reason to keep
+running the rest against the wrong machine.
 """
 
 from __future__ import annotations
@@ -24,6 +33,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap.ps1"
+
+pytestmark = pytest.mark.host
 
 REQUIRED_ROW_NAMES = {"rust", "node", "npm", "uv", "make", "tauri-cli"}
 ALL_ROW_NAMES = REQUIRED_ROW_NAMES | {"python"}

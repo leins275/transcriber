@@ -130,6 +130,29 @@ class JobManager:
         provider_name = provider or self._config.provider
         model_name = model or self._config.model
 
+        # Defense in depth (field report): `self._config.model` is only
+        # ever a plain string once `config.py::load_config` has parsed
+        # correctly, but a bug there once let a malformed config.json
+        # (F3's nested `"model": {"id": ..., "path": ...}` shape, copied
+        # verbatim instead of unpacked) leak a raw `dict` all the way to
+        # here. Left unchecked, that reached `self._ledger.insert_job`
+        # below, whose sqlite bind raised an unclassified
+        # `sqlite3.ProgrammingError` -- an unhandled exception this
+        # request handler never expected, surfaced to the caller as a
+        # bare HTTP 500 `internal` with no indication the *model
+        # configuration* was the actual problem (FR-8: every failure must
+        # be attributed to a taxonomy kind, never a generic message).
+        # Catching the shape here, before any ledger write, reports it as
+        # `model_load` instead -- config.py's own fix is the real root
+        # cause fix; this is the backstop so a similar future config bug
+        # degrades to a classified error, not a raw 500.
+        if not isinstance(model_name, str) or not model_name:
+            raise ServiceError(
+                ErrorKind.MODEL_LOAD,
+                f"configured model must be a non-empty string, got "
+                f"{type(model_name).__name__!r}: {model_name!r}",
+            )
+
         # Reject an unknown provider name here, before any job/ledger row
         # exists, instead of killing the worker on the queued job later
         # (FR-2, FR-8, NFR-7). Checking registry membership never imports a

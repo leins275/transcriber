@@ -61,3 +61,90 @@ export type AppError = {
   kind: ErrorKind;
   message: string;
 };
+
+// Vault-browser extension to the IPC contract (additive: a new command and
+// view type, mirroring the Rust `VaultMeetingView`/`list_vault`/
+// `reveal_vault_entry` — never a change to an existing field/command).
+export type VaultMeetingView = {
+  id: string;
+  project: string | null;
+  meeting_name: string;
+  meeting_dir: string;
+  has_source: boolean;
+  has_transcript: boolean;
+};
+
+// Per-meeting extension to the IPC contract (additive, mirroring the Rust
+// `commands::meetings` module): a transcript to read, and the shape
+// `update_vault_entry` accepts.
+export type TranscriptSegmentView = {
+  id: number;
+  /** Seconds from the start of the recording. */
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type TranscriptView = {
+  entry_id: string;
+  meeting_name: string;
+  language: string | null;
+  created_at: string | null;
+  duration_sec: number | null;
+  model: string | null;
+  device: string | null;
+  text: string;
+  segments: TranscriptSegmentView[];
+  /** `segment id -> speaker name`, from the meeting's `speakers.json`.
+   * Empty for a transcript nobody has labelled yet. */
+  speakers: Record<string, string>;
+  /** Where `transcript.json` actually is, for the reading view's footer. */
+  transcript_path: string;
+};
+
+/** A meeting's `summary.md`, if anything has written one. Nothing in this
+ * app generates summaries -- that needs a language model -- but the vault
+ * has reserved the name since F1's first spec, so one written by hand is
+ * readable here. */
+export type SummaryView = {
+  entry_id: string;
+  path: string;
+  markdown: string | null;
+};
+
+/** A meeting's requested new identity. `project: null` files it under
+ * `unsorted/`; the Rust side validates all three parts against exactly the
+ * rules ingest applies to a filename. */
+export type MeetingUpdate = {
+  project: string | null;
+  /** Six digits, `YYMMDD`. */
+  date: string;
+  title: string;
+};
+
+// Service-log extension to the IPC contract: one row of F2's own sqlite job
+// ledger (`GET /v1/jobs`), proxied through `list_service_jobs`. Every field
+// but `job_id`/`status` is nullable because the row is filled in over the
+// job's lifetime -- a queued job genuinely has no `elapsed_sec` yet.
+export type LedgerJobView = {
+  job_id: string;
+  /** F2's own five-state vocabulary, uncollapsed: `queued`, `running`,
+   * `succeeded`, `failed`, `cancelled`. */
+  status: string;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  provider: string | null;
+  model: string | null;
+  device: string | null;
+  source_path: string | null;
+  output_path: string | null;
+  audio_duration_sec: number | null;
+  elapsed_sec: number | null;
+  realtime_factor: number | null;
+  language: string | null;
+  segment_count: number | null;
+  error_kind: string | null;
+  error_message: string | null;
+  service_version: string | null;
+};

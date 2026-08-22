@@ -172,6 +172,33 @@ def test_uninstall_keep_branch_message_names_both_directories() -> None:
     assert "$INSTDIR\\runtime" in message
 
 
+def test_postuninstall_clears_the_remembered_install_location_registry_key() -> None:
+    """Field report (Bug 1): Tauri's generated template writes the last
+    successful install's $INSTDIR to
+    HKCU\\Software\\<manufacturer>\\<productName> on every install and reads
+    it back to pre-fill the *next* install's default directory, but only
+    clears it on uninstall when the interactive "delete app data" checkbox
+    was checked -- a silent uninstall (the default for repeated dev/
+    verification installs, FR-18) leaves it in place. A throwaway
+    verification install to a nonstandard directory then silently redirects
+    every later install, including a real one, into that same directory.
+    NSIS_HOOK_POSTUNINSTALL must clear this key unconditionally so no
+    uninstall -- silent or interactive -- can leave that residue behind.
+    """
+    text = _read_hooks()
+    post = _macro_body(text, "NSIS_HOOK_POSTUNINSTALL")
+    assert re.search(
+        r'DeleteRegKey\s+HKCU\s+"Software\\\$\{TRANSCRIBER_MANUFACTURER\}\\\$\{TRANSCRIBER_PRODUCTNAME\}"',
+        post,
+    ), (
+        "expected NSIS_HOOK_POSTUNINSTALL to unconditionally DeleteRegKey the "
+        "remembered install-location key "
+        "(HKCU\\Software\\${TRANSCRIBER_MANUFACTURER}\\${TRANSCRIBER_PRODUCTNAME})"
+    )
+    assert '!define TRANSCRIBER_MANUFACTURER "Transcriber"' in text
+    assert '!define TRANSCRIBER_PRODUCTNAME "Transcriber"' in text
+
+
 def test_silent_mode_parses_vault_option() -> None:
     body = _macro_body(_read_hooks(), "NSIS_HOOK_POSTINSTALL")
     assert "${GetOptions}" in body

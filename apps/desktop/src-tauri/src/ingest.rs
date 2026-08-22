@@ -109,7 +109,7 @@ fn ingest_blocking(root: &Path, source: &Path) -> Result<IngestOutcome, AppError
 /// without adding it here is a compile error, not a silently swallowed
 /// case (FR-9's "no re-derived vault rule" acceptance bullet extends to
 /// "no re-derived vault error taxonomy" either).
-fn vault_error_to_app_error(err: VaultError) -> AppError {
+pub(crate) fn vault_error_to_app_error(err: VaultError) -> AppError {
     let message = err.to_string();
     match err {
         VaultError::RootIsNotADirectory => AppError::vault(message),
@@ -120,6 +120,16 @@ fn vault_error_to_app_error(err: VaultError) -> AppError {
         VaultError::PathTooLong { .. } => AppError::vault(message),
         VaultError::SuffixLimitExceeded => AppError::collision(message),
         VaultError::AppDataUnavailable => AppError::vault(message),
+        // The three `vault::manage` variants (rename/re-file/delete of an
+        // already-ingested meeting). The first two are the caller's
+        // request being wrong -- an id that does not name a meeting
+        // folder, or a project/date/title that fails the naming rules --
+        // so they map to `invalid_argument`, the same kind `reveal_job`
+        // uses for an id it cannot resolve. A recycle-bin refusal is an
+        // environment failure, not a bad request, so it maps to `io`.
+        VaultError::NotAMeetingDirectory => AppError::invalid_argument(message),
+        VaultError::InvalidMeetingName { .. } => AppError::invalid_argument(message),
+        VaultError::TrashUnavailable { .. } => AppError::io(message),
         VaultError::Io { .. } => AppError::io(message),
     }
 }

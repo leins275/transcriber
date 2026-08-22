@@ -55,10 +55,11 @@ fn date_not_a_calendar_date_message_mentions_the_calendar() {
 
 #[test]
 fn vault_error_all_kinds_covers_every_variant() {
-    // 9 variants declared in the plan's error vocabulary. See
+    // 9 variants declared in the plan's error vocabulary, plus the three
+    // `crate::manage` added for post-ingest rename/re-file/delete. See
     // `error::exhaustiveness` in `src/error.rs` for the compile-time guard
     // that backs this count up.
-    assert_eq!(VaultError::all_kinds().len(), 9);
+    assert_eq!(VaultError::all_kinds().len(), 12);
 }
 
 #[test]

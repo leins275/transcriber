@@ -84,7 +84,12 @@ def test_check_fails_naming_drifting_file():
 
 def test_set_then_check_syncs_every_manifest_and_is_idempotent():
     version_txt = REPO_ROOT / "version.txt"
-    tracked = [version_txt] + [m.path for m in sync_version.MANIFESTS]
+    # Cargo.lock is restored too: `--set` now writes the workspace members'
+    # versions there as well, so a snapshot without it leaves the lockfile
+    # dirty at the test's scratch version.
+    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(tracked)
     try:
         result = _run("--set", "9.9.9")
@@ -147,7 +152,12 @@ def test_write_toml_version_preserves_the_files_existing_newline_style(tmp_path)
 
 def test_print_artifact_name_embeds_the_version():
     version_txt = REPO_ROOT / "version.txt"
-    tracked = [version_txt] + [m.path for m in sync_version.MANIFESTS]
+    # Cargo.lock is restored too: `--set` now writes the workspace members'
+    # versions there as well, so a snapshot without it leaves the lockfile
+    # dirty at the test's scratch version.
+    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
     snapshot = _snapshot(tracked)
     try:
         _run("--set", "1.2.3")
@@ -161,5 +171,142 @@ def test_print_artifact_name_embeds_the_version():
         name_b = result_b.stdout.strip()
         assert "1.2.4" in name_b
         assert name_a != name_b
+    finally:
+        _restore(snapshot)
+
+
+# -- Cargo.lock (the sixth and seventh copies of the version) ---------------
+#
+# `tauri build --locked` -- what scripts/build_installer.py runs -- fails
+# outright when a workspace member's version in Cargo.lock disagrees with its
+# Cargo.toml. These pin that the bump keeps them together.
+
+
+def test_cargo_lock_workspace_members_match_version_txt():
+    version = sync_version.read_version()
+    for package in sync_version.LOCK_PACKAGES:
+        assert sync_version.lock_version(package) == version, package.name
+
+
+def test_check_fails_when_only_cargo_lock_drifts():
+    lock = sync_version.CARGO_LOCK
+    snapshot = _snapshot([lock])
+    try:
+        text = lock.read_text(encoding="utf-8")
+        pattern = sync_version._lock_version_re("vault")
+        lock.write_text(
+            pattern.sub(r"\g<1>9.9.9\g<3>", text, count=1),
+            encoding="utf-8",
+            newline=sync_version._detect_newline(lock),
+        )
+
+        result = _run("--check")
+
+        assert result.returncode == 1
+        assert "Cargo.lock (vault)" in result.stderr
+    finally:
+        _restore(snapshot)
+
+
+def test_set_syncs_cargo_lock_members_without_touching_registry_crates():
+    lock = sync_version.CARGO_LOCK
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
+    snapshot = _snapshot(paths)
+    try:
+        before = lock.read_text(encoding="utf-8")
+        # A registry crate's own version line, which must survive untouched.
+        serde_before = sync_version._lock_version_re("serde").search(before)
+
+        sync_version.set_version("9.9.9")
+
+        for package in sync_version.LOCK_PACKAGES:
+            assert sync_version.lock_version(package) == "9.9.9", package.name
+
+        after = lock.read_text(encoding="utf-8")
+        if serde_before is not None:
+            serde_after = sync_version._lock_version_re("serde").search(after)
+            assert serde_after is not None
+            assert serde_after.group(2) == serde_before.group(2)
+        # Exactly two lines differ: one per workspace member.
+        changed = [
+            (a, b) for a, b in zip(before.splitlines(), after.splitlines(), strict=True) if a != b
+        ]
+        cargo_packages = [p for p in sync_version.LOCK_PACKAGES if p.path == lock]
+        assert len(changed) == len(cargo_packages), changed
+    finally:
+        _restore(snapshot)
+
+
+def test_set_preserves_cargo_locks_newline_style():
+    lock = sync_version.CARGO_LOCK
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
+    snapshot = _snapshot(paths)
+    try:
+        had_crlf = b"\r\n" in lock.read_bytes()
+
+        sync_version.set_version("9.9.9")
+
+        assert (b"\r\n" in lock.read_bytes()) is had_crlf
+    finally:
+        _restore(snapshot)
+
+
+def test_uv_lock_project_entry_matches_version_txt():
+    # `uv export --frozen` in the pyenv bake refuses a lockfile whose project
+    # version disagrees with pyproject.toml -- the release build's first real
+    # failure, before this was synced.
+    version = sync_version.read_version()
+    transcription = next(
+        package
+        for package in sync_version.LOCK_PACKAGES
+        if package.path == sync_version.UV_LOCK
+    )
+    assert sync_version.lock_version(transcription) == version
+
+
+def test_check_fails_when_only_uv_lock_drifts():
+    lock = sync_version.UV_LOCK
+    snapshot = _snapshot([lock])
+    try:
+        text = lock.read_text(encoding="utf-8")
+        pattern = sync_version._lock_version_re("transcription")
+        lock.write_text(
+            pattern.sub(r"\g<1>9.9.9\g<3>", text, count=1),
+            encoding="utf-8",
+            newline=sync_version._detect_newline(lock),
+        )
+
+        result = _run("--check")
+
+        assert result.returncode == 1
+        assert "services/transcription/uv.lock (transcription)" in result.stderr
+    finally:
+        _restore(snapshot)
+
+
+def test_set_syncs_the_uv_lock_project_without_touching_dependencies():
+    lock = sync_version.UV_LOCK
+    paths = [REPO_ROOT / "version.txt", lock, sync_version.CARGO_LOCK] + [
+        m.path for m in sync_version.MANIFESTS
+    ]
+    snapshot = _snapshot(paths)
+    try:
+        before = lock.read_text(encoding="utf-8")
+
+        sync_version.set_version("9.9.9")
+
+        after = lock.read_text(encoding="utf-8")
+        changed = [
+            (a, b)
+            for a, b in zip(before.splitlines(), after.splitlines(), strict=True)
+            if a != b
+        ]
+        # Exactly one line: the project's own version. Every other
+        # `[[package]]` in that file is a third-party dependency.
+        assert len(changed) == 1, changed
     finally:
         _restore(snapshot)

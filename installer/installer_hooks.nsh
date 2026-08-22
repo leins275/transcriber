@@ -27,6 +27,26 @@
   !define TRANSCRIBER_IDENTIFIER "com.transcriber.desktop"
 !endif
 
+; Tauri's generated template (tauri.conf.json: publisher "Transcriber",
+; productName "Transcriber") writes the *last successful install's*
+; $INSTDIR to HKCU\Software\${TRANSCRIBER_MANUFACTURER}\${TRANSCRIBER_PRODUCTNAME}
+; ("") on every successful install, and reads it back to pre-fill the
+; *next* install's default directory. It only clears that key on
+; uninstall when the interactive "delete app data" checkbox was checked
+; -- a silent uninstall (the default for repeated dev/verification
+; installs, FR-18) leaves it in place. Field report: a throwaway
+; verification install to C:\T14Verify left this key pointing there,
+; and a subsequent real install silently defaulted into C:\T14Verify
+; instead of %LOCALAPPDATA%\Programs\Transcriber. Cleared unconditionally
+; in NSIS_HOOK_POSTUNINSTALL below so no uninstall -- silent or
+; interactive -- can leave that residue behind.
+!ifndef TRANSCRIBER_MANUFACTURER
+  !define TRANSCRIBER_MANUFACTURER "Transcriber"
+!endif
+!ifndef TRANSCRIBER_PRODUCTNAME
+  !define TRANSCRIBER_PRODUCTNAME "Transcriber"
+!endif
+
 ; ---------------------------------------------------------------------------
 ; Shared helper -- write config.json under
 ; $APPDATA\${TRANSCRIBER_IDENTIFIER}\config.json for the given vault root.
@@ -253,4 +273,15 @@
 
   transcriber_postuninstall_done:
   RMDir "$APPDATA\${TRANSCRIBER_IDENTIFIER}\_uninstall_tmp"
+
+  ; Bug fix (field report): clear the remembered-install-location registry
+  ; key unconditionally, regardless of silent vs. interactive uninstall and
+  ; regardless of the "delete app data" checkbox -- see the comment at this
+  ; file's TRANSCRIBER_MANUFACTURER/TRANSCRIBER_PRODUCTNAME defines. A
+  ; following install (upgrade or fresh) re-populates this key itself on
+  ; success with wherever *that* install actually goes, so clearing it here
+  ; is safe for the upgrade path and is what stops a throwaway test install
+  ; from ever redirecting a later real one.
+  DeleteRegKey HKCU "Software\${TRANSCRIBER_MANUFACTURER}\${TRANSCRIBER_PRODUCTNAME}"
+  DeleteRegKey /ifempty HKCU "Software\${TRANSCRIBER_MANUFACTURER}"
 !macroend

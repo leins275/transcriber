@@ -28,6 +28,20 @@ _TRUE_STRINGS = frozenset({"1", "true", "yes"})
 # file's overall schema); this key is the one exception it reads on its own behalf.
 _VAULT_ROOT_KEY = "vault_root"
 
+# F3's config.json schema (docs/config-contract.md) nests the model choice as
+# ``"model": {"id": ..., "path": ...}`` -- but this dataclass's own field is
+# named `model` too (a flat string, the model id). Bug (field report, 2026-08-22):
+# the generic known-field passthrough below used to copy this key's value
+# verbatim, so a real installed config.json (which always has this nested
+# shape) silently set `Config.model` to a `dict` instead of a string --
+# surfacing many calls later as `sqlite3.ProgrammingError: Error binding
+# parameter 4: type 'dict' is not supported` in `ledger.insert_job`, reported
+# to the operator as an unhelpful HTTP 500 `internal` on every job
+# submission. `model` is special-cased here the same way `vault_root` is,
+# unpacking `id`/`path` into the flat `model`/`model_path` fields instead of
+# being copied through the generic loop.
+_MODEL_KEY = "model"
+
 
 class ConfigError(Exception):
     """Raised when configuration cannot be loaded (e.g. malformed config file)."""
@@ -144,9 +158,11 @@ def load_config(
     # 1. defaults come from the dataclass field defaults themselves — nothing to do
     #    here until a layer actually supplies a value.
 
-    # 2. config file (unknown keys ignored; vault_root is special-cased below)
+    # 2. config file (unknown keys ignored; vault_root and model are
+    #    special-cased below -- neither is a plain scalar the generic loop
+    #    can copy verbatim).
     for key, value in file_data.items():
-        if key == _VAULT_ROOT_KEY:
+        if key in (_VAULT_ROOT_KEY, _MODEL_KEY):
             continue
         if key in known_fields:
             values[key] = value
@@ -155,6 +171,26 @@ def load_config(
     vault_root = file_data.get(_VAULT_ROOT_KEY)
     if vault_root:
         allowed_roots.append(str(vault_root))
+
+    # F3's nested `"model": {"id": ..., "path": ...}` (see _MODEL_KEY above):
+    # unpack onto the flat `model`/`model_path` fields instead of assigning
+    # the dict itself. A `null`/absent `id` or `path` leaves the
+    # corresponding field at whatever an earlier layer (never happens here --
+    # this is layer 2) or the dataclass default already supplied.
+    model_field = file_data.get(_MODEL_KEY)
+    if isinstance(model_field, dict):
+        model_id = model_field.get("id")
+        if model_id:
+            values["model"] = str(model_id)
+        model_path_value = model_field.get("path")
+        if model_path_value:
+            values["model_path"] = str(model_path_value)
+    elif isinstance(model_field, str) and model_field:
+        # Tolerate a plain string too, in case some other writer ever uses a
+        # flatter shape -- never silently accept anything else (a list, a
+        # number, ...), which is exactly the shape of bug this guards
+        # against.
+        values["model"] = model_field
 
     # 3. TRANSCRIBER_* env overrides
     for key in known_fields:

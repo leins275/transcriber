@@ -87,6 +87,28 @@ pub enum VaultError {
     SuffixLimitExceeded,
     /// The application-data directory could not be resolved (FR-16).
     AppDataUnavailable,
+    /// A path handed to `crate::manage` is not an existing meeting folder
+    /// directly beneath a project folder or `unsorted/` in this vault.
+    /// Refusing here is what keeps the management calls from renaming or
+    /// trashing a project folder, the vault root, or anything outside it.
+    NotAMeetingDirectory,
+    /// A rename/re-file request carried a project code, date or title that
+    /// fails the same rules ingest applies to a filename (FR-4, FR-5,
+    /// FR-6). Unlike ingest -- where a bad name routes the recording to
+    /// `unsorted/` rather than failing -- an explicit rename has an
+    /// operator to report back to, so the reason is surfaced instead of
+    /// silently re-filing their meeting somewhere they did not ask for.
+    InvalidMeetingName {
+        /// The first rule the requested name failed.
+        reason: Rejection,
+    },
+    /// The meeting folder could not be handed to the OS recycle bin.
+    /// Carries the underlying reason verbatim; the folder is left exactly
+    /// where it was.
+    TrashUnavailable {
+        /// The underlying failure, as reported by the platform.
+        message: String,
+    },
     /// An I/O operation failed at the given path.
     Io {
         /// The path the failing operation was acting on.
@@ -117,6 +139,13 @@ impl VaultError {
             },
             VaultError::SuffixLimitExceeded,
             VaultError::AppDataUnavailable,
+            VaultError::NotAMeetingDirectory,
+            VaultError::InvalidMeetingName {
+                reason: Rejection::EmptyTitle,
+            },
+            VaultError::TrashUnavailable {
+                message: "example recycle-bin failure".to_string(),
+            },
             VaultError::Io {
                 path: PathBuf::from("example"),
                 source: IoFailure {
@@ -153,6 +182,18 @@ impl std::fmt::Display for VaultError {
             }
             VaultError::AppDataUnavailable => {
                 write!(f, "application-data directory is unavailable")
+            }
+            VaultError::NotAMeetingDirectory => {
+                write!(f, "path is not a meeting folder inside this vault")
+            }
+            VaultError::InvalidMeetingName { reason } => {
+                write!(f, "requested meeting name is not usable: {reason}")
+            }
+            VaultError::TrashUnavailable { message } => {
+                write!(
+                    f,
+                    "could not move the meeting folder to the recycle bin: {message}"
+                )
             }
             VaultError::Io { path, source } => {
                 write!(f, "I/O error at \"{}\": {source}", path.display())
@@ -297,6 +338,9 @@ mod exhaustiveness {
             | VaultError::PathTooLong { .. }
             | VaultError::SuffixLimitExceeded
             | VaultError::AppDataUnavailable
+            | VaultError::NotAMeetingDirectory
+            | VaultError::InvalidMeetingName { .. }
+            | VaultError::TrashUnavailable { .. }
             | VaultError::Io { .. } => {}
         }
     }

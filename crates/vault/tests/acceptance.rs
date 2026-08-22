@@ -139,12 +139,13 @@ fn fr02_fr03_pure_parser_splits_on_first_two_separators_with_no_filesystem() {
 
 /// Deep matrix in `tests/code.rs` (length bounds, embedded space, leading
 /// digit, path-escape attempts as an invalid code) and
-/// `tests/parse_filename.rs::lowercase_project_code_is_unsorted`.
+/// `tests/parse_filename.rs::lowercase_project_code_is_sorted_and_capitalized`
+/// (case-insensitive matching supersedes R4 — see `code.rs`'s module docs).
 #[test]
-fn fr04_lowercase_spaced_or_empty_project_code_is_unsorted() {
+fn fr04_spaced_or_empty_project_code_is_unsorted() {
     for (name, expected) in [
-        ("els - 260812 - x.mp4", Rejection::InvalidProjectCode),
         ("EL S - 260812 - x.mp4", Rejection::InvalidProjectCode),
+        ("1ELS - 260812 - x.mp4", Rejection::InvalidProjectCode),
     ] {
         match vault::classify_filename(name).unwrap() {
             Classified::Unsorted { reason, .. } => assert_eq!(reason, expected, "for {name:?}"),
