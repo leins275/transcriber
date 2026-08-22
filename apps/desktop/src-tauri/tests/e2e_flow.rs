@@ -61,7 +61,22 @@ fn full_pipeline_files_a_correctly_named_recording_and_reports_its_transcript_pa
             meeting_dir.ends_with(&expected_meeting_dir_suffix),
             "expected meeting_dir to end with {expected_meeting_dir_suffix:?}, got {meeting_dir:?}"
         );
-        assert!(meeting_dir.starts_with(root.path()));
+        // Against the *canonical* root: F1 canonicalizes every path it hands
+        // back, and a tempdir's own path need not be canonical -- a Windows
+        // CI runner exposes `%TEMP%` through an 8.3 short component. Comparing
+        // with the raw tempdir path tests the fixture's spelling rather than
+        // where the recording was filed.
+        let canonical_root = root
+            .path()
+            .canonicalize()
+            .expect("the meetings root exists by now");
+        let canonical_meeting_dir = meeting_dir
+            .canonicalize()
+            .expect("the meeting folder was just created");
+        assert!(
+            canonical_meeting_dir.starts_with(&canonical_root),
+            "expected {canonical_meeting_dir:?} under {canonical_root:?}"
+        );
 
         let source_dest = PathBuf::from(done.source_dest.as_deref().expect("source_dest set"));
         assert_eq!(source_dest, meeting_dir.join("source.mp4"));
