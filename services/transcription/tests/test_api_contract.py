@@ -20,6 +20,7 @@ import pytest
 from fakes import FakeProvider
 from fastapi.testclient import TestClient
 
+import transcription
 from transcription import providers
 from transcription.app import create_app
 from transcription.config import Config
@@ -83,7 +84,7 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
     # addition: `None` on this GPU-less-probed host.
     assert body == {
         "status": "ok",
-        "version": "0.1.0",
+        "version": transcription.__version__,
         "provider": "fake",
         "model": "large-v3",
         "device": "auto",
