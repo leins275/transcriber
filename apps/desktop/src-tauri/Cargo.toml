@@ -24,6 +24,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "io-u
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 async-trait = "0.1"
 vault = { path = "../../../crates/vault" }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [dev-dependencies]
 tempfile = "3"

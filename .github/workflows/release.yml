@@ -91,7 +91,14 @@ jobs:
       # pyenv bake, `tauri build --locked`, collect, and the 1.5 GB size gate.
       # Nothing about this build is release-specific — it is exactly what a
       # developer runs locally, which is what makes it worth trusting.
+      # The signing key is what makes an update an *update* rather than an
+      # arbitrary executable a client was talked into running. Without these
+      # set, `createUpdaterArtifacts` fails the build rather than silently
+      # publishing unsigned archives -- which is the right way round.
       - name: Build installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: uv run scripts/build_installer.py
 
       # Between the build and the tag, on purpose. `gh release create` would
@@ -145,6 +152,61 @@ jobs:
             echo "See CHANGELOG.md for the changes in this release." > release-notes.md
           fi
 
+      # The manifest the installed app polls. Built here rather than by the
+      # bundler because only this job knows the URL these assets will end up
+      # at, and written from the *signature file the build actually
+      # produced* -- so a manifest can never claim a signature that was not
+      # made for these bytes.
+      #
+      # Assembled in Python rather than shell: `notes` is arbitrary prose
+      # from CHANGELOG.md, and hand-escaping that into JSON with sed is how
+      # a release ends up publishing a manifest no client can parse. A
+      # malformed manifest reads as "no update available" to the updater,
+      # which would fail silently forever.
+      - name: Assemble the update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=$(ls target/release/bundle/nsis/*.nsis.zip)
+          cp "$archive" "$archive.sig" .
+          echo "archive=$(basename "$archive")" >> "$GITHUB_ENV"
+
+          python - <<'PY'
+          import json, os, pathlib, datetime
+
+          version = os.environ["VERSION"]
+          archive = next(pathlib.Path("target/release/bundle/nsis").glob("*.nsis.zip"))
+          signature = pathlib.Path(f"{archive}.sig").read_text(encoding="utf-8").strip()
+          notes = pathlib.Path("release-notes.md").read_text(encoding="utf-8").strip()
+          base = f"https://github.com/{os.environ['REPO']}/releases/download/v{version}"
+
+          pathlib.Path("latest.json").write_text(
+              json.dumps(
+                  {
+                      "version": version,
+                      "notes": notes[:4000],
+                      "pub_date": datetime.datetime.now(datetime.UTC)
+                      .replace(microsecond=0)
+                      .isoformat()
+                      .replace("+00:00", "Z"),
+                      "platforms": {
+                          "windows-x86_64": {
+                              "signature": signature,
+                              "url": f"{base}/{archive.name}",
+                          }
+                      },
+                  },
+                  indent=2,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          print(f"latest.json points at {base}/{archive.name}")
+          PY
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          REPO: ${{ github.repository }}
+
       # Tag only after the build has succeeded. A tag on a commit whose
       # installer never built is worse than no tag: it makes a version look
       # released when nothing exists to install.
@@ -162,13 +224,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           version="${{ needs.check.outputs.version }}"
+          archive="${{ env.archive }}"
           gh release create "v$version" \
             --title "Transcriber $version" \
             --notes-file release-notes.md \
             "${{ steps.assets.outputs.installer }}" \
             "${{ steps.assets.outputs.installer }}.sha256" \
-            "dist/build-manifest.json"
+            "dist/build-manifest.json" \
+            "latest.json" \
+            "$archive" \
+            "$archive.sig"
 
       # `gh release create` can succeed with a partial upload if an asset is
       # rejected after the release object is made. Read the published release

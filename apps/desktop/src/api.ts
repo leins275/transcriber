@@ -12,6 +12,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AppError,
   JobSnapshot,
@@ -114,6 +116,32 @@ export function onJobsUpdated(handler: (job: JobSnapshot) => void): Promise<Unli
 /** Sidecar/service reachability changes (FR-13). */
 export function onServiceStatus(handler: (status: ServiceStatusView) => void): Promise<UnlistenFn> {
   return listen<ServiceStatusView>("service://status", (event) => handler(event.payload));
+}
+
+/** The updater's own handle on an available update: `version`, `body`
+ * (release notes) and `date` from the signed manifest, plus
+ * `downloadAndInstall`. Re-exported rather than redeclared so the shape
+ * cannot drift from the plugin's. */
+export type PendingUpdate = Update;
+
+/**
+ * Asks GitHub whether a newer signed build exists (FR: updates).
+ *
+ * `null` means this build is current — the common answer, and not an error.
+ * Anything else (offline, DNS, a malformed manifest, a bad signature) throws
+ * and is reported to the operator rather than swallowed: silently failing to
+ * check leaves someone believing they are up to date when nothing knows.
+ *
+ * This is the only outbound request this app makes that is not to the local
+ * sidecar. It sends no data — it is a GET of a public manifest.
+ */
+export async function checkForUpdate(): Promise<PendingUpdate | null> {
+  return await check();
+}
+
+/** Restarts the app so an installed update takes effect. */
+export async function relaunchApp(): Promise<void> {
+  await relaunch();
 }
 
 /** Window drag-drop events (FR-4, FR-5) — the only source of dropped paths. */

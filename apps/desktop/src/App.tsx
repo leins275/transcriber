@@ -12,6 +12,7 @@ import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
 import { Sidebar } from "./components/Sidebar";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { VaultPanel } from "./components/VaultPanel";
 import {
   api,
@@ -24,6 +25,7 @@ import {
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
+import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
 import type { AppError, MeetingUpdate, ServiceStatusView, SettingsView } from "./types";
 
@@ -44,6 +46,7 @@ function App() {
   const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
   const [modelSkipped, setModelSkipped] = useState(false);
   const { jobs, enqueue, upsert: upsertJob } = useJobs();
+  const update = useUpdate();
   // Vault browser: a persistent list of already-ingested meetings (the
   // "after reopen I don't see already uploaded recordings" problem), plus
   // the per-meeting actions over them.
@@ -309,6 +312,17 @@ function App() {
         />
       )}
       <main className="main-pane">
+        {/* Above the config error and everything else: it is the one notice
+            that is about the app itself rather than about the operator's
+            vault, and it disappears on its own when there is nothing to
+            say. */}
+        <UpdateNotice
+          state={update.state}
+          onInstall={update.install}
+          onRestart={update.restart}
+          onDismiss={update.dismiss}
+        />
+
         {settings?.config_error && (
           // E3: a malformed config.json falls back to first-run defaults
           // instead of crashing before a window exists -- this is the
