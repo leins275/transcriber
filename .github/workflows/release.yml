@@ -177,6 +177,13 @@ jobs:
       # produced* -- so a manifest can never claim a signature that was not
       # made for these bytes.
       #
+      # Tauri v2's `createUpdaterArtifacts: true` signs the NSIS installer
+      # itself (`<installer>.exe.sig`); there is no separate `.nsis.zip`
+      # archive -- that is the legacy `v1Compatible` layout. The update the
+      # client downloads is therefore the very installer this release
+      # publishes, and `plugins.updater.windows.installMode: "passive"` in
+      # tauri.conf.json is the client half of that same arrangement.
+      #
       # Assembled in Python rather than shell: `notes` is arbitrary prose
       # from CHANGELOG.md, and hand-escaping that into JSON with sed is how
       # a release ends up publishing a manifest no client can parse. A
@@ -186,16 +193,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive=$(ls target/release/bundle/nsis/*.nsis.zip)
-          cp "$archive" "$archive.sig" .
-          echo "archive=$(basename "$archive")" >> "$GITHUB_ENV"
+          installer="${{ steps.assets.outputs.installer }}"
+          sig="target/release/bundle/nsis/$(basename "$installer").sig"
+          if [ ! -s "$sig" ]; then
+            echo "::error::updater signature missing: $sig -- was TAURI_SIGNING_PRIVATE_KEY set for the build?"
+            ls -la target/release/bundle/nsis/ || true
+            exit 1
+          fi
+          # Next to the installer in dist/, so the publish step uploads the
+          # pair from one place.
+          cp "$sig" "$installer.sig"
 
           python - <<'PY'
           import json, os, pathlib, datetime
 
           version = os.environ["VERSION"]
-          archive = next(pathlib.Path("target/release/bundle/nsis").glob("*.nsis.zip"))
-          signature = pathlib.Path(f"{archive}.sig").read_text(encoding="utf-8").strip()
+          installer = pathlib.Path(os.environ["INSTALLER"])
+          signature = pathlib.Path(f"{installer}.sig").read_text(encoding="utf-8").strip()
           notes = pathlib.Path("release-notes.md").read_text(encoding="utf-8").strip()
           base = f"https://github.com/{os.environ['REPO']}/releases/download/v{version}"
 
@@ -211,7 +225,7 @@ jobs:
                       "platforms": {
                           "windows-x86_64": {
                               "signature": signature,
-                              "url": f"{base}/{archive.name}",
+                              "url": f"{base}/{installer.name}",
                           }
                       },
                   },
@@ -220,11 +234,12 @@ jobs:
               + "\n",
               encoding="utf-8",
           )
-          print(f"latest.json points at {base}/{archive.name}")
+          print(f"latest.json points at {base}/{installer.name}")
           PY
         env:
           VERSION: ${{ needs.check.outputs.version }}
           REPO: ${{ github.repository }}
+          INSTALLER: ${{ steps.assets.outputs.installer }}
 
       - name: Publish the GitHub Release
         env:
@@ -233,16 +248,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ needs.check.outputs.version }}"
-          archive="${{ env.archive }}"
           gh release create "v$version" \
             --title "Transcriber $version" \
             --notes-file release-notes.md \
             "${{ steps.assets.outputs.installer }}" \
             "${{ steps.assets.outputs.installer }}.sha256" \
+            "${{ steps.assets.outputs.installer }}.sig" \
             "dist/build-manifest.json" \
-            "latest.json" \
-            "$archive" \
-            "$archive.sig"
+            "latest.json"
 
       # `gh release create` can succeed with a partial upload if an asset is
       # rejected after the release object is made. Read the published release

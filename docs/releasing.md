@@ -134,7 +134,7 @@ How it fits together:
 | Piece | Where |
 |---|---|
 | Signing keypair | private key in the `TAURI_SIGNING_PRIVATE_KEY` repo secret; public key in `tauri.conf.json` |
-| Signed archive + `.sig` | produced by `createUpdaterArtifacts` during the normal NSIS build |
+| Signed installer + `.sig` | `createUpdaterArtifacts` signs the NSIS `-setup.exe` itself during the normal build (Tauri v2 layout — there is no separate update archive) |
 | `latest.json` | assembled by `release.yml` and attached to the Release |
 | The check | `state/useUpdate.ts` at launch, rendered by `UpdateNotice` |
 
