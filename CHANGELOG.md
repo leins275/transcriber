@@ -3,6 +3,13 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.3.0 — 2026-08-22
+
+### Features
+
+- **vault**: Whitespace around the name separators is optional
+- **service**: Utterance-level segments -- stop concatenating replicas
+
 ## 0.2.1 — 2026-08-22
 
 ### Bug fixes
