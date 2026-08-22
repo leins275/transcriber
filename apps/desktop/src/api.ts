@@ -15,8 +15,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppError,
   JobSnapshot,
+  LedgerJobView,
+  MeetingUpdate,
   ServiceStatusView,
   SettingsView,
+  TranscriptView,
   VaultMeetingView,
 } from "./types";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
@@ -59,6 +62,23 @@ export const api = {
   listVault: (): Promise<VaultMeetingView[]> => call<VaultMeetingView[]>("list_vault"),
   revealVaultEntry: (entryId: string): Promise<void> =>
     call<void>("reveal_vault_entry", { entryId }),
+  // Per-meeting commands (additive) -- all three name the meeting by the
+  // id `list_vault` issued, never by a path, exactly like `revealVaultEntry`.
+  readTranscript: (entryId: string): Promise<TranscriptView> =>
+    call<TranscriptView>("read_transcript", { entryId }),
+  updateVaultEntry: (entryId: string, update: MeetingUpdate): Promise<VaultMeetingView> =>
+    call<VaultMeetingView>("update_vault_entry", {
+      entryId,
+      project: update.project,
+      date: update.date,
+      title: update.title,
+    }),
+  deleteVaultEntry: (entryId: string): Promise<void> =>
+    call<void>("delete_vault_entry", { entryId }),
+  // F2's own sqlite job ledger, newest first (`GET /v1/jobs` behind the
+  // Rust proxy). `limit` is clamped Rust-side to what F2 accepts.
+  listServiceJobs: (limit?: number): Promise<LedgerJobView[]> =>
+    call<LedgerJobView[]>("list_service_jobs", { limit: limit ?? null }),
   // Model-download trio (T13, FR-12, FR-17) -- thin proxies over the Rust
   // commands, which themselves proxy the T11 HTTP endpoints. None takes a
   // path argument: the destination is resolved on the Rust side only.

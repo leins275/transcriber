@@ -23,7 +23,8 @@ import {
 } from "./api";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { useJobs } from "./state/useJobs";
-import type { AppError, ServiceStatusView, SettingsView, VaultMeetingView } from "./types";
+import { useVault } from "./state/useVault";
+import type { AppError, MeetingUpdate, ServiceStatusView, SettingsView } from "./types";
 
 const INITIAL_SERVICE_STATUS: ServiceStatusView = {
   state: "starting",
@@ -41,10 +42,19 @@ function App() {
   // failure (service not yet ready) never flashes a false "model missing".
   const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
   const [modelSkipped, setModelSkipped] = useState(false);
-  // Vault browser: a persistent list of already-ingested meetings (the
-  // "after reopen I don't see already uploaded recordings" problem).
-  const [vaultEntries, setVaultEntries] = useState<VaultMeetingView[]>([]);
   const { jobs, enqueue } = useJobs();
+  // Vault browser: a persistent list of already-ingested meetings (the
+  // "after reopen I don't see already uploaded recordings" problem), plus
+  // the per-meeting actions over them.
+  const {
+    entries: vaultEntries,
+    refresh: refreshVault,
+    reveal: revealVaultEntry,
+    readTranscript,
+    update: updateVaultEntry,
+    remove: deleteVaultEntry,
+    loadServiceLog,
+  } = useVault();
 
   useEffect(() => {
     api
@@ -97,22 +107,12 @@ function App() {
     status: () => api.modelDownloadStatus(),
   }).current;
 
-  // Vault browser: fetches the current listing. A failure (e.g. the root
-  // briefly not configured) leaves whatever was already shown in place
-  // rather than clearing it.
-  const refreshVault = useCallback(() => {
-    api
-      .listVault()
-      .then((entries) => setVaultEntries(entries ?? []))
-      .catch(() => {});
-  }, []);
-
   // Loads on startup once settings resolve to a meetings root that is both
   // set and exists (spec: "Loads on startup once settings resolve") --
   // first-run (no root yet) never calls list_vault at all.
   useEffect(() => {
     if (!settings?.meetings_root || !settings.meetings_root_exists) return;
-    refreshVault();
+    void refreshVault();
   }, [settings?.meetings_root, settings?.meetings_root_exists, refreshVault]);
 
   // Refreshes after each job reaches a terminal *filed* state (done, or
@@ -132,7 +132,7 @@ function App() {
       }
     }
     if (shouldRefresh) {
-      refreshVault();
+      void refreshVault();
     }
   }, [jobs, refreshVault]);
 
@@ -221,9 +221,26 @@ function App() {
     api.revealJob(jobId).catch((error: AppError) => setLastError(error));
   }, []);
 
-  const handleRevealVaultEntry = useCallback((entryId: string) => {
-    api.revealVaultEntry(entryId).catch((error: AppError) => setLastError(error));
-  }, []);
+  const handleRevealVaultEntry = useCallback(
+    (entryId: string) => {
+      revealVaultEntry(entryId).catch((error: AppError) => setLastError(error));
+    },
+    [revealVaultEntry],
+  );
+
+  // Rename/delete deliberately re-throw rather than routing through
+  // `setLastError`: the row that triggered the action shows the failure
+  // beside the form the operator is still looking at, which is far more
+  // useful than a banner at the bottom of the pane.
+  const handleUpdateVaultEntry = useCallback(
+    (entryId: string, update: MeetingUpdate) => updateVaultEntry(entryId, update),
+    [updateVaultEntry],
+  );
+
+  const handleDeleteVaultEntry = useCallback(
+    (entryId: string) => deleteVaultEntry(entryId),
+    [deleteVaultEntry],
+  );
 
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
@@ -301,7 +318,14 @@ function App() {
                   <JobsPanel jobs={jobs} onReveal={handleReveal} />
                 </>
               )}
-              <VaultPanel entries={vaultEntries} onReveal={handleRevealVaultEntry} />
+              <VaultPanel
+                entries={vaultEntries}
+                onReveal={handleRevealVaultEntry}
+                onReadTranscript={readTranscript}
+                onUpdate={handleUpdateVaultEntry}
+                onDelete={handleDeleteVaultEntry}
+                onLoadServiceLog={loadServiceLog}
+              />
             </>
           ))}
 

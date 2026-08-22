@@ -312,7 +312,10 @@ describe("App vault browser", () => {
 
     render(<App />);
     await waitFor(() => expect(listVaultCallCount).toBeGreaterThanOrEqual(1));
-    expect(screen.queryByRole("region", { name: /vault/i })).not.toBeInTheDocument();
+    // The Vault panel itself always mounts (its Service log tab has to stay
+    // reachable with an empty vault) -- what the first listing lacks is the
+    // meeting.
+    expect(screen.queryByText("260812 - Security issue")).not.toBeInTheDocument();
 
     await emit(
       "jobs://updated",
@@ -324,7 +327,7 @@ describe("App vault browser", () => {
       }),
     );
 
-    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("260812 - Security issue")).toBeInTheDocument());
     await settle();
   });
 
