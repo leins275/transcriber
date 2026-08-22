@@ -238,6 +238,123 @@ describe("App reveal", () => {
   });
 });
 
+describe("App vault browser", () => {
+  function buildVaultEntry(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: "v-1",
+      project: "ELS",
+      meeting_name: "260812 - Security issue",
+      meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+      has_source: true,
+      has_transcript: true,
+      ...overrides,
+    };
+  }
+
+  it("loads the vault listing once settings resolve with an existing meetings root", async () => {
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry()];
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
+    expect(screen.getByText("260812 - Security issue")).toBeInTheDocument();
+    await settle();
+  });
+
+  it("does not fetch the vault listing before a meetings root is configured (first-run)", async () => {
+    const listVaultCalls: unknown[] = [];
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings")
+          return buildSettings({ meetings_root: null, meetings_root_exists: false });
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") {
+          listVaultCalls.push(cmd);
+          return [];
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument(),
+    );
+    await flush();
+    expect(listVaultCalls).toHaveLength(0);
+    await settle();
+  });
+
+  it("refetches the vault listing after a job reaches a terminal filed state", async () => {
+    let listVaultCallCount = 0;
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") {
+          listVaultCallCount += 1;
+          return listVaultCallCount === 1 ? [] : [buildVaultEntry()];
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    render(<App />);
+    await waitFor(() => expect(listVaultCallCount).toBeGreaterThanOrEqual(1));
+    expect(screen.queryByRole("region", { name: /vault/i })).not.toBeInTheDocument();
+
+    await emit(
+      "jobs://updated",
+      buildJob({
+        id: "job-done",
+        state: "done",
+        meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+        transcript_path: "D:\\Meetings\\ELS\\260812 - Security issue\\transcript.json",
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
+    await settle();
+  });
+
+  it("invokes reveal_vault_entry with the entry id when a vault row's Reveal is clicked", async () => {
+    const revealCalls: unknown[] = [];
+    mockIPC(
+      (cmd, payload) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry({ id: "v-9" })];
+        if (cmd === "reveal_vault_entry") {
+          revealCalls.push(payload);
+          return null;
+        }
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("region", { name: /vault/i })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /reveal/i }));
+
+    expect(revealCalls).toEqual([{ entryId: "v-9" }]);
+    await settle();
+  });
+});
+
 describe("App settings", () => {
   it("persists the meetings-root via set_meetings_root and re-renders the new root", async () => {
     const newRoot = "E:\\NewRoot";

@@ -1,0 +1,51 @@
+.row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 4px 12px;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--divider);
+  align-items: start;
+}
+
+.icon {
+  margin-top: 3px;
+  display: inline-flex;
+}
+
+.ring {
+  margin-top: 2px;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.name {
+  font-size: var(--text-lg);
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.path {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}

@@ -197,6 +197,8 @@ pub fn run() {
             commands::list_jobs,
             commands::service_status,
             commands::reveal_job,
+            commands::list_vault,
+            commands::reveal_vault_entry,
             commands::model::model_download_status,
             commands::model::start_model_download,
             commands::model::cancel_model_download,

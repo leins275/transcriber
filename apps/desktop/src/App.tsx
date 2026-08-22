@@ -12,6 +12,7 @@ import { JobsPanel } from "./components/JobsPanel";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
 import { Sidebar } from "./components/Sidebar";
+import { VaultPanel } from "./components/VaultPanel";
 import {
   api,
   chooseFile,
@@ -22,7 +23,7 @@ import {
 } from "./api";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { useJobs } from "./state/useJobs";
-import type { AppError, ServiceStatusView, SettingsView } from "./types";
+import type { AppError, ServiceStatusView, SettingsView, VaultMeetingView } from "./types";
 
 const INITIAL_SERVICE_STATUS: ServiceStatusView = {
   state: "starting",
@@ -40,6 +41,9 @@ function App() {
   // failure (service not yet ready) never flashes a false "model missing".
   const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
   const [modelSkipped, setModelSkipped] = useState(false);
+  // Vault browser: a persistent list of already-ingested meetings (the
+  // "after reopen I don't see already uploaded recordings" problem).
+  const [vaultEntries, setVaultEntries] = useState<VaultMeetingView[]>([]);
   const { jobs, enqueue } = useJobs();
 
   useEffect(() => {
@@ -92,6 +96,45 @@ function App() {
     cancel: () => api.cancelModelDownload(),
     status: () => api.modelDownloadStatus(),
   }).current;
+
+  // Vault browser: fetches the current listing. A failure (e.g. the root
+  // briefly not configured) leaves whatever was already shown in place
+  // rather than clearing it.
+  const refreshVault = useCallback(() => {
+    api
+      .listVault()
+      .then((entries) => setVaultEntries(entries ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Loads on startup once settings resolve to a meetings root that is both
+  // set and exists (spec: "Loads on startup once settings resolve") --
+  // first-run (no root yet) never calls list_vault at all.
+  useEffect(() => {
+    if (!settings?.meetings_root || !settings.meetings_root_exists) return;
+    refreshVault();
+  }, [settings?.meetings_root, settings?.meetings_root_exists, refreshVault]);
+
+  // Refreshes after each job reaches a terminal *filed* state (done, or
+  // failed-but-already-ingested per FR-13) -- simplest re-fetch trigger per
+  // the vault-browser spec, rather than a dedicated Rust-side event. Tracks
+  // which job ids have already triggered a refresh so a job's other
+  // (non-terminal) transitions, or a later render with the same jobs array,
+  // never cause a redundant re-fetch.
+  const refreshedForJobRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const alreadyRefreshed = refreshedForJobRef.current;
+    let shouldRefresh = false;
+    for (const job of jobs) {
+      if ((job.state === "done" || job.state === "failed") && !alreadyRefreshed.has(job.id)) {
+        alreadyRefreshed.add(job.id);
+        shouldRefresh = true;
+      }
+    }
+    if (shouldRefresh) {
+      refreshVault();
+    }
+  }, [jobs, refreshVault]);
 
   const submitPaths = useCallback(
     async (paths: string[]) => {
@@ -178,6 +221,10 @@ function App() {
     api.revealJob(jobId).catch((error: AppError) => setLastError(error));
   }, []);
 
+  const handleRevealVaultEntry = useCallback((entryId: string) => {
+    api.revealVaultEntry(entryId).catch((error: AppError) => setLastError(error));
+  }, []);
+
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
   // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
@@ -254,6 +301,7 @@ function App() {
                   <JobsPanel jobs={jobs} onReveal={handleReveal} />
                 </>
               )}
+              <VaultPanel entries={vaultEntries} onReveal={handleRevealVaultEntry} />
             </>
           ))}
 

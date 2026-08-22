@@ -12,7 +12,13 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AppError, JobSnapshot, ServiceStatusView, SettingsView } from "./types";
+import type {
+  AppError,
+  JobSnapshot,
+  ServiceStatusView,
+  SettingsView,
+  VaultMeetingView,
+} from "./types";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 
 /** Narrows an unknown IPC rejection into the frozen `AppError` shape (NFR-6). */
@@ -47,6 +53,12 @@ export const api = {
   listJobs: (): Promise<JobSnapshot[]> => call<JobSnapshot[]>("list_jobs"),
   serviceStatus: (): Promise<ServiceStatusView> => call<ServiceStatusView>("service_status"),
   revealJob: (jobId: string): Promise<void> => call<void>("reveal_job", { jobId }),
+  // Vault-browser trio (additive) -- lists already-ingested meetings on
+  // startup/after ingest, and reveals one by its server-issued id (never a
+  // raw path).
+  listVault: (): Promise<VaultMeetingView[]> => call<VaultMeetingView[]>("list_vault"),
+  revealVaultEntry: (entryId: string): Promise<void> =>
+    call<void>("reveal_vault_entry", { entryId }),
   // Model-download trio (T13, FR-12, FR-17) -- thin proxies over the Rust
   // commands, which themselves proxy the T11 HTTP endpoints. None takes a
   // path argument: the destination is resolved on the Rust side only.

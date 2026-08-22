@@ -102,9 +102,17 @@ pub mod layout;
 /// Ingest orchestration, rollback, and the public API surface.
 pub mod ingest;
 
+/// Read-only vault listing — a scope extension over this crate's original
+/// spec (`specs/meeting-vault-layout/spec.md`'s "Out of scope" section
+/// explicitly excluded browsing/listing from the MVP); the operator has
+/// since extended the scope for the vault-browser feature. See the module
+/// docs for exactly what "read-only" and "two levels" mean here.
+pub mod list;
+
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
+pub use list::{list_meetings, MeetingEntry};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME};

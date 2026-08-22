@@ -1,0 +1,28 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--divider);
+  padding-bottom: var(--space-2);
+}
+
+.title {
+  font-size: var(--text-h2);
+}
+
+.count {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+
+.list {
+  overflow: auto;
+}

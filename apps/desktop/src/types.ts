@@ -61,3 +61,15 @@ export type AppError = {
   kind: ErrorKind;
   message: string;
 };
+
+// Vault-browser extension to the IPC contract (additive: a new command and
+// view type, mirroring the Rust `VaultMeetingView`/`list_vault`/
+// `reveal_vault_entry` — never a change to an existing field/command).
+export type VaultMeetingView = {
+  id: string;
+  project: string | null;
+  meeting_name: string;
+  meeting_dir: string;
+  has_source: boolean;
+  has_transcript: boolean;
+};
