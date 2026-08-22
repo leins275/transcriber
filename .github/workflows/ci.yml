@@ -1,0 +1,126 @@
+# Quality gate — the same four `make` targets a developer runs locally
+# (format / lint / type / test), across all three payloads.
+#
+# Runs on `windows-latest` and nowhere else, on purpose. This is not caution:
+# the Rust side imports `std::os::windows::process::CommandExt` and shells out
+# to `explorer.exe`, so it does not compile on Linux at all. Splitting the
+# TypeScript and Python halves onto a cheaper runner would buy a few minutes
+# and cost the ability to say "CI is green" about the thing that actually
+# ships.
+#
+# `make` is not installed on GitHub's Windows runners. The Makefile documents
+# a direct one-command-per-line equivalent for exactly this reason (see its
+# header); the steps below are that equivalent, kept in the same order.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a PR makes the previous run's answer irrelevant; a Windows
+# runner is expensive enough that finishing it anyway is pure waste.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # `npm ci` (never `npm install`): FR-4 has release builds install from
+      # the committed lock in frozen mode, and CI must hold to the same rule
+      # or it is testing a different dependency tree than the one that ships.
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/desktop
+
+      - name: Install service dependencies
+        run: uv sync --frozen --directory services/transcription
+
+      # -- format ------------------------------------------------------------
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: prettier
+        run: npm --prefix apps/desktop run format:check
+
+      - name: ruff format
+        run: uv run --directory services/transcription ruff format --check .
+
+      # -- lint --------------------------------------------------------------
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: eslint
+        run: npm --prefix apps/desktop run lint
+
+      - name: ruff check
+        run: uv run --directory services/transcription ruff check .
+
+      - name: version manifests in sync
+        run: uv run scripts/sync_version.py --check
+
+      - name: dependency locks committed
+        run: uv run scripts/verify_locks.py --check
+
+      # -- type --------------------------------------------------------------
+      - name: cargo check
+        run: cargo check --workspace
+
+      - name: tsc
+        run: npm --prefix apps/desktop run type
+
+      - name: mypy
+        run: uv run --directory services/transcription mypy src
+
+      # -- test --------------------------------------------------------------
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: vitest
+        run: npm --prefix apps/desktop run test
+
+      - name: pytest (service)
+        run: uv run --directory services/transcription pytest -q
+
+      - name: pytest (scripts)
+        run: uv run --with pytest -- pytest scripts/tests -q
+
+      # The suites above write into the tree (baked pyenv fixtures, __pycache__).
+      # NFR-6 requires them to clean up after themselves; a dirty tree here means
+      # a release build would commit something nobody wrote.
+      - name: working tree is clean after the suites
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the test suites left the working tree dirty:"
+            git status --porcelain
+            exit 1
+          fi

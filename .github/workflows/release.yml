@@ -1,0 +1,135 @@
+# Cuts the release once the release PR lands on `main`.
+#
+# The trigger is deliberately *state*, not a commit message: on every push to
+# main this reads `version.txt` and asks whether a `v<version>` tag already
+# exists. If it does not, that version has never been released, and this
+# workflow tags it, builds the installer and publishes the GitHub Release.
+#
+# Reading state rather than parsing `chore(release):` out of a subject line
+# means a hand-edited version.txt, a squashed merge, a rebase, or a re-run
+# all behave identically — and re-running this workflow on an
+# already-released commit is a no-op instead of a duplicate release.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Cheap gate on a Linux runner, so an ordinary merge to main never spins up
+  # the Windows builder just to discover there is nothing to do.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - id: decide
+        shell: bash
+        run: |
+          version=$(tr -d '[:space:]' < version.txt)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already tagged — nothing to release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$version has no tag yet — releasing"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    runs-on: windows-latest
+    # The installer build bakes a relocatable CPython, installs the frozen
+    # dependency tree, builds Rust in release mode and runs NSIS. On a cold
+    # runner that is a long job; the default 6h cap is far too loose to catch
+    # a hang, and 30 minutes would be too tight for a cache miss.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/desktop
+
+      # Runs the same pipeline as `make installer`: version check, lock check,
+      # pyenv bake, `tauri build --locked`, collect, and the 1.5 GB size gate.
+      # Nothing about this build is release-specific — it is exactly what a
+      # developer runs locally, which is what makes it worth trusting.
+      - name: Build installer
+        run: uv run scripts/build_installer.py
+
+      - name: Extract this version's changelog section
+        id: notes
+        shell: bash
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          # The section runs from this version's heading to the next `## `.
+          awk -v v="$version" '
+            $0 ~ "^## " v " " { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "See CHANGELOG.md for the changes in this release." > release-notes.md
+          fi
+
+      # Tag only after the build has succeeded. A tag on a commit whose
+      # installer never built is worse than no tag: it makes a version look
+      # released when nothing exists to install.
+      - name: Tag the release
+        shell: bash
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$version" -m "Transcriber $version"
+          git push origin "v$version"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          gh release create "v$version" \
+            --title "Transcriber $version" \
+            --notes-file release-notes.md \
+            "dist/Transcriber_${version}_x64-setup.exe" \
+            "dist/Transcriber_${version}_x64-setup.exe.sha256" \
+            "dist/build-manifest.json"
