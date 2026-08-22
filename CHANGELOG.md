@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.2.1 — 2026-08-22
+
+### Bug fixes
+
+- **ci**: Read the Tauri v2 updater artifact (signed installer, not .nsis.zip)
+
 ## 0.2.0 — 2026-08-22
 
 ### Bug fixes
