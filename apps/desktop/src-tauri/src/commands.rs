@@ -40,6 +40,14 @@ use crate::sidecar::{self, ReadyLine, Sidecar, SidecarError, SidecarPlan, Sideca
 /// in `lib.rs`, so it shares `AppState`/`ServiceStatusSink` directly.
 pub mod model;
 
+/// Read-only access to F2's own sqlite job ledger (`src/commands/ledger.rs`)
+/// -- a submodule for the same reason `model` is.
+pub mod ledger;
+
+/// Per-meeting commands over an already-ingested vault entry: read its
+/// transcript, rename/re-file it, delete it (`src/commands/meetings.rs`).
+pub mod meetings;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever
@@ -911,6 +919,41 @@ pub async fn reveal_vault_entry(
     entry_id: String,
 ) -> Result<(), AppError> {
     reveal_vault_entry_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn read_transcript(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<meetings::TranscriptView, AppError> {
+    meetings::read_transcript_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn update_vault_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    project: Option<String>,
+    date: String,
+    title: String,
+) -> Result<VaultMeetingView, AppError> {
+    meetings::update_vault_entry_handler(&state, &entry_id, project, &date, &title).await
+}
+
+#[tauri::command]
+pub async fn delete_vault_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), AppError> {
+    meetings::delete_vault_entry_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn list_service_jobs(
+    state: tauri::State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<ledger::LedgerJobView>, AppError> {
+    ledger::list_service_jobs_handler(&state, limit).await
 }
 
 #[cfg(test)]
@@ -2288,6 +2331,245 @@ mod tests {
                 revealer.calls.lock().expect("calls mutex poisoned").len(),
                 1
             );
+        });
+    }
+
+    // -- meetings: read_transcript / update_vault_entry / delete_vault_entry
+    //
+    // Each drives the handler through `list_vault_handler` first, because an
+    // id is only ever issued by a listing -- that is the contract these
+    // commands are built on.
+
+    const TRANSCRIPT_FIXTURE: &str = r#"{"language":"ru","text":"Да, ребят","segments":[{"id":0,"start":0.0,"end":2.5,"text":" Да, ребят"}],"provider":{"model":"large-v3","device":"cuda"},"source":{"duration_sec":3625.8}}"#;
+
+    fn seed_meeting(root: &std::path::Path, parent: &str, name: &str, transcript: Option<&str>) {
+        let dir = root.join(parent).join(name);
+        fs::create_dir_all(&dir).expect("create fixture dir");
+        fs::write(dir.join("source.mp4"), b"rec").expect("write fixture source");
+        if let Some(body) = transcript {
+            fs::write(dir.join("transcript.json"), body).expect("write fixture transcript");
+        }
+    }
+
+    #[test]
+    fn read_transcript_returns_the_meetings_transcript_by_id() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+            seed_meeting(
+                root.path(),
+                "unsorted",
+                "260822 - source",
+                Some(TRANSCRIPT_FIXTURE),
+            );
+
+            let views = list_vault_handler(&state).await.expect("list_vault");
+            let view = meetings::read_transcript_handler(&state, &views[0].id)
+                .await
+                .expect("a listed meeting with a transcript must be readable");
+
+            assert_eq!(view.entry_id, views[0].id);
+            assert_eq!(view.meeting_name, "260822 - source");
+            assert_eq!(view.language.as_deref(), Some("ru"));
+            assert_eq!(view.text, "Да, ребят");
+            assert_eq!(view.segments.len(), 1);
+        });
+    }
+
+    #[test]
+    fn read_transcript_on_a_meeting_without_one_is_an_actionable_invalid_argument() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+            seed_meeting(root.path(), "ELS", "260101 - No transcript", None);
+
+            let views = list_vault_handler(&state).await.expect("list_vault");
+            let err = meetings::read_transcript_handler(&state, &views[0].id)
+                .await
+                .expect_err("a meeting with no transcript must be refused");
+
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+            assert!(
+                err.message().contains("260101 - No transcript"),
+                "message was {:?}",
+                err.message()
+            );
+        });
+    }
+
+    #[test]
+    fn read_transcript_with_an_unknown_id_returns_invalid_argument() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+
+            let err = meetings::read_transcript_handler(&state, "does-not-exist")
+                .await
+                .expect_err("unknown id must be rejected");
+
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        });
+    }
+
+    #[test]
+    fn update_vault_entry_files_an_unsorted_meeting_and_keeps_its_id() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+            seed_meeting(
+                root.path(),
+                "unsorted",
+                "260822 - source",
+                Some(TRANSCRIPT_FIXTURE),
+            );
+
+            let views = list_vault_handler(&state).await.expect("list_vault");
+            let id = views[0].id.clone();
+
+            let updated = meetings::update_vault_entry_handler(
+                &state,
+                &id,
+                // Lowercase on purpose: the vault capitalizes the code.
+                Some("els".to_string()),
+                "260814",
+                "Weekly sync",
+            )
+            .await
+            .expect("re-filing a listed meeting must succeed");
+
+            assert_eq!(updated.id, id, "the entry keeps its id across a rename");
+            assert_eq!(updated.project.as_deref(), Some("ELS"));
+            assert_eq!(updated.meeting_name, "260814 - Weekly sync");
+            assert!(updated.has_source);
+            assert!(updated.has_transcript);
+            assert!(root
+                .path()
+                .join("ELS")
+                .join("260814 - Weekly sync")
+                .join("transcript.json")
+                .is_file());
+            assert!(!root
+                .path()
+                .join("unsorted")
+                .join("260822 - source")
+                .exists());
+
+            // The id still resolves -- to the *new* location.
+            let view = meetings::read_transcript_handler(&state, &id)
+                .await
+                .expect("the renamed meeting is still reachable by the same id");
+            assert_eq!(view.meeting_name, "260814 - Weekly sync");
+        });
+    }
+
+    #[test]
+    fn update_vault_entry_rejects_an_unusable_name_without_moving_anything() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+            seed_meeting(root.path(), "unsorted", "260822 - source", None);
+
+            let views = list_vault_handler(&state).await.expect("list_vault");
+            let err = meetings::update_vault_entry_handler(
+                &state,
+                &views[0].id,
+                Some("ELS".to_string()),
+                "260230",
+                "Weekly sync",
+            )
+            .await
+            .expect_err("a date that is not a calendar date must be refused");
+
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+            assert!(root
+                .path()
+                .join("unsorted")
+                .join("260822 - source")
+                .join("source.mp4")
+                .is_file());
+        });
+    }
+
+    #[test]
+    fn delete_vault_entry_removes_the_meeting_and_retires_its_id() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+            seed_meeting(root.path(), "ELS", "260101 - A meeting", None);
+
+            let views = list_vault_handler(&state).await.expect("list_vault");
+            let id = views[0].id.clone();
+
+            meetings::delete_vault_entry_handler(&state, &id)
+                .await
+                .expect("a listed meeting must be deletable by its id");
+
+            assert!(!root.path().join("ELS").join("260101 - A meeting").exists());
+
+            let err = meetings::read_transcript_handler(&state, &id)
+                .await
+                .expect_err("a deleted entry's id must fail closed");
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        });
+    }
+
+    #[test]
+    fn delete_vault_entry_with_an_unknown_id_returns_invalid_argument() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+
+            let err = meetings::delete_vault_entry_handler(&state, "does-not-exist")
+                .await
+                .expect_err("unknown id must be rejected");
+
+            assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        });
+    }
+
+    #[test]
+    fn list_service_jobs_reports_service_unavailable_when_the_ledger_cannot_be_reached() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(UnavailableTranscriptionService::new("service starting")),
+            );
+
+            let err = ledger::list_service_jobs_handler(&state, None)
+                .await
+                .expect_err("an unreachable service must not look like an empty ledger");
+
+            assert_eq!(err.kind(), crate::error::ErrorKind::ServiceUnavailable);
         });
     }
 }

@@ -50,6 +50,55 @@ pub trait TranscriptionService: Send + Sync {
             detail: "model download is not supported by this service".to_string(),
         })
     }
+
+    /// `GET /v1/jobs` -- F2's own sqlite job ledger, newest first.
+    ///
+    /// Distinct from `status()`, which asks about one *live* job this app
+    /// submitted: the ledger is F2's durable record and outlives both the
+    /// job and this app's session, which is what makes it the right source
+    /// for a "what has this service actually done" panel. Default:
+    /// unsupported, for the same reason the model-download trio above is
+    /// (`jobs.rs`'s pipeline fakes must not need an edit to keep
+    /// compiling).
+    async fn list_ledger_jobs(&self, _limit: u32) -> Result<Vec<LedgerJob>, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the job ledger is not supported by this service".to_string(),
+        })
+    }
+}
+
+/// One row of F2's sqlite job ledger (`services/transcription/.../ledger.py`
+/// -- the `jobs` table), reduced to the columns worth showing.
+///
+/// Every field but `job_id`/`status` is optional because the row is written
+/// in stages: it is inserted at submission time with only the columns known
+/// then, and filled in as the job starts and finishes. A row for a job that
+/// is still queued genuinely has no `elapsed_sec`, and that is information,
+/// not a decode failure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerJob {
+    pub job_id: String,
+    /// F2's own five-state wire vocabulary (`queued`, `running`,
+    /// `succeeded`, `failed`, `cancelled`), passed through verbatim rather
+    /// than collapsed onto [`JobState`]'s four: a ledger reader wants to
+    /// see that a job was cancelled rather than that it "failed".
+    pub status: String,
+    pub created_at: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub device: Option<String>,
+    pub source_path: Option<String>,
+    pub output_path: Option<String>,
+    pub audio_duration_sec: Option<f64>,
+    pub elapsed_sec: Option<f64>,
+    pub realtime_factor: Option<f64>,
+    pub language: Option<String>,
+    pub segment_count: Option<i64>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub service_version: Option<String>,
 }
 
 /// `POST /v1/jobs` request body (F2's `JobCreate`, minus the fields this
