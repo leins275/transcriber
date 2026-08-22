@@ -99,17 +99,22 @@ describe("RecordingPage", () => {
     expect(screen.getByText(/no transcript yet/i)).toBeInTheDocument();
   });
 
-  it("offers Transcribe only for a filed recording with no transcript", async () => {
+  it("offers Transcribe for a recording with no transcript and Re-transcribe for one with", async () => {
     const onTranscribe = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     const { unmount } = renderPage();
-    expect(screen.queryByRole("button", { name: /transcribe/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-transcribe/i })).toBeInTheDocument();
     unmount();
 
     renderPage({ entry: buildEntry({ id: "v-9", has_transcript: false }), onTranscribe });
-    await user.click(screen.getByRole("button", { name: /transcribe/i }));
+    await user.click(screen.getByRole("button", { name: "Transcribe" }));
 
     expect(onTranscribe).toHaveBeenCalledWith("v-9");
+  });
+
+  it("offers no transcription for a meeting whose recording is gone", () => {
+    renderPage({ entry: buildEntry({ has_source: false }) });
+    expect(screen.queryByRole("button", { name: /transcribe/i })).not.toBeInTheDocument();
   });
 
   it("switches to the summary tab and reports there is none", async () => {

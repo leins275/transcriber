@@ -18,6 +18,17 @@ describe("parseMeetingName", () => {
     expect(parseMeetingName("26081 - Too short")).toBeNull();
     expect(parseMeetingName("260812 -")).toBeNull();
   });
+
+  it("treats whitespace around the separator as optional", () => {
+    expect(parseMeetingName("260812-Security issue")).toEqual({
+      date: "260812",
+      title: "Security issue",
+    });
+    expect(parseMeetingName("260812 -Security issue")).toEqual({
+      date: "260812",
+      title: "Security issue",
+    });
+  });
 });
 
 describe("meetingEditDefaults", () => {

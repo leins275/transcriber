@@ -219,7 +219,8 @@ impl std::error::Error for VaultError {}
 /// code path could ever construct would only be dead surface for F3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rejection {
-    /// The filename has fewer than two `" - "` separators (FR-3).
+    /// The filename has fewer than two `-` separators (FR-3). Whitespace
+    /// around a separator is optional.
     MissingSeparator,
     /// The project code component is empty.
     EmptyProjectCode,
@@ -269,7 +270,7 @@ impl std::fmt::Display for Rejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Rejection::MissingSeparator => {
-                write!(f, "filename is missing the required \" - \" separators")
+                write!(f, "filename is missing the required \"-\" separators")
             }
             Rejection::EmptyProjectCode => write!(f, "project code is empty"),
             Rejection::InvalidProjectCode => {

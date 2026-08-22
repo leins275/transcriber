@@ -24,11 +24,15 @@ from pathlib import Path
 from typing import Any
 
 import ctranslate2  # type: ignore[import-untyped]
-from faster_whisper import WhisperModel  # type: ignore[import-untyped]
+from faster_whisper import (  # type: ignore[import-untyped]
+    BatchedInferencePipeline,
+    WhisperModel,
+)
 
 from transcription.errors import ErrorKind, ServiceError
 from transcription.filters import apply_filters
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptResult
+from transcription.segmentation import resegment
 
 
 def _cuda_device_count() -> int:
@@ -130,14 +134,18 @@ class LocalWhisperProvider:
     def __init__(self, config: Any) -> None:
         self.config = config
         self._model: Any = None
+        self._pipeline: Any = None
         self._model_state: str = "unloaded"
         self._device, self._compute_type, self._device_is_auto = _resolve_device_and_compute_type(
             config
         )
         self._model_id: str = getattr(config, "model", "base") or "base"
         self._model_path: str | None = getattr(config, "model_path", "") or None
-        self._word_timestamps: bool = bool(getattr(config, "word_timestamps", False))
+        self._word_timestamps: bool = bool(getattr(config, "word_timestamps", True))
         self._filter_hallucinations: bool = bool(getattr(config, "filter_hallucinations", True))
+        self._batch_size: int = int(getattr(config, "batch_size", 8) or 0)
+        self._vad_min_silence_ms: int = int(getattr(config, "vad_min_silence_ms", 500))
+        self._resegment_gap_sec: float = float(getattr(config, "resegment_gap_sec", 0.6))
 
     def describe(self) -> ProviderInfo:
         return ProviderInfo(
@@ -226,6 +234,13 @@ class LocalWhisperProvider:
                 ) from exc
 
         self._model = model
+        # Batched decoding cuts audio into VAD-derived chunks and decodes
+        # them in parallel -- a large throughput win on CUDA, and the chunks
+        # are naturally utterance-shaped. CPU (including the E4 fallback,
+        # which rewrote `self._device` above) keeps the sequential path:
+        # batching multiplies peak memory, and CPU is best-effort territory.
+        if self._device == "cuda" and self._batch_size > 1:
+            self._pipeline = BatchedInferencePipeline(model=model)
         self._model_state = "loaded"
         return model
 
@@ -240,14 +255,30 @@ class LocalWhisperProvider:
         cancel.raise_if_cancelled()
         model = self._ensure_model()
 
+        # `condition_on_previous_text=False`: each ~30 s window is decoded
+        # without being biased by the previous one -- the bias is what
+        # produces run-on segments and repetition-loop hallucinations on
+        # conversational audio. The tightened VAD makes real pauses actually
+        # terminate segments instead of being bridged.
+        decode_kwargs: dict[str, Any] = {
+            "language": language,
+            "beam_size": 5,
+            "vad_filter": True,
+            "vad_parameters": {
+                "min_silence_duration_ms": self._vad_min_silence_ms,
+                "speech_pad_ms": 400,
+            },
+            "condition_on_previous_text": False,
+            "word_timestamps": self._word_timestamps,
+        }
+
         try:
-            segments_iter, info = model.transcribe(
-                str(audio_path),
-                language=language,
-                beam_size=5,
-                vad_filter=True,
-                word_timestamps=self._word_timestamps,
-            )
+            if self._pipeline is not None:
+                segments_iter, info = self._pipeline.transcribe(
+                    str(audio_path), batch_size=self._batch_size, **decode_kwargs
+                )
+            else:
+                segments_iter, info = model.transcribe(str(audio_path), **decode_kwargs)
         except Exception as exc:
             kind = _classify_transcribe_failure(exc)
             if kind is ErrorKind.MODEL_LOAD:
@@ -289,7 +320,12 @@ class LocalWhisperProvider:
             on_progress(fraction)
 
         kept, n_filtered = apply_filters(raw_segments, enabled=self._filter_hallucinations)
-        segments_out: list[dict[str, Any]] = [dict(segment) for segment in kept]
+        # Filter first (confidence stats belong to the segment they were
+        # measured on), then split the survivors into utterance-sized pieces.
+        if self._word_timestamps:
+            segments_out: list[dict[str, Any]] = resegment(kept, gap_sec=self._resegment_gap_sec)
+        else:
+            segments_out = [dict(segment) for segment in kept]
         text = "".join(str(segment["text"]) for segment in segments_out)
 
         language_out = getattr(info, "language", None) or language

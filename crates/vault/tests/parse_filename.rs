@@ -66,7 +66,44 @@ fn title_may_itself_contain_the_separator() {
 #[test]
 fn missing_separators_are_unsorted() {
     assert_unsorted("recording_final(1).mp4", Rejection::MissingSeparator);
-    assert_unsorted("ELS-260812-Security.mp4", Rejection::MissingSeparator);
+}
+
+#[test]
+fn whitespace_around_separators_is_optional() {
+    // The spaces around `-` are decoration, not structure: the compact
+    // form and every mixed form parse identically to the canonical one.
+    assert_sorted(
+        "ELS-260812-Security issue.mp4",
+        "ELS",
+        "260812",
+        "Security issue",
+        "mp4",
+    );
+    assert_sorted(
+        "ELS -260812- Security issue.mp4",
+        "ELS",
+        "260812",
+        "Security issue",
+        "mp4",
+    );
+    assert_sorted(
+        "ELS  -  260812  -  Security issue.mp4",
+        "ELS",
+        "260812",
+        "Security issue",
+        "mp4",
+    );
+}
+
+#[test]
+fn compact_separators_still_leave_later_hyphens_to_the_title() {
+    assert_sorted(
+        "ELS-260812-follow-up call.mp4",
+        "ELS",
+        "260812",
+        "follow-up call",
+        "mp4",
+    );
 }
 
 #[test]

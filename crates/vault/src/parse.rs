@@ -1,9 +1,10 @@
 //! Filename parser — the pure classification entry point (FR-2, FR-3).
 //!
 //! Owned by T8. `classify_filename` runs the extension gate, then splits
-//! the stem on the first two `" - "` separators and validates project
-//! code, date and title in order, mapping the first failure into an
-//! unsorted classification. Zero filesystem access in this module.
+//! the stem on the first two `-` separators (whitespace around them
+//! optional) and validates project code, date and title in order, mapping
+//! the first failure into an unsorted classification. Zero filesystem
+//! access in this module.
 
 use crate::error::{Rejection, VaultError};
 use crate::{code, date, media, title};
@@ -64,12 +65,19 @@ pub fn classify_filename(file_name: &str) -> Result<Classified, VaultError> {
     let ext = media_ext.as_str().to_string();
     let stem = media::stem(file_name).to_string();
 
-    // Split on the first two occurrences of " - " only, so a title may
-    // itself contain the separator (FR-3).
-    let mut parts = stem.splitn(3, " - ");
-    let code_part = parts.next().unwrap_or("");
-    let date_part = parts.next();
-    let title_part = parts.next();
+    // Split on the first two occurrences of `-` only, so a title may
+    // itself contain the separator (FR-3). Whitespace around the separator
+    // is optional -- `ELS - 260812 - Title` and `ELS-260812-Title` both
+    // parse -- so each part is trimmed of surrounding spaces. Only spaces:
+    // a control character hiding next to the separator (a tab, say) must
+    // still reach the validators and be rejected, never silently trimmed
+    // away (the same rule `title::validate` applies to trailing
+    // whitespace). Project codes and dates can never contain `-`, so in a
+    // well-formed name the first two hyphens are always the separators.
+    let mut parts = stem.splitn(3, '-');
+    let code_part = parts.next().unwrap_or("").trim_matches(' ');
+    let date_part = parts.next().map(|part| part.trim_matches(' '));
+    let title_part = parts.next().map(|part| part.trim_matches(' '));
 
     let (date_part, title_part) = match (date_part, title_part) {
         (Some(d), Some(t)) => (d, t),
