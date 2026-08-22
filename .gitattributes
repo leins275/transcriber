@@ -1,15 +1,43 @@
-# E15: git's own checkout-time newline translation (`core.autocrlf=true` on
-# this Windows checkout) is what re-introduces CRLF into the JSON manifests
-# Prettier wants as LF (`apps/desktop/package.json`,
-# `apps/desktop/src-tauri/tauri.conf.json`) every time the tree is cloned or
-# reset, even after `scripts/sync_version.py` and `make format` both agree
-# on LF. `text=auto` lets git normalize line endings for anything it
-# detects as text; the explicit `eol=lf` rules below pin the file types
-# `apps/desktop`'s Prettier config actually reformats to LF specifically, so
-# that normalization never flips them back to CRLF on this platform.
-* text=auto
+# Line endings — one convention in the repository, on every machine.
+#
+# E15 (original): git's own checkout-time newline translation
+# (`core.autocrlf=true` on this Windows checkout) is what re-introduces CRLF
+# into the JSON manifests Prettier wants as LF
+# (`apps/desktop/package.json`, `apps/desktop/src-tauri/tauri.conf.json`)
+# every time the tree is cloned or reset, even after
+# `scripts/sync_version.py` and `make format` both agree on LF. `text=auto`
+# lets git normalize line endings for anything it detects as text; the
+# explicit `eol=lf` rules below pin the file types Prettier actually
+# reformats, so that normalization never flips them back to CRLF.
+#
+# Widened when CI was added: the original rules named `.json`, `.ts`, `.tsx`
+# and `.md` under `apps/desktop/`, which left `.css`, `.js` and `.html` out.
+# Those are exactly the files `prettier --check` rejected on the first CI
+# run — the same command passed locally, because the local working tree
+# happened to hold LF for them while the committed blobs held CRLF. Naming
+# the file types one at a time will keep producing that failure every time a
+# new extension appears, so the rule is now the whole tree.
+#
+# `eol=lf` rather than `eol=crlf` because every tool here either prefers LF
+# (prettier) or follows the file (rustfmt, ruff), and because a GitHub
+# Actions `run:` block needs LF to work at all. Windows tooling reads LF
+# fine: MSVC, PowerShell, NSIS and the Tauri bundler all handle it.
 
-apps/desktop/**/*.json text eol=lf
-apps/desktop/**/*.ts text eol=lf
-apps/desktop/**/*.tsx text eol=lf
-apps/desktop/**/*.md text eol=lf
+* text=auto eol=lf
+
+# Stated rather than left to detection: a PowerShell or NSIS script whose
+# line endings get mangled fails in ways that are hard to read.
+*.ps1 text eol=lf
+*.nsh text eol=lf
+
+# Binary — never diffed as text, never newline-rewritten. `text=auto`
+# detects most of these on content, but a badly-detected binary cannot
+# recover from a newline rewrite, so it is worth being explicit.
+*.png binary
+*.ico binary
+*.icns binary
+*.woff2 binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.pyd binary
