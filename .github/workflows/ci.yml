@@ -25,9 +25,21 @@
 
 name: CI
 
+# `pull_request` only, deliberately -- not `push: main` as well.
+#
+# GitHub builds `refs/pull/N/merge` for a pull_request event: your branch
+# already merged into main. The PR run therefore tests the exact tree that
+# merging produces, and re-running the same gate on the push to main
+# afterwards builds it a second time to reach the same answer. On a Windows
+# runner that is not a small duplication.
+#
+# What this gives up is a gate on anything reaching main *without* a pull
+# request. That is a real gap, and it is closed by branch protection
+# (require a PR, require these checks, require the branch to be up to date)
+# rather than by paying for every run twice -- see docs/releasing.md.
+#
+# `workflow_dispatch` stays so main can still be checked on demand.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
