@@ -104,7 +104,25 @@ pub trait ServiceUnavailableSink: Send + Sync {
 /// already-registered `Pending` snapshot plus the source path to ingest.
 struct PendingJob {
     snapshot: JobSnapshot,
-    source_path: PathBuf,
+    work: PendingWork,
+}
+
+/// What the worker has to do before it can submit a job.
+///
+/// The two differ only in how the recording gets into the vault, which is
+/// why they share everything downstream of it: a re-transcription is not a
+/// second pipeline, it is the same pipeline joined one step late.
+enum PendingWork {
+    /// A dropped file that is not in the vault yet: ingest it, then submit.
+    Ingest { source_path: PathBuf },
+    /// A recording already filed in the vault: skip ingest entirely and
+    /// submit where it stands. Re-ingesting would try to move a file onto
+    /// itself and, worse, would file a second copy under a suffixed name.
+    Filed {
+        meeting_dir: PathBuf,
+        source_dest: PathBuf,
+        classification: Option<String>,
+    },
 }
 
 /// State shared between the registry handle, the worker task and every
@@ -126,6 +144,14 @@ struct Shared {
     /// before any `.await`, never held across one.
     status_sink: StdMutex<Option<Arc<dyn ServiceUnavailableSink>>>,
     jobs: RwLock<HashMap<String, JobSnapshot>>,
+    /// `this app's job id -> F2's job id`, for jobs currently in flight.
+    ///
+    /// Kept beside `jobs` rather than on `JobSnapshot` on purpose: F2's id
+    /// is an implementation detail of the service seam, and `JobSnapshot`
+    /// is the frozen IPC contract the frontend sees. Cancel needs the
+    /// mapping; the UI does not, and putting it on the wire would invite
+    /// the UI to start naming service jobs directly.
+    service_job_ids: RwLock<HashMap<String, String>>,
     poll_interval: Duration,
 }
 
@@ -205,6 +231,7 @@ impl JobRegistry {
             sink,
             status_sink: StdMutex::new(None),
             jobs: RwLock::new(HashMap::new()),
+            service_job_ids: RwLock::new(HashMap::new()),
             poll_interval,
         });
         let (queue_tx, queue_rx) = mpsc::unbounded_channel();
@@ -266,7 +293,7 @@ impl JobRegistry {
             // already recorded and returned above.
             let _ = self.queue_tx.send(PendingJob {
                 snapshot,
-                source_path,
+                work: PendingWork::Ingest { source_path },
             });
         }
         snapshots
@@ -280,6 +307,61 @@ impl JobRegistry {
     /// The current snapshot of one job, if it exists.
     pub async fn get(&self, id: &str) -> Option<JobSnapshot> {
         self.shared.jobs.read().await.get(id).cloned()
+    }
+
+    /// Registers a transcription for a recording that is **already** in the
+    /// vault, skipping ingest entirely.
+    ///
+    /// This is what "Transcribe" on a filed recording runs. Routing it
+    /// through the same queue as a drop is deliberate: it inherits FR-8's
+    /// one-at-a-time ordering, the same progress events and the same
+    /// service-unavailable handling, instead of growing a second path that
+    /// would have to re-learn all three.
+    pub async fn enqueue_filed(
+        &self,
+        meeting_dir: PathBuf,
+        source_dest: PathBuf,
+        classification: Option<String>,
+    ) -> JobSnapshot {
+        let snapshot = new_pending_snapshot(&source_dest);
+        self.shared.store_and_emit(snapshot.clone()).await;
+        let _ = self.queue_tx.send(PendingJob {
+            snapshot: snapshot.clone(),
+            work: PendingWork::Filed {
+                meeting_dir,
+                source_dest,
+                classification,
+            },
+        });
+        snapshot
+    }
+
+    /// Asks the service to cancel a job this app submitted.
+    ///
+    /// Returns `Ok(false)` when the job has no service-side id — it has not
+    /// been submitted yet, or has already finished. That is not an error:
+    /// the operator clicked Cancel on something that was already past
+    /// cancelling, and the honest answer is "nothing to cancel", not a
+    /// failure dialog.
+    ///
+    /// The state transition is not applied here. F2 owns the job's
+    /// lifecycle, and the poll loop will observe `cancelled` and record it
+    /// like any other terminal state — writing `Failed` locally as well
+    /// would race the poller and could contradict it.
+    pub async fn cancel(&self, job_id: &str) -> Result<bool, ServiceError> {
+        let service_job_id = self
+            .shared
+            .service_job_ids
+            .read()
+            .await
+            .get(job_id)
+            .cloned();
+        let Some(service_job_id) = service_job_id else {
+            return Ok(false);
+        };
+        let service = self.shared.service.read().await.clone();
+        service.cancel(&service_job_id).await?;
+        Ok(true)
     }
 }
 
@@ -295,46 +377,62 @@ async fn worker_loop(shared: Arc<Shared>, mut queue_rx: mpsc::UnboundedReceiver<
 }
 
 async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
-    let PendingJob {
-        mut snapshot,
-        source_path,
-    } = pending;
+    let PendingJob { mut snapshot, work } = pending;
 
-    snapshot.state = JobState::Ingesting;
-    shared.store_and_emit(snapshot.clone()).await;
+    // Where the recording ends up, however it got there.
+    let (meeting_dir, source_dest) = match work {
+        PendingWork::Ingest { source_path } => {
+            snapshot.state = JobState::Ingesting;
+            shared.store_and_emit(snapshot.clone()).await;
 
-    let root = shared.root.read().await.clone();
-    let outcome = match ingest::ingest(&root, &source_path).await {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            // FR-6: a rejected file (bad extension, directory, escapes the
-            // root, ...) does not abort the rest of the batch — this job
-            // simply ends here, terminal, while the worker moves on to the
-            // next queued job.
-            snapshot.state = JobState::Rejected;
-            snapshot.error_kind = Some(app_error_kind_str(err.kind()));
-            snapshot.message = Some(err.message().to_string());
-            shared.store_and_emit(snapshot).await;
-            return;
+            let root = shared.root.read().await.clone();
+            match ingest::ingest(&root, &source_path).await {
+                Ok(outcome) => {
+                    snapshot.classification = Some(classification_str(&outcome.classification));
+                    // FR-9 (E4): F1's collision outcome must be reported, not
+                    // silently dropped -- a re-drop that F1 treated as a no-op
+                    // duplicate, or one that landed in a numerically suffixed
+                    // folder, must not render identically to a fresh ingest.
+                    if let Some(message) = collision_message(&outcome.collision) {
+                        snapshot.message = Some(message);
+                    }
+                    (outcome.meeting_dir, outcome.source_dest)
+                }
+                Err(err) => {
+                    // FR-6: a rejected file (bad extension, directory, escapes
+                    // the root, ...) does not abort the rest of the batch —
+                    // this job simply ends here, terminal, while the worker
+                    // moves on to the next queued job.
+                    snapshot.state = JobState::Rejected;
+                    snapshot.error_kind = Some(app_error_kind_str(err.kind()));
+                    snapshot.message = Some(err.message().to_string());
+                    shared.store_and_emit(snapshot).await;
+                    return;
+                }
+            }
+        }
+        PendingWork::Filed {
+            meeting_dir,
+            source_dest,
+            classification,
+        } => {
+            // Nothing to ingest and nothing to roll back: the recording is
+            // already where it belongs. The job goes straight from Pending
+            // to Queued, never showing an "ingesting" step that is not
+            // happening.
+            snapshot.classification = classification;
+            (meeting_dir, source_dest)
         }
     };
 
-    let transcript_path = outcome.meeting_dir.join(TRANSCRIPT_FILE_NAME);
-    snapshot.classification = Some(classification_str(&outcome.classification));
-    snapshot.meeting_dir = Some(path_string(&outcome.meeting_dir));
-    snapshot.source_dest = Some(path_string(&outcome.source_dest));
+    let transcript_path = meeting_dir.join(TRANSCRIPT_FILE_NAME);
+    snapshot.meeting_dir = Some(path_string(&meeting_dir));
+    snapshot.source_dest = Some(path_string(&source_dest));
     snapshot.transcript_path = Some(path_string(&transcript_path));
-    // FR-9 (E4): F1's collision outcome must be reported, not silently
-    // dropped -- a re-drop that F1 treated as a no-op duplicate, or one
-    // that landed in a numerically suffixed folder, must not render
-    // identically to a fresh ingest.
-    if let Some(message) = collision_message(&outcome.collision) {
-        snapshot.message = Some(message);
-    }
 
     let submit_request = SubmitRequest {
-        audio_path: path_string(&outcome.source_dest),
-        output_dir: path_string(&outcome.meeting_dir),
+        audio_path: path_string(&source_dest),
+        output_dir: path_string(&meeting_dir),
         language: None,
     };
 
@@ -353,6 +451,12 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             return;
         }
     };
+
+    shared
+        .service_job_ids
+        .write()
+        .await
+        .insert(snapshot.id.clone(), service_job_id.clone());
 
     snapshot.state = JobState::Queued;
     snapshot.progress = Some(0.0);

@@ -51,6 +51,20 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `DELETE /v1/jobs/{id}` -- asks F2 to stop a job it is running.
+    ///
+    /// Returns `Ok(())` once F2 has accepted the request, which is not the
+    /// same as the job being over: F2 owns the lifecycle, and the poll loop
+    /// observes the resulting `cancelled` status like any other terminal
+    /// state. Default: unsupported, for the same reason the model-download
+    /// trio is (`jobs.rs`'s pipeline fakes must not need an edit to keep
+    /// compiling).
+    async fn cancel(&self, _job_id: &str) -> Result<(), ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "cancelling a job is not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/jobs` -- F2's own sqlite job ledger, newest first.
     ///
     /// Distinct from `status()`, which asks about one *live* job this app

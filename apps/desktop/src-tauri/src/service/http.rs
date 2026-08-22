@@ -429,6 +429,18 @@ impl TranscriptionService for HttpTranscriptionService {
         parsed.into_status()
     }
 
+    async fn cancel(&self, job_id: &str) -> Result<(), ServiceError> {
+        let request = self.authorize(
+            self.client
+                .delete(self.endpoint(&format!("/v1/jobs/{job_id}"))),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        Ok(())
+    }
+
     async fn list_ledger_jobs(&self, limit: u32) -> Result<Vec<LedgerJob>, ServiceError> {
         let request = self.authorize(
             self.client

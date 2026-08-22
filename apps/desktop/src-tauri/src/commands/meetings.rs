@@ -17,13 +17,16 @@
 //! that row without re-fetching. Deleting drops the id, so a stale id fails
 //! closed rather than resolving to whatever later occupies the path.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::ingest::vault_error_to_app_error;
+use crate::jobs::JobSnapshot;
 use crate::paths;
+use crate::service::ServiceError;
 
 use super::{AppState, VaultMeetingView};
 
@@ -65,6 +68,14 @@ pub struct TranscriptView {
     /// The full transcript text, exactly as F2 wrote it.
     pub text: String,
     pub segments: Vec<TranscriptSegmentView>,
+    /// `segment id -> speaker name`, from the meeting's `speakers.json`.
+    /// Empty for a transcript nobody has labelled — a real state, not an
+    /// error. Sent with the transcript rather than fetched separately: the
+    /// reading view cannot render a segment without knowing who said it,
+    /// so two round trips would only buy a visible relabelling flicker.
+    pub speakers: HashMap<String, String>,
+    /// Where `transcript.json` actually is, for the reading view's footer.
+    pub transcript_path: String,
 }
 
 /// The subset of F2's on-disk `transcript.json` this module reads.
@@ -171,6 +182,10 @@ fn parse_transcript(
             .and_then(|provider| provider.device.clone()),
         text,
         segments,
+        // Filled in by the handler from the meeting folder; parsing stays a
+        // pure function of the transcript body.
+        speakers: HashMap::new(),
+        transcript_path: String::new(),
     })
 }
 
@@ -286,7 +301,10 @@ pub async fn read_transcript_handler(
                 "could not read transcript.json for \"{meeting_name}\": {err}"
             ))
         })?;
-        parse_transcript(&entry_id, &meeting_name, &body)
+        let mut view = parse_transcript(&entry_id, &meeting_name, &body)?;
+        view.speakers = read_speaker_labels(&meeting_dir).assignments;
+        view.transcript_path = transcript_path.to_string_lossy().into_owned();
+        Ok(view)
     })
     .await
     .map_err(|join_err| AppError::internal(format!("read_transcript task panicked: {join_err}")))?
@@ -358,6 +376,267 @@ pub async fn delete_vault_entry_handler(state: &AppState, entry_id: &str) -> Res
 
     state.vault_index.write().await.remove(entry_id);
     Ok(())
+}
+
+/// The file speaker labels are kept in, beside `transcript.json` in the
+/// meeting folder.
+///
+/// A sidecar rather than a field inside `transcript.json`, for one reason:
+/// `transcript.json` is F2's artifact, written whole by
+/// `transcript.write_atomic` every time a recording is transcribed. Labels
+/// the operator applied by hand must survive a re-transcription, and the
+/// only way to guarantee that is to keep them in a file F2 never touches.
+const SPEAKERS_FILE_NAME: &str = "speakers.json";
+
+/// An upper bound on the labels file. One entry per segment of a very long
+/// meeting is still tens of kilobytes; a megabyte means something other
+/// than labels is in that file.
+const MAX_SPEAKERS_BYTES: u64 = 1024 * 1024;
+
+/// The schema version written into `speakers.json`.
+const SPEAKERS_SCHEMA_VERSION: u32 = 1;
+
+/// Speaker labels for one meeting: a segment id to speaker-name map.
+///
+/// Keyed by segment id rather than by turn, deliberately. Turns are a
+/// *display* grouping the UI derives from pauses between segments, and that
+/// grouping changes the moment the recording is transcribed again with
+/// different segmentation. An assignment stored per segment survives that;
+/// one stored per turn index would silently reattach itself to whatever
+/// speech later occupies that position.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpeakerLabels {
+    /// `segment id -> speaker name`. A segment with no entry is unassigned,
+    /// which is a real state and not an error: a transcript nobody has
+    /// labelled yet has none of these.
+    #[serde(default)]
+    pub assignments: HashMap<String, String>,
+}
+
+/// `speakers.json`'s on-disk shape.
+#[derive(Debug, Deserialize, Serialize)]
+struct SpeakersFile {
+    #[serde(default)]
+    schema_version: u32,
+    #[serde(default)]
+    assignments: HashMap<String, String>,
+}
+
+/// Reads a meeting's speaker labels, or an empty set when the file is
+/// absent.
+///
+/// A missing file is the normal state, never an error. A *malformed* one is
+/// also not an error here: labels are an annotation on top of a transcript
+/// that is perfectly readable without them, so a corrupted sidecar degrades
+/// to "unlabelled" rather than making the transcript unopenable.
+fn read_speaker_labels(meeting_dir: &Path) -> SpeakerLabels {
+    let path = meeting_dir.join(SPEAKERS_FILE_NAME);
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return SpeakerLabels {
+            assignments: HashMap::new(),
+        };
+    };
+    if !metadata.is_file() || metadata.len() > MAX_SPEAKERS_BYTES {
+        return SpeakerLabels {
+            assignments: HashMap::new(),
+        };
+    }
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return SpeakerLabels {
+            assignments: HashMap::new(),
+        };
+    };
+    match serde_json::from_str::<SpeakersFile>(&body) {
+        Ok(parsed) => SpeakerLabels {
+            assignments: parsed.assignments,
+        },
+        Err(_) => SpeakerLabels {
+            assignments: HashMap::new(),
+        },
+    }
+}
+
+/// Writes `speakers.json` atomically: a temp file in the same directory,
+/// then a rename, so a reader never observes a half-written map and a
+/// failure mid-write leaves the previous labels intact. Mirrors F2's own
+/// `transcript.write_atomic`.
+fn write_speaker_labels(meeting_dir: &Path, labels: &SpeakerLabels) -> Result<(), AppError> {
+    let file = SpeakersFile {
+        schema_version: SPEAKERS_SCHEMA_VERSION,
+        assignments: labels.assignments.clone(),
+    };
+    let body = serde_json::to_string_pretty(&file)
+        .map_err(|err| AppError::internal(format!("could not serialize speaker labels: {err}")))?;
+
+    let target = meeting_dir.join(SPEAKERS_FILE_NAME);
+    let temp = meeting_dir.join(format!(".{SPEAKERS_FILE_NAME}.tmp"));
+    std::fs::write(&temp, body.as_bytes())
+        .map_err(|err| AppError::io(format!("could not write {}: {err}", temp.display())))?;
+    if let Err(err) = std::fs::rename(&temp, &target) {
+        // Leave nothing behind on the failure path.
+        let _ = std::fs::remove_file(&temp);
+        return Err(AppError::io(format!(
+            "could not replace {}: {err}",
+            target.display()
+        )));
+    }
+    Ok(())
+}
+
+/// `set_speaker_labels` — replaces a meeting's speaker labels wholesale.
+///
+/// Wholesale rather than per-segment, because renaming a speaker in the UI
+/// is by definition an edit to every segment that speaker holds ("renames
+/// every segment"), and a sequence of per-segment calls would make that one
+/// operation observably non-atomic.
+pub async fn set_speaker_labels_handler(
+    state: &AppState,
+    entry_id: &str,
+    assignments: HashMap<String, String>,
+) -> Result<(), AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    let labels = SpeakerLabels { assignments };
+
+    tokio::task::spawn_blocking(move || write_speaker_labels(&meeting_dir, &labels))
+        .await
+        .map_err(|join_err| {
+            AppError::internal(format!("set_speaker_labels task panicked: {join_err}"))
+        })?
+}
+
+/// A meeting's `summary.md`, if anything has written one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SummaryView {
+    pub entry_id: String,
+    /// The absolute path the summary would live at, present or not — shown
+    /// so the operator knows exactly where to put one.
+    pub path: String,
+    /// `None` when no summary exists yet.
+    pub markdown: Option<String>,
+}
+
+/// An upper bound on `summary.md`. A summary of a meeting is prose; a file
+/// larger than this is not one.
+const MAX_SUMMARY_BYTES: u64 = 4 * 1024 * 1024;
+
+/// `read_summary` — returns `summary.md` from the meeting folder.
+///
+/// Nothing in this app *writes* a summary: generating one needs a language
+/// model, which is a feature in its own right and does not exist yet.
+/// `summary.md` has been a reserved name in the vault contract from the
+/// start (`vault::SUMMARY_FILE_NAME`), so reading it costs nothing and
+/// means a summary written by hand — or by whatever eventually generates
+/// them — is readable in the app the day it appears, rather than after
+/// another round of UI work.
+pub async fn read_summary_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<SummaryView, AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    let path = meeting_dir.join(vault::SUMMARY_FILE_NAME);
+    let entry_id = entry_id.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let display_path = path.to_string_lossy().into_owned();
+        let markdown = match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_SUMMARY_BYTES => {
+                std::fs::read_to_string(&path).ok()
+            }
+            _ => None,
+        };
+        Ok(SummaryView {
+            entry_id,
+            path: display_path,
+            markdown,
+        })
+    })
+    .await
+    .map_err(|join_err| AppError::internal(format!("read_summary task panicked: {join_err}")))?
+}
+
+/// `transcribe_vault_entry` — runs transcription over a recording that is
+/// already filed in the vault.
+///
+/// The gap this closes: a recording filed while the service was down (FR-13
+/// keeps the file safe and reports the transcription as failed) had no way
+/// back into the pipeline short of dropping the file again, which would
+/// file a *second* copy under a suffixed name. This re-submits the one
+/// already there.
+///
+/// Refuses a meeting with no `source.*` rather than submitting a path F2
+/// would fail to open: an empty meeting folder is a real state (an operator
+/// can delete a recording and keep its transcript), and the honest answer
+/// is that there is nothing to transcribe.
+pub async fn transcribe_vault_entry_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<JobSnapshot, AppError> {
+    let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    let meeting_name = meeting_name_of(&meeting_dir);
+
+    let source = {
+        let meeting_dir = meeting_dir.clone();
+        tokio::task::spawn_blocking(move || source_file_in(&meeting_dir))
+            .await
+            .map_err(|join_err| {
+                AppError::internal(format!("transcribe_vault_entry task panicked: {join_err}"))
+            })?
+    }
+    .ok_or_else(|| {
+        AppError::invalid_argument(format!("\"{meeting_name}\" has no recording to transcribe"))
+    })?;
+
+    // The same project/unsorted classification `list_vault` reports, so the
+    // job row reads identically to one that arrived by drop.
+    let classification = view_for(entry_id, &root, &meeting_dir)
+        .project
+        .map(|_| "sorted".to_string())
+        .or_else(|| Some("unsorted".to_string()));
+
+    Ok(state
+        .registry
+        .read()
+        .await
+        .enqueue_filed(meeting_dir, source, classification)
+        .await)
+}
+
+/// The `source.<ext>` file inside a meeting folder, if there is one — the
+/// same existence rule `vault::list` uses to decide `has_source`, resolved
+/// to the actual path this time rather than a boolean.
+fn source_file_in(meeting_dir: &Path) -> Option<PathBuf> {
+    let children = std::fs::read_dir(meeting_dir).ok()?;
+    children.flatten().find_map(|entry| {
+        if !entry.file_type().ok()?.is_file() {
+            return None;
+        }
+        let name = entry.file_name();
+        let stem = name.to_str()?.split('.').next()?;
+        if stem.eq_ignore_ascii_case(vault::SOURCE_STEM) {
+            Some(entry.path())
+        } else {
+            None
+        }
+    })
+}
+
+/// `cancel_job` — asks the service to stop a job this app submitted.
+///
+/// Returns whether there was anything to cancel. A job that has not reached
+/// the service yet, or has already finished, answers `false` rather than
+/// failing: the operator clicked Cancel on something already past
+/// cancelling, and that is information, not an error.
+pub async fn cancel_job_handler(state: &AppState, job_id: &str) -> Result<bool, AppError> {
+    state
+        .registry
+        .read()
+        .await
+        .cancel(job_id)
+        .await
+        .map_err(|err| match err {
+            ServiceError::Unavailable { .. } => AppError::service_unavailable(err.to_string()),
+            other => AppError::service(other.to_string()),
+        })
 }
 
 #[cfg(test)]
@@ -477,5 +756,139 @@ mod tests {
         assert_eq!(view.project, None);
         assert!(!view.has_source);
         assert!(view.has_transcript);
+    }
+
+    // -- speaker labels ----------------------------------------------------
+
+    #[test]
+    fn a_meeting_with_no_speakers_file_reads_as_unlabelled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(read_speaker_labels(dir.path()).assignments.is_empty());
+    }
+
+    #[test]
+    fn labels_round_trip_through_the_sidecar() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let labels = SpeakerLabels {
+            assignments: HashMap::from([
+                ("0".to_string(), "Maxim".to_string()),
+                ("1".to_string(), "Speaker 2".to_string()),
+            ]),
+        };
+
+        write_speaker_labels(dir.path(), &labels).expect("write labels");
+
+        assert_eq!(read_speaker_labels(dir.path()), labels);
+    }
+
+    #[test]
+    fn labels_are_written_beside_the_transcript_not_into_it() {
+        // The whole reason for a sidecar: F2 rewrites transcript.json whole
+        // on every re-transcription, and hand-applied labels have to survive
+        // that.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("transcript.json"), br#"{"segments":[]}"#)
+            .expect("write transcript");
+
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("write labels");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("transcript.json")).expect("read transcript"),
+            r#"{"segments":[]}"#,
+            "transcript.json must be untouched"
+        );
+        assert!(dir.path().join("speakers.json").is_file());
+    }
+
+    #[test]
+    fn a_malformed_speakers_file_degrades_to_unlabelled_rather_than_failing() {
+        // Labels annotate a transcript that reads perfectly well without
+        // them, so a corrupt sidecar must never make the transcript
+        // unopenable.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("speakers.json"), b"{not json").expect("write junk");
+
+        assert!(read_speaker_labels(dir.path()).assignments.is_empty());
+    }
+
+    #[test]
+    fn writing_labels_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("write labels");
+
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["speakers.json".to_string()]);
+    }
+
+    #[test]
+    fn rewriting_labels_replaces_them_wholesale() {
+        // Renaming a speaker is an edit to every segment that speaker holds,
+        // so the write is a replacement, not a merge -- an assignment the
+        // operator cleared must actually disappear.
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([
+                    ("0".to_string(), "Maxim".to_string()),
+                    ("1".to_string(), "Speaker 2".to_string()),
+                ]),
+            },
+        )
+        .expect("first write");
+
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("second write");
+
+        let read_back = read_speaker_labels(dir.path());
+        assert_eq!(read_back.assignments.len(), 1);
+        assert_eq!(
+            read_back.assignments.get("0").map(String::as_str),
+            Some("Maxim")
+        );
+    }
+
+    // -- summary -----------------------------------------------------------
+
+    #[test]
+    fn a_transcript_carries_its_own_path_and_labels() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("transcript.json"), BODY).expect("write transcript");
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("write labels");
+
+        let labels = read_speaker_labels(dir.path());
+
+        assert_eq!(
+            labels.assignments.get("0").map(String::as_str),
+            Some("Maxim")
+        );
     }
 }
