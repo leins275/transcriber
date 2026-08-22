@@ -1,5 +1,84 @@
-.prompt {
-  padding: 1rem;
-  border: 1px dashed var(--border-color, #888);
-  border-radius: 2px;
+.card {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.title {
+  font-size: var(--text-h1);
+  font-size: 28px;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-3);
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 0 var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--divider);
+}
+
+.step:last-child {
+  border-bottom: 1px solid var(--divider);
+}
+
+.numeral {
+  font-family: var(--font-heading);
+  font-size: 22px;
+  font-feature-settings: "tnum";
+  color: var(--text-faint);
+}
+
+.numeral[data-done="true"],
+.numeral[data-active="true"] {
+  color: var(--accent-deep);
+}
+
+.stepHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+}
+
+.stepHeading em {
+  font-style: italic;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.stepSub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.stepBody {
+  margin-top: var(--space-3);
+}
+
+.waiting {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+  font-style: italic;
 }

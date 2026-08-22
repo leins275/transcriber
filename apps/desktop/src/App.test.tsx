@@ -83,7 +83,7 @@ describe("App first-run", () => {
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByText(/choose a meetings folder to begin/i)).toBeInTheDocument(),
+      expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument(),
     );
     expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
 
@@ -280,7 +280,7 @@ describe("App settings", () => {
     expect(screen.getByText(/expected value at line 1 column 1/i)).toBeInTheDocument();
     // The app still opens into the (first-run) functional state -- never a
     // blank window and never a crash.
-    expect(screen.getByText(/choose a meetings folder to begin/i)).toBeInTheDocument();
+    expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument();
     await settle();
   });
 });
@@ -314,7 +314,7 @@ describe("App model download wiring (T13)", () => {
     };
   }
 
-  it("shows the download step after the vault-folder step once the model is reported missing (FR-17)", async () => {
+  it("shows the setup card's model step once a folder is chosen but the model is reported missing (FR-17)", async () => {
     mockIPC((cmd) => {
       if (cmd === "get_settings") return buildSettings();
       if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
@@ -324,8 +324,11 @@ describe("App model download wiring (T13)", () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    // The setup card takes over the main pane until the model is present or
+    // skipped (spec.md 2a) -- the drop zone does not coexist with it.
     await waitFor(() => expect(screen.getByText(/model is missing/i)).toBeInTheDocument());
+    expect(screen.getByText(/choose where meetings live/i)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
     await settle();
   });
 

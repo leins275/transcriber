@@ -1,12 +1,15 @@
-.banner {
-  padding: 0.5rem;
-  border: 1px solid var(--border-color, #ddd);
+.banner p {
+  margin: 0;
+}
+
+.banner p + p {
+  margin-top: var(--space-1);
 }
 
 .banner[data-state="unavailable"] {
-  border-color: var(--warning-color, #b91c1c);
+  border-color: var(--divider);
 }
 
 .banner[data-state="starting"] {
-  border-color: var(--busy-color, #b45309);
+  border-color: var(--accent);
 }

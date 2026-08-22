@@ -126,11 +126,15 @@ export function ModelDownloadStep({
     // progress instead of letting the notice go blank.
     if (status.state === "downloading" || status.state === "verifying") {
       return (
-        <div className={styles.notice} data-state="cuda-warning" role="status">
-          <p>
-            {status.state === "downloading" ? "Downloading" : "Verifying"} GPU runtime:{" "}
-            {formatProgress(status)}
-          </p>
+        <div className={`note ${styles.notice}`} data-state="cuda-warning" role="status">
+          <span className="note-kicker">GPU</span>
+          <div className={styles.noticeBody}>
+            <p>
+              {status.state === "downloading" ? "Downloading" : "Verifying"} GPU runtime:{" "}
+              {formatProgress(status)}
+            </p>
+            <ProgressBar percent={status.percent} />
+          </div>
         </div>
       );
     }
@@ -138,44 +142,49 @@ export function ModelDownloadStep({
     // continued anyway (E4) -- a persistent notice, not a toast, with the
     // backend's own message verbatim (when one is available) and a retry.
     return (
-      <div className={styles.notice} data-state="cuda-warning" role="alert">
-        <p>GPU acceleration is not installed. {status.cuda_warning}</p>
-        <button type="button" onClick={handleStart}>
-          Retry GPU setup
-        </button>
+      <div className={`note ${styles.notice}`} data-state="cuda-warning" role="alert">
+        <span className="note-kicker">GPU</span>
+        <div className={styles.noticeBody}>
+          <p>GPU acceleration is not installed. {status.cuda_warning}</p>
+          <button type="button" className="btn btn-ghost" onClick={handleStart}>
+            Retry GPU setup
+          </button>
+        </div>
       </div>
     );
   }
 
   if (compact) {
     return (
-      <div className={styles.notice} data-state="notice" role="status">
-        <p>
-          The transcription model is still missing.
-          {status.error_message && <> {status.error_message}</>}
-        </p>
-        <button type="button" onClick={handleStart}>
-          Retry
-        </button>
+      <div className={`note ${styles.notice}`} data-state="notice" role="status">
+        <span className="note-kicker">Note</span>
+        <div className={styles.noticeBody}>
+          <p>
+            The transcription model is still missing.
+            {status.error_message && <> {status.error_message}</>}
+          </p>
+          <button type="button" className="btn btn-ghost" onClick={handleStart}>
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className={styles.step} data-state={status.state}>
-      <h2>Download the transcription model</h2>
       {(status.state === "idle" || status.state === "cancelled") && (
         <>
-          <p>
+          <p className={styles.body}>
             The transcription model is missing.
             {status.state === "cancelled" && " The download was cancelled."} It needs to be
             downloaded once before transcription can run.
           </p>
           <div className={styles.actions}>
-            <button type="button" onClick={handleStart}>
+            <button type="button" className="btn btn-secondary" onClick={handleStart}>
               {status.state === "cancelled" ? "Retry" : "Start download"}
             </button>
-            <button type="button" onClick={handleSkip}>
+            <button type="button" className="btn btn-ghost" onClick={handleSkip}>
               Skip for now
             </button>
           </div>
@@ -183,29 +192,50 @@ export function ModelDownloadStep({
       )}
       {(status.state === "downloading" || status.state === "verifying") && (
         <>
-          <p role="status">
-            {status.state === "downloading" ? "Downloading" : "Verifying"}: {formatProgress(status)}
-          </p>
+          <div className={styles.progressRow}>
+            <ProgressBar percent={status.percent} />
+            <span role="status" className={styles.progressLabel}>
+              {formatProgress(status)}
+            </span>
+          </div>
           <div className={styles.actions}>
-            <button type="button" onClick={handleCancel}>
+            <button type="button" className="btn btn-secondary" onClick={handleCancel}>
               Cancel
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={handleSkip}>
+              Skip for now
             </button>
           </div>
         </>
       )}
       {status.state === "error" && (
         <>
-          <p role="alert">{status.error_message ?? "The download failed."}</p>
+          <p role="alert" className={styles.body}>
+            {status.error_message ?? "The download failed."}
+          </p>
           <div className={styles.actions}>
-            <button type="button" onClick={handleStart}>
+            <button type="button" className="btn btn-secondary" onClick={handleStart}>
               Retry
             </button>
-            <button type="button" onClick={handleSkip}>
+            <button type="button" className="btn btn-ghost" onClick={handleSkip}>
               Skip for now
             </button>
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** A 2-3px accent-filled progress track, clamped to [0, 100]. Purely
+ * presentational -- the real `percent` field the backend already reports,
+ * finally drawn instead of only spelled out as text (spec.md "the model
+ * download ... shows only a text string for a multi-gigabyte transfer"). */
+function ProgressBar({ percent }: { percent: number }) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  return (
+    <div className={styles.track}>
+      <div className={styles.fill} style={{ width: `${clamped}%` }} />
     </div>
   );
 }

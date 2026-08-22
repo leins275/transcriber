@@ -1,29 +1,61 @@
 .step {
-  padding: 1rem;
-  border: 1px dashed var(--border-color, #888);
-  border-radius: 2px;
-}
-
-.step[data-state="error"] {
-  border-color: var(--warning-color, #b91c1c);
-  border-style: solid;
-}
-
-.step[data-state="downloading"],
-.step[data-state="verifying"] {
-  border-color: var(--busy-color, #b45309);
-}
-
-.notice {
-  padding: 0.5rem;
-  border: 1px solid var(--warning-color, #b91c1c);
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.body {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .actions {
   display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  gap: var(--space-2);
+}
+
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.progressLabel {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+
+.track {
+  flex: 1;
+  height: 3px;
+  background: var(--track);
+  border-radius: 1px;
+  max-width: 320px;
+}
+
+.fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.notice {
+  align-items: flex-start;
+}
+
+.notice[data-state="cuda-warning"] {
+  border-color: var(--accent);
+}
+
+.noticeBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.noticeBody p {
+  margin: 0;
 }

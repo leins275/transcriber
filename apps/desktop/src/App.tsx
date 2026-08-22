@@ -1,16 +1,17 @@
 /**
  * Composes the T6 presentational components with the T12 IPC layer. Owns no
  * formatting logic of its own: state comes from `api.ts`/`useJobs`, rendering
- * is delegated to the components. First-run (no meetings-root) replaces the
- * drop zone with the folder-picker prompt and refuses drops (FR-18).
+ * is delegated to the components. First-run (no meetings-root, or a
+ * meetings-root but no model yet) replaces the drop zone and job ledger with
+ * the numbered setup card and refuses drops (FR-18).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
-import { JobList } from "./components/JobList";
+import { JobsPanel } from "./components/JobsPanel";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
-import { SettingsBar } from "./components/SettingsBar";
+import { Sidebar } from "./components/Sidebar";
 import {
   api,
   chooseFile,
@@ -177,41 +178,91 @@ function App() {
     api.revealJob(jobId).catch((error: AppError) => setLastError(error));
   }, []);
 
+  // The first-run setup path (spec.md 2a) covers both "no folder yet" and
+  // "folder chosen but the model isn't here yet" -- one coherent path
+  // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
+  // it into normal operation with a persistent, compact notice instead
+  // (FR-17): the rest of the app stays usable underneath.
+  const modelKnown = modelStatus !== null;
+  const modelPresent = modelStatus?.model_present ?? false;
+  // The folder gate always wins (FR-18): drops stay refused with no folder
+  // chosen even if a stray "Skip for now" click on the model step somehow
+  // preceded it. Once a folder is chosen, setup continues until the model
+  // is present or the operator explicitly skips it.
+  const inSetup = !meetingsRoot || (!modelSkipped && modelKnown && !modelPresent);
+
+  const modelStepElement = modelStatus ? (
+    <ModelDownloadStep
+      commands={modelDownloadCommands}
+      initialStatus={modelStatus}
+      compact={modelSkipped}
+      onModelPresent={() =>
+        setModelStatus((current) => (current ? { ...current, model_present: true } : current))
+      }
+      onSkip={() => setModelSkipped(true)}
+    />
+  ) : null;
+
   return (
     <div className="app-shell">
-      <h1>Transcriber</h1>
-      {settings?.config_error && (
-        // E3: a malformed config.json falls back to first-run defaults
-        // instead of crashing before a window exists -- this is the
-        // actionable error that fallback produced.
-        <p role="alert" data-state="config-error">
-          Your settings file could not be read and has been reset to defaults:{" "}
-          {settings.config_error}
-        </p>
-      )}
-      {settings && <SettingsBar settings={settings} onChangeRoot={handleChooseFolder} />}
-      <ServiceBanner status={serviceStatus} />
-      {settings &&
-        (meetingsRoot ? (
-          <DropZone state={dropState} disabled={false} onChooseFile={handleChooseFile} />
-        ) : (
-          <FirstRun onChooseFolder={handleChooseFolder} />
-        ))}
-      {settings && meetingsRoot && modelStatus && (
-        <ModelDownloadStep
-          commands={modelDownloadCommands}
-          initialStatus={modelStatus}
-          compact={modelSkipped}
-          onModelPresent={() =>
-            setModelStatus((current) => (current ? { ...current, model_present: true } : current))
-          }
-          onSkip={() => setModelSkipped(true)}
+      {settings && (
+        <Sidebar
+          variant={inSetup ? "setup" : "full"}
+          settings={settings}
+          serviceStatus={serviceStatus}
+          modelStatus={modelStatus}
+          onChangeRoot={handleChooseFolder}
         />
       )}
-      <section aria-label="Jobs" role="region">
-        <JobList jobs={jobs} onReveal={handleReveal} />
-      </section>
-      {lastError && <p role="alert">{lastError.message}</p>}
+      <main className="main-pane">
+        {settings?.config_error && (
+          // E3: a malformed config.json falls back to first-run defaults
+          // instead of crashing before a window exists -- this is the
+          // actionable error that fallback produced.
+          <p role="alert" data-state="config-error" className="alert">
+            Your settings file could not be read and has been reset to defaults:{" "}
+            {settings.config_error}
+          </p>
+        )}
+
+        {settings &&
+          (inSetup ? (
+            <FirstRun
+              meetingsRoot={meetingsRoot}
+              onChooseFolder={handleChooseFolder}
+              modelStep={modelStepElement}
+            />
+          ) : (
+            <>
+              <ServiceBanner status={serviceStatus} />
+              {modelStepElement}
+              {jobs.length === 0 ? (
+                <DropZone
+                  variant="hero"
+                  state={dropState}
+                  disabled={false}
+                  onChooseFile={handleChooseFile}
+                />
+              ) : (
+                <>
+                  <DropZone
+                    variant="strip"
+                    state={dropState}
+                    disabled={false}
+                    onChooseFile={handleChooseFile}
+                  />
+                  <JobsPanel jobs={jobs} onReveal={handleReveal} />
+                </>
+              )}
+            </>
+          ))}
+
+        {lastError && (
+          <p role="alert" className="alert">
+            {lastError.message}
+          </p>
+        )}
+      </main>
     </div>
   );
 }
