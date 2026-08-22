@@ -73,6 +73,16 @@ DEFAULT_DIST_DIR = REPO_ROOT / "dist"
 # fixed by T14).
 DEFAULT_PYENV_OUT = APP_DIR / "src-tauri" / "resources" / "pyenv"
 
+# The tracked placeholder's exact committed contents. `build_pyenv.bake`
+# rmtrees the directory this lives in, so the release build has to put it
+# back byte-for-byte or leave the working tree dirty.
+GITKEEP_CONTENTS = (
+    "# Placeholder so this directory exists on a clean checkout -- tauri-build's\n"
+    "# bundleResources errors if the configured resource path is missing.\n"
+    "# The release build (scripts/build_pyenv.py, invoked by `make installer`)\n"
+    "# replaces this directory's contents with the baked Python runtime.\n"
+)
+
 # scripts/ is a sibling-module directory (no package, no conftest.py, per the
 # plan's "each test module derives the repo root itself" contract) -- make
 # sure the other build-system modules are importable regardless of whether
@@ -230,15 +240,40 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def find_built_installer(repo_root: Path = REPO_ROOT) -> Path:
-    """Locate the `.exe` the Tauri NSIS bundle stage just produced."""
+def find_built_installer(repo_root: Path = REPO_ROOT, version: str | None = None) -> Path:
+    """Locate the `.exe` the Tauri NSIS bundle stage just produced.
+
+    Matched by its exact expected name -- `sync_version.artifact_name`, the
+    same function `collect` names the released file with -- rather than by
+    picking from whatever `.exe` files are in the bundle directory.
+
+    This used to take `sorted(glob("*.exe"))[0]`, and that is a genuinely
+    dangerous way to find a build artifact: `target/` is not cleaned between
+    builds, so after a version bump the directory holds both the new
+    installer and every older one, and the *alphabetically first* is the
+    oldest. The result was an installer copied out under the new version's
+    name carrying the previous version's bytes -- caught building 0.2.0 on a
+    tree that had built 0.1.0, where the two artifacts had identical
+    checksums. A CI runner with a warm `target/` cache would have done the
+    same thing.
+
+    Refusing outright when the expected artifact is absent is the point: a
+    build that did not produce what it was asked for must fail, not fall
+    back to something that happens to be lying nearby.
+    """
     bundle_dir = (
-        NSIS_BUNDLE_DIR if repo_root == REPO_ROOT else repo_root / NSIS_BUNDLE_DIR.relative_to(REPO_ROOT)
+        NSIS_BUNDLE_DIR
+        if repo_root == REPO_ROOT
+        else repo_root / NSIS_BUNDLE_DIR.relative_to(REPO_ROOT)
     )
-    candidates = sorted(bundle_dir.glob("*.exe"))
-    if not candidates:
-        raise BuildInstallerError(f"no NSIS installer found under {bundle_dir}")
-    return candidates[0]
+    expected = sync_version.artifact_name(version)
+    candidate = bundle_dir / expected
+    if candidate.is_file():
+        return candidate
+
+    present = sorted(path.name for path in bundle_dir.glob("*.exe"))
+    found = f" (found: {', '.join(present)})" if present else ""
+    raise BuildInstallerError(f"no {expected} under {bundle_dir}{found}")
 
 
 def gate_artifact_size(path: Path, limit_bytes: int = SIZE_LIMIT_BYTES) -> int:
@@ -349,12 +384,17 @@ def _restore_gitkeep(pyenv_out: Path) -> None:
 
     Only ever recreated inside the tracked resources directory: a standalone
     `build_pyenv.py --out somewhere/else` has no placeholder to restore.
+
+    Restored with its committed *contents*, not as an empty file. The
+    placeholder explains why it exists, and a build that silently emptied it
+    would still leave `git status` dirty -- which is the whole thing this is
+    supposed to stop.
     """
     if pyenv_out != DEFAULT_PYENV_OUT:
         return
     gitkeep = pyenv_out / ".gitkeep"
     if not gitkeep.exists():
-        gitkeep.touch()
+        gitkeep.write_text(GITKEEP_CONTENTS, encoding="utf-8", newline="\n")
 
 
 def stage_tauri_build(ctx: BuildContext) -> None:

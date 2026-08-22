@@ -218,7 +218,9 @@ def test_stage_tauri_build_passes_locked_through_to_the_tauri_cli(
     monkeypatch.setattr(build_installer, "_run", fake_run)
     fake_installer = tmp_path / "Transcriber_0.0.0_x64-setup.exe"
     fake_installer.write_bytes(b"")
-    monkeypatch.setattr(build_installer, "find_built_installer", lambda repo_root: fake_installer)
+    monkeypatch.setattr(
+        build_installer, "find_built_installer", lambda repo_root, version=None: fake_installer
+    )
 
     ctx = build_installer.BuildContext()
     build_installer.stage_tauri_build(ctx)
@@ -310,9 +312,53 @@ def test_find_built_installer_looks_under_the_workspace_root_target_dir(tmp_path
     installer = bundle_dir / "Transcriber_0.1.0_x64-setup.exe"
     installer.write_bytes(b"fixture-installer-bytes")
 
-    found = build_installer.find_built_installer(tmp_path)
+    found = build_installer.find_built_installer(tmp_path, version="0.1.0")
 
     assert found == installer
+
+
+def test_find_built_installer_ignores_a_previous_versions_leftover(tmp_path: Path) -> None:
+    # `target/` is not cleaned between builds, so after a bump the bundle
+    # directory holds both installers -- and the older one sorts first. The
+    # picker used to take `sorted(glob("*.exe"))[0]` and hand back the stale
+    # artifact, which `collect` then copied out under the *new* version's
+    # name. Two releases with different version numbers and identical bytes
+    # is how this was found.
+    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir.mkdir(parents=True)
+    stale = bundle_dir / "Transcriber_0.1.0_x64-setup.exe"
+    stale.write_bytes(b"last release's bytes")
+    fresh = bundle_dir / "Transcriber_0.2.0_x64-setup.exe"
+    fresh.write_bytes(b"this release's bytes")
+
+    found = build_installer.find_built_installer(tmp_path, version="0.2.0")
+
+    assert found == fresh
+    assert found.read_bytes() == b"this release's bytes"
+
+
+def test_find_built_installer_refuses_to_substitute_another_version(tmp_path: Path) -> None:
+    # A build that did not produce what it was asked for must fail, not fall
+    # back to whatever is lying nearby.
+    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir.mkdir(parents=True)
+    (bundle_dir / "Transcriber_0.1.0_x64-setup.exe").write_bytes(b"stale")
+
+    with pytest.raises(build_installer.BuildInstallerError) as excinfo:
+        build_installer.find_built_installer(tmp_path, version="0.2.0")
+
+    message = str(excinfo.value)
+    assert "Transcriber_0.2.0_x64-setup.exe" in message
+    # Names what it did find, so the failure is diagnosable at a glance.
+    assert "Transcriber_0.1.0_x64-setup.exe" in message
+
+
+def test_find_built_installer_reports_an_empty_bundle_directory(tmp_path: Path) -> None:
+    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir.mkdir(parents=True)
+
+    with pytest.raises(build_installer.BuildInstallerError):
+        build_installer.find_built_installer(tmp_path, version="0.2.0")
 
 
 # --- collect() ------------------------------------------------------------
