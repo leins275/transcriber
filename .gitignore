@@ -3,3 +3,13 @@ specs/_intake/*/worktrees/
 target/
 node_modules/
 dist/
+build/
+# E12: scripts/tests' own pytest run leaves these behind (make test must
+# leave `git status` clean, NFR-6) -- the same hygiene class T14 already
+# fixed for resources/pyenv/ above.
+__pycache__/
+# The baked CUDA runtime + service tree (T4/T8) -- multi-GB, deterministic
+# from services/transcription/uv.lock, never meant to be tracked (found
+# untracked-and-unignored during T14's real build; see docs/setup.md's
+# "Known gaps").
+apps/desktop/src-tauri/resources/pyenv/

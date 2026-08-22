@@ -31,6 +31,11 @@ use serde_json::Map;
 
 use crate::error::AppError;
 
+/// The file name a writability probe creates and immediately deletes inside
+/// a candidate meetings root (E2/FR-10: "is writable" must actually be
+/// tested, not assumed from `create_dir_all` succeeding on an ancestor).
+const WRITE_PROBE_FILE_NAME: &str = ".transcriber_write_probe";
+
 /// The current settings schema version.
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -184,10 +189,52 @@ pub fn settings_view(settings: &Settings) -> SettingsView {
     }
 }
 
+/// Whether `candidate` is `app_dir` itself or lies anywhere underneath it,
+/// compared case-insensitively (Windows paths, and NTFS is itself
+/// case-insensitive) on each path's textual form rather than
+/// `Path::canonicalize()`, since `candidate` may not exist yet when this
+/// runs. A trailing separator is appended to `app_dir` before the prefix
+/// check so a sibling with `app_dir` as a strict string prefix (e.g.
+/// `C:\Apps\TranscriberX` against `C:\Apps\Transcriber`) is never a false
+/// positive.
+fn is_inside(app_dir: &Path, candidate: &Path) -> bool {
+    let normalize = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
+    let app_dir = normalize(app_dir);
+    let candidate = normalize(candidate);
+    let app_dir_trimmed = app_dir.trim_end_matches('\\');
+    candidate == app_dir_trimmed || candidate.starts_with(&format!("{app_dir_trimmed}\\"))
+}
+
+/// Creates and immediately deletes a marker file inside `candidate`, proving
+/// the installing user can actually write there (E2/FR-10) rather than
+/// merely that `create_dir_all` found or made the directory — a directory
+/// can exist and be non-writable (e.g. read-only media, a permissions
+/// mismatch) with `create_dir_all` still reporting success on an ancestor.
+fn probe_writable(candidate: &Path) -> Result<(), AppError> {
+    let probe_path = candidate.join(WRITE_PROBE_FILE_NAME);
+    fs::write(&probe_path, b"").map_err(|err| {
+        AppError::invalid_argument(format!(
+            "meetings root is not writable ({}): {err}",
+            candidate.display()
+        ))
+    })?;
+    let _ = fs::remove_file(&probe_path);
+    Ok(())
+}
+
 /// Validates and persists a new meetings-root. Rejects a relative path, an
-/// empty string, or a path that cannot be created; creates the directory
-/// if it does not already exist and persists atomically on success.
-pub fn set_meetings_root(dir: &Path, settings: &mut Settings, path: &str) -> Result<(), AppError> {
+/// empty string, a path inside the application folder (`app_dir` — FR-10,
+/// FR-14: the uninstaller only relocates `models\`/`logs\`/`data\`/
+/// `runtime\`, so a vault nested there would be silently destroyed by an
+/// uninstall or upgrade), or a path that cannot be created or is not
+/// writable; creates the directory if it does not already exist and
+/// persists atomically on success.
+pub fn set_meetings_root(
+    dir: &Path,
+    app_dir: &Path,
+    settings: &mut Settings,
+    path: &str,
+) -> Result<(), AppError> {
     if path.trim().is_empty() {
         return Err(AppError::invalid_argument(
             "meetings root path must not be empty",
@@ -199,12 +246,19 @@ pub fn set_meetings_root(dir: &Path, settings: &mut Settings, path: &str) -> Res
             "meetings root path must be absolute: {path}"
         )));
     }
+    if is_inside(app_dir, candidate) {
+        return Err(AppError::invalid_argument(format!(
+            "meetings root must not be inside the application folder ({}): {path}",
+            app_dir.display()
+        )));
+    }
     fs::create_dir_all(candidate).map_err(|err| {
         AppError::io(format!(
             "could not create meetings root {}: {err}",
             candidate.display()
         ))
     })?;
+    probe_writable(candidate)?;
     settings.meetings_root = Some(path.to_string());
     save(dir, settings)
 }
@@ -377,9 +431,10 @@ mod tests {
     #[test]
     fn set_meetings_root_rejects_a_relative_path() {
         let dir = tempdir().expect("tempdir");
+        let app_dir = tempdir().expect("tempdir for app dir");
         let mut settings = Settings::default();
 
-        let err = set_meetings_root(dir.path(), &mut settings, "relative\\path")
+        let err = set_meetings_root(dir.path(), app_dir.path(), &mut settings, "relative\\path")
             .expect_err("relative path must be rejected");
 
         assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
@@ -389,10 +444,11 @@ mod tests {
     #[test]
     fn set_meetings_root_rejects_an_empty_string() {
         let dir = tempdir().expect("tempdir");
+        let app_dir = tempdir().expect("tempdir for app dir");
         let mut settings = Settings::default();
 
-        let err =
-            set_meetings_root(dir.path(), &mut settings, "").expect_err("empty must be rejected");
+        let err = set_meetings_root(dir.path(), app_dir.path(), &mut settings, "")
+            .expect_err("empty must be rejected");
 
         assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
     }
@@ -400,6 +456,7 @@ mod tests {
     #[test]
     fn set_meetings_root_rejects_a_path_that_cannot_be_created() {
         let dir = tempdir().expect("tempdir");
+        let app_dir = tempdir().expect("tempdir for app dir");
         let mut settings = Settings::default();
 
         // A regular file in the path where a directory component is
@@ -410,6 +467,7 @@ mod tests {
 
         let err = set_meetings_root(
             dir.path(),
+            app_dir.path(),
             &mut settings,
             uncreatable.to_str().expect("valid utf8 path"),
         )
@@ -422,11 +480,13 @@ mod tests {
     #[test]
     fn set_meetings_root_accepts_an_existing_writable_directory_and_persists_atomically() {
         let config_dir = tempdir().expect("tempdir for config");
+        let app_dir = tempdir().expect("tempdir for app dir");
         let root_dir = tempdir().expect("tempdir for meetings root");
         let mut settings = Settings::default();
 
         set_meetings_root(
             config_dir.path(),
+            app_dir.path(),
             &mut settings,
             root_dir.path().to_str().expect("valid utf8 path"),
         )
@@ -442,6 +502,76 @@ mod tests {
             .path()
             .join(format!("{CONFIG_FILE_NAME}.tmp"))
             .exists());
+
+        // The writability probe file must not survive a successful call.
+        assert!(!root_dir.path().join(WRITE_PROBE_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn set_meetings_root_rejects_a_path_inside_the_application_folder() {
+        let config_dir = tempdir().expect("tempdir for config");
+        let app_dir = tempdir().expect("tempdir for app dir");
+        let mut settings = Settings::default();
+        let candidate = app_dir.path().join("Meetings");
+
+        let err = set_meetings_root(
+            config_dir.path(),
+            app_dir.path(),
+            &mut settings,
+            candidate.to_str().expect("valid utf8 path"),
+        )
+        .expect_err("a path inside the app folder must be rejected");
+
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        assert_eq!(settings.meetings_root, None);
+        assert!(
+            !candidate.exists(),
+            "a rejected candidate must not be created on disk"
+        );
+    }
+
+    #[test]
+    fn set_meetings_root_rejects_the_application_folder_itself_case_insensitively() {
+        let config_dir = tempdir().expect("tempdir for config");
+        let app_dir = tempdir().expect("tempdir for app dir");
+        let mut settings = Settings::default();
+        // Uppercased relative to the real `app_dir` path, to prove the
+        // comparison is case-insensitive (Windows paths).
+        let candidate = app_dir.path().to_string_lossy().to_uppercase();
+
+        let err = set_meetings_root(config_dir.path(), app_dir.path(), &mut settings, &candidate)
+            .expect_err("the app folder itself must be rejected");
+
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+    }
+
+    #[test]
+    fn set_meetings_root_rejects_a_directory_the_write_probe_cannot_land_in() {
+        // Windows' directory `ReadOnly` attribute is cosmetic (Explorer-only)
+        // and does not actually block writes underneath it, so it cannot be
+        // used to simulate a non-writable directory here. Instead, a
+        // subdirectory is pre-created at the exact path the write probe
+        // targets: writing a *file* over an existing *directory* fails with
+        // "Access is denied" on Windows, deterministically and without
+        // needing elevation or ACL manipulation -- exercising the same
+        // `probe_writable` failure path a genuinely locked-down ACL would.
+        let config_dir = tempdir().expect("tempdir for config");
+        let app_dir = tempdir().expect("tempdir for app dir");
+        let root_dir = tempdir().expect("tempdir for meetings root");
+        fs::create_dir(root_dir.path().join(WRITE_PROBE_FILE_NAME))
+            .expect("pre-create a directory at the probe's target path");
+        let mut settings = Settings::default();
+
+        let err = set_meetings_root(
+            config_dir.path(),
+            app_dir.path(),
+            &mut settings,
+            root_dir.path().to_str().expect("valid utf8 path"),
+        )
+        .expect_err("a directory whose write probe cannot land must be rejected");
+
+        assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
+        assert_eq!(settings.meetings_root, None);
     }
 
     #[test]

@@ -13,6 +13,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     service_base_url: null,
     supported_extensions: [".mp4", ".wav"],
     config_error: null,
+    default_meetings_root: null,
     ...overrides,
   };
 }
@@ -295,6 +296,125 @@ describe("App service banner", () => {
 
     expect(() => render(<App />)).not.toThrow();
     await waitFor(() => expect(screen.getByText(/config\.json is malformed/i)).toBeInTheDocument());
+    await settle();
+  });
+});
+
+describe("App model download wiring (T13)", () => {
+  function modelStatus(overrides: Record<string, unknown> = {}) {
+    return {
+      state: "idle",
+      downloaded_bytes: 0,
+      total_bytes: 0,
+      percent: 0,
+      error_kind: null,
+      error_message: null,
+      model_present: false,
+      ...overrides,
+    };
+  }
+
+  it("shows the download step after the vault-folder step once the model is reported missing (FR-17)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      if (cmd === "model_download_status") return modelStatus();
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/model is missing/i)).toBeInTheDocument());
+    await settle();
+  });
+
+  it("does not render the download step once the model is already present (FR-16, upgrade must not re-download)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      if (cmd === "model_download_status")
+        return modelStatus({ state: "complete", percent: 100, model_present: true });
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    await flush();
+    expect(screen.queryByText(/model is missing/i)).not.toBeInTheDocument();
+    await settle();
+  });
+
+  it("shows a persistent GPU-setup notice when the model is present but a cuda_warning is set (E13)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      if (cmd === "model_download_status")
+        return modelStatus({
+          state: "complete",
+          percent: 100,
+          model_present: true,
+          cuda_warning: "digest mismatch for nvidia_cublas_cu12.whl",
+        });
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("digest mismatch for nvidia_cublas_cu12.whl");
+    expect(screen.getByRole("button", { name: /retry gpu setup/i })).toBeInTheDocument();
+    await settle();
+  });
+
+  it("shows the persistent GPU-setup notice on a fresh app start even with no in-session cuda_warning, from health's durable cuda_runtime_present (E13 durable)", async () => {
+    // Mirrors a fresh sidecar process after an earlier run's failed CUDA
+    // download: no `SetupDownload` instance survives a restart, so
+    // `cuda_warning` is `null`, but `/health.cuda_runtime_present` still
+    // durably reports the runtime missing.
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      if (cmd === "model_download_status")
+        return modelStatus({
+          state: "complete",
+          percent: 100,
+          model_present: true,
+          cuda_warning: null,
+          cuda_runtime_present: false,
+        });
+      return null;
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/GPU acceleration is not installed/i);
+    expect(screen.getByRole("button", { name: /retry gpu setup/i })).toBeInTheDocument();
+    await settle();
+  });
+
+  it("Skip for now leaves the drop zone usable with a persistent, non-modal missing-model notice (FR-17)", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      if (cmd === "model_download_status") return modelStatus();
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /skip for now/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /skip for now/i }));
+
+    expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/model/i);
     await settle();
   });
 });

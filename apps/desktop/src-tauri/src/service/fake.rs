@@ -12,7 +12,8 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    JobState, JobStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    JobState, JobStatus, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth,
+    SubmitRequest, TranscriptionService,
 };
 
 /// How many `status()` polls a scripted job spends in each phase.
@@ -47,11 +48,146 @@ struct ScriptedJob {
     polls: u32,
 }
 
+/// In-memory model-download simulation (T13, FR-12, FR-16, FR-17). Each
+/// `model_download_status()` poll advances the transfer by one simulated
+/// chunk so a caller that polls repeatedly sees monotonically increasing
+/// progress, mirroring F2's real behaviour without a background thread or a
+/// timer.
+struct FakeModelDownload {
+    present: bool,
+    state: ModelDownloadState,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    /// How many `model_download_status()` polls a started transfer spends
+    /// downloading before landing on its terminal state.
+    downloading_polls: u32,
+    polls: u32,
+    /// Script the next transfer to fail once it reaches its terminal poll,
+    /// consumed by exactly one `start_model_download()` (mirrors
+    /// `FakeTiming`'s own next-outcome pattern above).
+    fail_next: bool,
+    /// E13: whether the simulated CUDA runtime is present -- mirrors F2's
+    /// `/health`'s `cuda_runtime_present` (this fake never simulates a
+    /// GPU-less host, so it is never `None`).
+    cuda_runtime_present: bool,
+    /// E13: set by [`FakeService::set_cuda_warning`] to simulate a
+    /// `SetupDownload` whose CUDA-runtime phase failed and continued into
+    /// the model phase anyway (E4) -- carried verbatim on every status until
+    /// cleared.
+    cuda_warning: Option<String>,
+}
+
+impl FakeModelDownload {
+    fn present() -> Self {
+        FakeModelDownload {
+            present: true,
+            state: ModelDownloadState::Complete,
+            downloaded_bytes: 3_000_000_000,
+            total_bytes: 3_000_000_000,
+            downloading_polls: 3,
+            polls: 0,
+            fail_next: false,
+            cuda_runtime_present: true,
+            cuda_warning: None,
+        }
+    }
+
+    fn absent() -> Self {
+        FakeModelDownload {
+            present: false,
+            state: ModelDownloadState::Idle,
+            downloaded_bytes: 0,
+            total_bytes: 3_000_000_000,
+            downloading_polls: 3,
+            polls: 0,
+            fail_next: false,
+            cuda_runtime_present: true,
+            cuda_warning: None,
+        }
+    }
+
+    fn start(&mut self) {
+        // F2 never starts a second parallel transfer -- a start while one
+        // is already running is a no-op that just returns the current
+        // status (see `status()` below, called by every trait method).
+        if matches!(
+            self.state,
+            ModelDownloadState::Downloading | ModelDownloadState::Verifying
+        ) {
+            return;
+        }
+        self.state = ModelDownloadState::Downloading;
+        self.downloaded_bytes = 0;
+        self.polls = 0;
+    }
+
+    fn cancel(&mut self) {
+        if matches!(
+            self.state,
+            ModelDownloadState::Downloading | ModelDownloadState::Verifying
+        ) {
+            self.state = ModelDownloadState::Cancelled;
+        }
+    }
+
+    /// Advances the simulated transfer by one poll (if currently
+    /// downloading) and returns the resulting status -- only the `GET`
+    /// (`model_download_status`) trait method calls this; `start`/`cancel`
+    /// return [`FakeModelDownload::peek`] instead so a `POST` on an
+    /// already-running transfer (F2's documented no-op) never itself
+    /// advances progress.
+    fn advance_and_peek(&mut self) -> ModelDownloadStatus {
+        if self.state == ModelDownloadState::Downloading {
+            self.polls += 1;
+            let capped = self.polls.min(self.downloading_polls);
+            self.downloaded_bytes =
+                self.total_bytes * u64::from(capped) / u64::from(self.downloading_polls.max(1));
+            if self.polls >= self.downloading_polls {
+                if self.fail_next {
+                    self.fail_next = false;
+                    self.state = ModelDownloadState::Error;
+                } else {
+                    self.state = ModelDownloadState::Complete;
+                    self.present = true;
+                }
+            }
+        }
+        self.peek()
+    }
+
+    /// Reads the current status without mutating anything.
+    fn peek(&self) -> ModelDownloadStatus {
+        let (error_kind, error_message) = if self.state == ModelDownloadState::Error {
+            (
+                Some("checksum_mismatch".to_string()),
+                Some("simulated fake-service download failure".to_string()),
+            )
+        } else {
+            (None, None)
+        };
+        let percent = if self.total_bytes > 0 {
+            self.downloaded_bytes as f64 / self.total_bytes as f64 * 100.0
+        } else {
+            0.0
+        };
+        ModelDownloadStatus {
+            state: self.state,
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
+            percent,
+            error_kind,
+            error_message,
+            cuda_warning: self.cuda_warning.clone(),
+        }
+    }
+}
+
 struct Inner {
     down: bool,
     timing: FakeTiming,
     next_outcome: ScriptedOutcome,
     jobs: HashMap<String, ScriptedJob>,
+    model: FakeModelDownload,
 }
 
 /// In-memory fake used by tests and by `--fake-service` dev mode (T11).
@@ -65,7 +201,10 @@ impl FakeService {
         Self::with_timing(FakeTiming::default())
     }
 
-    /// A healthy fake whose jobs succeed, on the given timing.
+    /// A healthy fake whose jobs succeed, on the given timing. The
+    /// simulated model starts out present (dev-mode default: behaves like
+    /// an already-installed app) -- use [`FakeService::with_model_absent`]
+    /// to simulate a fresh install for T13's own tests.
     pub fn with_timing(timing: FakeTiming) -> Self {
         FakeService {
             inner: Mutex::new(Inner {
@@ -73,8 +212,50 @@ impl FakeService {
                 timing,
                 next_outcome: ScriptedOutcome::Succeed,
                 jobs: HashMap::new(),
+                model: FakeModelDownload::present(),
             }),
         }
+    }
+
+    /// A healthy fake whose simulated model is *not yet* present (T13,
+    /// FR-17) -- the first-run "model missing" case.
+    pub fn with_model_absent() -> Self {
+        let fake = Self::new();
+        fake.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .model = FakeModelDownload::absent();
+        fake
+    }
+
+    /// Script the *next* started model transfer to fail once it reaches its
+    /// terminal poll (mirrors [`FakeService::queue_failure`] for jobs).
+    pub fn queue_model_download_failure(&self) {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .model
+            .fail_next = true;
+    }
+
+    /// Simulate a `SetupDownload` whose CUDA-runtime phase failed and
+    /// continued into the model phase anyway (E4, E13): `cuda_runtime_present`
+    /// flips to `false` and `message` is carried verbatim on every
+    /// subsequent health/status call, until a fresh [`FakeService`] is built.
+    pub fn set_cuda_warning(&self, message: impl Into<String>) {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.model.cuda_runtime_present = false;
+        inner.model.cuda_warning = Some(message.into());
+    }
+
+    /// Simulate the *durable* CUDA-missing case (E13): a fresh sidecar
+    /// process after an earlier run's failed CUDA download -- no
+    /// `SetupDownload` instance survives a restart, so `cuda_warning` is
+    /// `None`, but `/health.cuda_runtime_present` still durably reports the
+    /// runtime missing.
+    pub fn set_cuda_runtime_missing(&self) {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.model.cuda_runtime_present = false;
     }
 
     /// Mark the fake up or down. While down, `health()` and `submit()`
@@ -114,6 +295,13 @@ impl TranscriptionService for FakeService {
         Ok(ServiceHealth {
             ready: true,
             detail: None,
+            model_present: inner.model.present,
+            // The fake never simulates a GPU-less host: `Some(false)`
+            // matches its default "no runtime downloaded yet" state, and
+            // flips to `Some(true)` once a simulated CUDA phase completes
+            // (`FakeModelDownload::advance_and_peek`, T13's own convention
+            // for `present`/`model_present`).
+            cuda_runtime_present: Some(inner.model.cuda_runtime_present),
         })
     }
 
@@ -189,6 +377,23 @@ impl TranscriptionService for FakeService {
                 error_message: Some(message.clone()),
             }),
         }
+    }
+
+    async fn model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.model.advance_and_peek())
+    }
+
+    async fn start_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.model.start();
+        Ok(inner.model.peek())
+    }
+
+    async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.model.cancel();
+        Ok(inner.model.peek())
     }
 }
 
@@ -355,5 +560,193 @@ mod tests {
 
         assert_eq!(JobState::from_wire("bogus"), None);
         assert_eq!(JobStatus::from_wire("bogus", 0.0, None, None), None);
+    }
+
+    // -- model download simulation (T13, FR-12, FR-16, FR-17) -------------
+
+    #[test]
+    fn a_default_fake_reports_the_model_present() {
+        run(async {
+            let fake = FakeService::new();
+            let health = fake.health().await.expect("health should succeed");
+            assert!(health.model_present);
+        });
+    }
+
+    #[test]
+    fn with_model_absent_reports_idle_and_not_present_until_started() {
+        run(async {
+            let fake = FakeService::with_model_absent();
+            let health = fake.health().await.expect("health should succeed");
+            assert!(!health.model_present);
+            let status = fake
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert_eq!(status.state, ModelDownloadState::Idle);
+        });
+    }
+
+    #[test]
+    fn starting_a_download_walks_downloading_to_complete_with_nondecreasing_bytes_and_flips_model_present(
+    ) {
+        run(async {
+            let fake = FakeService::with_model_absent();
+            let first = fake
+                .start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+            assert_eq!(first.state, ModelDownloadState::Downloading);
+
+            let mut last_downloaded = -1i64;
+            let mut terminal = None;
+            for _ in 0..10 {
+                let status = fake
+                    .model_download_status()
+                    .await
+                    .expect("model_download_status should succeed");
+                assert!(
+                    i64::try_from(status.downloaded_bytes).unwrap() >= last_downloaded,
+                    "downloaded_bytes must never decrease"
+                );
+                last_downloaded = i64::try_from(status.downloaded_bytes).unwrap();
+                if status.state == ModelDownloadState::Complete {
+                    terminal = Some(status);
+                    break;
+                }
+            }
+
+            let terminal = terminal.expect("transfer must reach Complete");
+            assert_eq!(terminal.downloaded_bytes, terminal.total_bytes);
+            let health = fake.health().await.expect("health should succeed");
+            assert!(
+                health.model_present,
+                "model_present must flip true once the simulated transfer completes"
+            );
+        });
+    }
+
+    #[test]
+    fn a_second_start_while_downloading_does_not_restart_the_transfer() {
+        run(async {
+            let fake = FakeService::with_model_absent();
+            fake.start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+            let after_one_poll = fake
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert!(after_one_poll.downloaded_bytes > 0);
+
+            // A second start while already downloading is a no-op -- it
+            // must not reset progress back to zero (F2: never a parallel
+            // transfer).
+            let second = fake
+                .start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+            assert_eq!(second.state, ModelDownloadState::Downloading);
+            assert!(second.downloaded_bytes >= after_one_poll.downloaded_bytes);
+        });
+    }
+
+    #[test]
+    fn cancel_leaves_a_retryable_cancelled_state() {
+        run(async {
+            let fake = FakeService::with_model_absent();
+            fake.start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+            let cancelled = fake
+                .cancel_model_download()
+                .await
+                .expect("cancel_model_download should succeed");
+            assert_eq!(cancelled.state, ModelDownloadState::Cancelled);
+
+            // Retryable: starting again begins a fresh transfer.
+            let retried = fake
+                .start_model_download()
+                .await
+                .expect("a cancelled transfer must be retryable");
+            assert_eq!(retried.state, ModelDownloadState::Downloading);
+        });
+    }
+
+    #[test]
+    fn queue_model_download_failure_reports_a_verbatim_error_and_never_marks_the_model_present() {
+        run(async {
+            let fake = FakeService::with_model_absent();
+            fake.queue_model_download_failure();
+            fake.start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+
+            let mut terminal = None;
+            for _ in 0..10 {
+                let status = fake
+                    .model_download_status()
+                    .await
+                    .expect("model_download_status should succeed");
+                if status.state == ModelDownloadState::Error {
+                    terminal = Some(status);
+                    break;
+                }
+            }
+
+            let terminal = terminal.expect("transfer must reach Error");
+            assert!(terminal.error_message.is_some());
+            let health = fake.health().await.expect("health should succeed");
+            assert!(
+                !health.model_present,
+                "a failed transfer must never be reported as present"
+            );
+        });
+    }
+
+    #[test]
+    fn set_cuda_runtime_missing_flips_cuda_runtime_present_without_a_warning() {
+        run(async {
+            let fake = FakeService::new();
+
+            fake.set_cuda_runtime_missing();
+
+            let health = fake.health().await.expect("health should succeed");
+            assert_eq!(health.cuda_runtime_present, Some(false));
+            assert!(health.model_present);
+
+            let status = fake
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert_eq!(
+                status.cuda_warning, None,
+                "a fresh process's durable CUDA-missing state carries no in-session warning"
+            );
+        });
+    }
+
+    #[test]
+    fn set_cuda_warning_flips_cuda_runtime_present_and_carries_the_message_verbatim() {
+        run(async {
+            let fake = FakeService::new();
+            let health_before = fake.health().await.expect("health should succeed");
+            assert_eq!(health_before.cuda_runtime_present, Some(true));
+
+            fake.set_cuda_warning("digest mismatch for nvidia_cublas_cu12.whl");
+
+            let health_after = fake.health().await.expect("health should succeed");
+            assert_eq!(health_after.cuda_runtime_present, Some(false));
+            assert!(health_after.model_present);
+
+            let status = fake
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert_eq!(
+                status.cuda_warning.as_deref(),
+                Some("digest mismatch for nvidia_cublas_cu12.whl")
+            );
+        });
     }
 }

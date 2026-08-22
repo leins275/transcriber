@@ -57,8 +57,15 @@ def valid_job_body(tmp_app_dir: Path) -> dict[str, str]:
 
 
 def test_health_returns_ok_with_unloaded_model_state_before_any_job(
-    client: TestClient, config: Config
+    client: TestClient, config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # E13: pin the GPU-presence probe so this shape assertion is not
+    # machine-dependent (a real `nvidia-smi` on this test runner's `PATH`
+    # would otherwise flip `cuda_runtime_present` from `None` to `False`).
+    from transcription.api import model_routes
+
+    monkeypatch.setattr(model_routes, "_nvidia_gpu_present", lambda: False)
+
     response = client.get("/health")
 
     assert response.status_code == 200
@@ -70,7 +77,10 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
     # `model_state: "unloaded"` -- still correct, since nothing has loaded
     # anything yet. Once a job actually runs (see test_api_jobs.py), the
     # provider is cached and subsequent calls report its live, resolved
-    # `describe()` instead.
+    # `describe()` instead. `model_present` is windows-installer-build T11's
+    # addition (FR-17): no model has been downloaded into this fixture's
+    # `tmp_app_dir`, so it reads `False`. `cuda_runtime_present` is E13's
+    # addition: `None` on this GPU-less-probed host.
     assert body == {
         "status": "ok",
         "version": "0.1.0",
@@ -78,6 +88,8 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         "model": "large-v3",
         "device": "auto",
         "model_state": "unloaded",
+        "model_present": False,
+        "cuda_runtime_present": None,
     }
 
 

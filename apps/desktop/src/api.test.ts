@@ -107,6 +107,20 @@ describe("api dialog wrappers", () => {
     });
     await expect(chooseMeetingsFolder()).resolves.toBe("D:\\Meetings");
   });
+
+  it("chooseMeetingsFolder forwards a sane default path to the dialog (E2/FR-10)", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "plugin:dialog|open") return "D:\\Meetings";
+      return null;
+    });
+    await chooseMeetingsFolder("C:\\Users\\op\\Meetings");
+    const openCall = seen.find((call) => call.cmd === "plugin:dialog|open");
+    expect(
+      (openCall?.payload as { options?: { defaultPath?: string } })?.options?.defaultPath,
+    ).toBe("C:\\Users\\op\\Meetings");
+  });
 });
 
 describe("api.revealJob", () => {
@@ -118,6 +132,80 @@ describe("api.revealJob", () => {
     });
     await api.revealJob("job-1");
     expect(seen).toContainEqual({ cmd: "reveal_job", payload: { jobId: "job-1" } });
+  });
+});
+
+describe("api model-download trio (T13)", () => {
+  it("modelDownloadStatus invokes model_download_status with no arguments", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "model_download_status") {
+        return {
+          state: "idle",
+          downloaded_bytes: 0,
+          total_bytes: 0,
+          percent: 0,
+          error_kind: null,
+          error_message: null,
+          model_present: false,
+        };
+      }
+      return null;
+    });
+
+    const status = await api.modelDownloadStatus();
+
+    expect(status.state).toBe("idle");
+    expect(seen).toContainEqual({ cmd: "model_download_status", payload: {} });
+  });
+
+  it("startModelDownload invokes start_model_download with no arguments", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "start_model_download") {
+        return {
+          state: "downloading",
+          downloaded_bytes: 0,
+          total_bytes: 100,
+          percent: 0,
+          error_kind: null,
+          error_message: null,
+          model_present: false,
+        };
+      }
+      return null;
+    });
+
+    const status = await api.startModelDownload();
+
+    expect(status.state).toBe("downloading");
+    expect(seen).toContainEqual({ cmd: "start_model_download", payload: {} });
+  });
+
+  it("cancelModelDownload invokes cancel_model_download with no arguments", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "cancel_model_download") {
+        return {
+          state: "cancelled",
+          downloaded_bytes: 0,
+          total_bytes: 100,
+          percent: 0,
+          error_kind: null,
+          error_message: null,
+          model_present: false,
+        };
+      }
+      return null;
+    });
+
+    const status = await api.cancelModelDownload();
+
+    expect(status.state).toBe("cancelled");
+    expect(seen).toContainEqual({ cmd: "cancel_model_download", payload: {} });
   });
 });
 

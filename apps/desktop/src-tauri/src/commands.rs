@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
+use crate::app_paths;
 use crate::config::{self, Settings};
 use crate::error::AppError;
 use crate::jobs::{self, JobRegistry, JobSnapshot};
@@ -31,6 +32,11 @@ use crate::paths;
 use crate::service::http::HttpTranscriptionService;
 use crate::service::{JobStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService};
 use crate::sidecar::{self, ReadyLine, Sidecar, SidecarError, SidecarPlan, SidecarSpawnConfig};
+
+/// The three model-download commands (T13, FR-12, FR-17) -- a submodule of
+/// this file (`src/commands/model.rs`) rather than a sibling of `commands`
+/// in `lib.rs`, so it shares `AppState`/`ServiceStatusSink` directly.
+pub mod model;
 
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
@@ -54,6 +60,24 @@ pub struct SettingsResponse {
     /// actionable error instead of the app silently discarding their old
     /// settings or panicking before a window ever appears.
     pub config_error: Option<String>,
+    /// A sane starting point for the vault folder picker (E2/FR-10: "a
+    /// sane default") -- additive to the frozen IPC contract, so an older
+    /// frontend build simply ignores it. `None` when `%USERPROFILE%` is
+    /// unset (never expected on a real Windows session).
+    pub default_meetings_root: Option<String>,
+}
+
+/// `%USERPROFILE%\Meetings` (E2/FR-10) -- outside the application folder by
+/// construction, so it is never rejected by `config::set_meetings_root`'s
+/// own app-folder check.
+fn default_meetings_root() -> Option<String> {
+    let home = std::env::var("USERPROFILE").ok()?;
+    Some(
+        PathBuf::from(home)
+            .join("Meetings")
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 fn build_settings_response(settings: &Settings, config_error: Option<String>) -> SettingsResponse {
@@ -67,6 +91,7 @@ fn build_settings_response(settings: &Settings, config_error: Option<String>) ->
             .map(|ext| ext.to_string())
             .collect(),
         config_error,
+        default_meetings_root: default_meetings_root(),
     }
 }
 
@@ -506,7 +531,12 @@ pub async fn set_meetings_root_handler(
 ) -> Result<SettingsResponse, AppError> {
     let updated = {
         let mut settings = state.settings.write().await;
-        config::set_meetings_root(&state.config_dir, &mut settings, path)?;
+        config::set_meetings_root(
+            &state.config_dir,
+            &app_paths::app_dir(),
+            &mut settings,
+            path,
+        )?;
         settings.clone()
     };
 

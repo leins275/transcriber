@@ -29,7 +29,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::{JobStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService};
+use super::{
+    JobStatus, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest,
+    TranscriptionService,
+};
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
 /// bound is fine for those — E11's fix only tightens `status()`, below).
@@ -149,9 +152,54 @@ struct StatusResponse {
 }
 
 /// `GET /health` response body, reduced to the fields this seam uses.
+/// `model_present` (T13, FR-17) defaults to `false` when the field is
+/// absent so a test fixture written before T13 (or a build of F2 older than
+/// it) still decodes rather than failing the whole health check.
 #[derive(Deserialize)]
 struct HealthResponse {
     status: String,
+    #[serde(default)]
+    model_present: bool,
+    /// E13: `None` when the field is absent (an older F2 build), same
+    /// default-on-absence convention as `model_present` above.
+    #[serde(default)]
+    cuda_runtime_present: Option<bool>,
+}
+
+/// `GET`/`POST`/`DELETE /v1/model/download` response body (T13, FR-12).
+#[derive(Deserialize)]
+struct ModelDownloadResponse {
+    state: String,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    percent: f64,
+    #[serde(default)]
+    error_kind: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
+    /// E13: only present when a `SetupDownload`'s CUDA-runtime phase failed
+    /// and the setup continued into the model phase anyway (E4) -- absent
+    /// otherwise, hence `#[serde(default)]`.
+    #[serde(default)]
+    cuda_warning: Option<String>,
+}
+
+impl ModelDownloadResponse {
+    fn into_status(self) -> Result<ModelDownloadStatus, ServiceError> {
+        let state =
+            ModelDownloadState::from_wire(&self.state).ok_or_else(|| ServiceError::Decode {
+                message: format!("unrecognised model download state {:?}", self.state),
+            })?;
+        Ok(ModelDownloadStatus {
+            state,
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
+            percent: self.percent,
+            error_kind: self.error_kind,
+            error_message: self.error_message,
+            cuda_warning: self.cuda_warning,
+        })
+    }
 }
 
 /// Reject any base URL that is not plain `http` on a loopback host (NFR-5),
@@ -232,6 +280,8 @@ impl TranscriptionService for HttpTranscriptionService {
         Ok(ServiceHealth {
             ready: parsed.status == "ok",
             detail: None,
+            model_present: parsed.model_present,
+            cuda_runtime_present: parsed.cuda_runtime_present,
         })
     }
 
@@ -284,6 +334,45 @@ impl TranscriptionService for HttpTranscriptionService {
             message: format!("unrecognised job status {:?}", parsed.status),
         })
     }
+
+    async fn model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.get(self.endpoint("/v1/model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn start_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.post(self.endpoint("/v1/model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.delete(self.endpoint("/v1/model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
 }
 
 #[cfg(test)]
@@ -293,7 +382,9 @@ mod tests {
     use wiremock::matchers::{body_json, header, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use super::super::{JobState, ServiceError, SubmitRequest, TranscriptionService};
+    use super::super::{
+        JobState, ModelDownloadState, ServiceError, SubmitRequest, TranscriptionService,
+    };
     use super::HttpTranscriptionService;
 
     fn run<F: std::future::Future>(future: F) -> F::Output {
@@ -676,6 +767,246 @@ mod tests {
                  default client, took {elapsed:?}"
             );
             assert!(matches!(err, ServiceError::Unavailable { .. }));
+        });
+    }
+
+    // -- model download (T13, FR-12, FR-17) -------------------------------
+
+    #[test]
+    fn health_reports_model_present_from_the_wire_field() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": "ok",
+                    "model_present": true,
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let health = service.health().await.expect("health should succeed");
+            assert!(health.model_present);
+        });
+    }
+
+    #[test]
+    fn health_defaults_model_present_to_false_when_the_field_is_absent() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"status": "ok"})),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let health = service.health().await.expect("health should succeed");
+            assert!(!health.model_present);
+        });
+    }
+
+    #[test]
+    fn health_decodes_cuda_runtime_present_from_the_wire_field_and_defaults_to_none() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "status": "ok",
+                    "cuda_runtime_present": false,
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let health = service.health().await.expect("health should succeed");
+            assert_eq!(health.cuda_runtime_present, Some(false));
+        });
+    }
+
+    #[test]
+    fn health_defaults_cuda_runtime_present_to_none_when_the_field_is_absent() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"status": "ok"})),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let health = service.health().await.expect("health should succeed");
+            assert_eq!(health.cuda_runtime_present, None);
+        });
+    }
+
+    #[test]
+    fn model_download_status_get_maps_the_wire_shape() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/model/download"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "state": "downloading",
+                    "downloaded_bytes": 512,
+                    "total_bytes": 1024,
+                    "percent": 50.0,
+                    "error_kind": serde_json::Value::Null,
+                    "error_message": serde_json::Value::Null,
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let status = service
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert_eq!(status.state, ModelDownloadState::Downloading);
+            assert_eq!(status.downloaded_bytes, 512);
+            assert_eq!(status.total_bytes, 1024);
+            assert_eq!(status.percent, 50.0);
+            assert_eq!(status.cuda_warning, None);
+        });
+    }
+
+    #[test]
+    fn model_download_status_get_decodes_a_cuda_warning_when_present() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/model/download"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "state": "complete",
+                    "downloaded_bytes": 1024,
+                    "total_bytes": 1024,
+                    "percent": 100.0,
+                    "cuda_warning": "digest mismatch for nvidia_cublas_cu12.whl",
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let status = service
+                .model_download_status()
+                .await
+                .expect("model_download_status should succeed");
+            assert_eq!(
+                status.cuda_warning.as_deref(),
+                Some("digest mismatch for nvidia_cublas_cu12.whl")
+            );
+        });
+    }
+
+    #[test]
+    fn start_model_download_posts_and_sends_the_bearer_token() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/model/download"))
+                .and(header("Authorization", "Bearer secret-token"))
+                .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "state": "downloading",
+                    "downloaded_bytes": 0,
+                    "total_bytes": 1024,
+                    "percent": 0.0,
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service =
+                HttpTranscriptionService::new(&server.uri(), Some("secret-token".to_string()))
+                    .expect("loopback base url must be accepted");
+            let status = service
+                .start_model_download()
+                .await
+                .expect("start_model_download should succeed");
+            assert_eq!(status.state, ModelDownloadState::Downloading);
+        });
+    }
+
+    #[test]
+    fn cancel_model_download_deletes_and_maps_cancelled() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/model/download"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "state": "cancelled",
+                    "downloaded_bytes": 400,
+                    "total_bytes": 1024,
+                    "percent": 39.0625,
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let status = service
+                .cancel_model_download()
+                .await
+                .expect("cancel_model_download should succeed");
+            assert_eq!(status.state, ModelDownloadState::Cancelled);
+        });
+    }
+
+    #[test]
+    fn model_download_status_a_401_response_maps_to_an_auth_error() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/model/download"))
+                .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "detail": "unauthorized"
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("wrong".to_string()))
+                .expect("loopback base url must be accepted");
+            let err = service
+                .model_download_status()
+                .await
+                .expect_err("model_download_status should fail on 401");
+            assert!(matches!(err, ServiceError::Auth { .. }));
+        });
+    }
+
+    #[test]
+    fn model_download_status_an_unrecognised_wire_state_maps_to_a_decode_error() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/model/download"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "state": "bogus",
+                    "downloaded_bytes": 0,
+                    "total_bytes": 0,
+                    "percent": 0.0,
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let err = service
+                .model_download_status()
+                .await
+                .expect_err("an unrecognised wire state must not be silently accepted");
+            assert!(matches!(err, ServiceError::Decode { .. }));
         });
     }
 }

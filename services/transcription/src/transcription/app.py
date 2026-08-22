@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -26,11 +26,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from transcription import __version__
+from transcription.api import model_routes
+from transcription.api.model_routes import (
+    ModelDownloadManager,
+    build_model_router,
+    is_model_present,
+)
 from transcription.config import Config
+from transcription.cuda_runtime import is_cuda_runtime_present
 from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import JobManager, JobNotFoundError
 from transcription.ledger import Ledger
-from transcription.schema import Health, JobCreate, JobStatus
+from transcription.model_download import ModelDownload
+from transcription.schema import JobCreate, JobStatus
 
 _logger = logging.getLogger("transcription")
 
@@ -55,10 +63,21 @@ def _error_body(
     return {"error_kind": kind.value, "error_message": message, "provider_status": provider_status}
 
 
-def create_app(config: Config) -> FastAPI:
-    """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1)."""
+def create_app(
+    config: Config,
+    *,
+    model_download_factory: Callable[[], ModelDownload] | None = None,
+) -> FastAPI:
+    """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1).
+
+    ``model_download_factory`` is a test-only seam (mirrors T10's
+    ``HubClient``/``Transport`` seams): production callers never pass it, so
+    :class:`ModelDownloadManager` builds its own real download from
+    ``config``.
+    """
     ledger = Ledger(config.db_path)
     job_manager = JobManager(config, ledger)
+    model_download_manager = ModelDownloadManager(config, factory=model_download_factory)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -74,6 +93,7 @@ def create_app(config: Config) -> FastAPI:
     app.state.config = config
     app.state.ledger = ledger
     app.state.job_manager = job_manager
+    app.state.model_download_manager = model_download_manager
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         """Bearer-auth dependency for every `/v1/*` route (FR-9).
@@ -121,8 +141,8 @@ def create_app(config: Config) -> FastAPI:
             content=_error_body(ErrorKind.INTERNAL, "internal error"),
         )
 
-    @app.get("/health", response_model=Health)
-    async def health() -> Health:
+    @app.get("/health")
+    async def health() -> dict[str, Any]:
         public = config.public()
         # `provider_info()` never constructs (and so never imports) a
         # provider library on this request path (E15, NFR-1): before
@@ -132,14 +152,30 @@ def create_app(config: Config) -> FastAPI:
         # provider's live, cached `describe()` -- the resolved device and
         # advancing `model_state` (FR-2, FR-3 acceptance).
         info = job_manager.provider_info()
-        return Health(
-            status="ok",
-            version=__version__,
-            provider=public["provider"],
-            model=info.model,
-            device=info.device,
-            model_state=info.model_state,
-        )
+        return {
+            "status": "ok",
+            "version": __version__,
+            "provider": public["provider"],
+            "model": info.model,
+            "device": info.device,
+            "model_state": info.model_state,
+            # So the app can detect a missing model without guessing,
+            # instead of inferring it from a failed transcription (FR-17).
+            "model_present": is_model_present(config),
+            # E13: whether the CUDA runtime is on disk, gated by the same
+            # `_nvidia_gpu_present()` probe `build_setup_download` decides the
+            # download on -- `None` on a GPU-less host (or non-Windows) so
+            # the app never prompts about a runtime that machine could never
+            # use. Reports `is_cuda_runtime_present()` verbatim otherwise, so
+            # the UI can detect "model present, CUDA runtime missing" even
+            # outside an active `cuda_warning` (e.g. a fresh process after an
+            # earlier run's failed download).
+            "cuda_runtime_present": (
+                is_cuda_runtime_present(config.app_dir)
+                if model_routes._nvidia_gpu_present()
+                else None
+            ),
+        }
 
     v1_deps = [Depends(require_token)]
 
@@ -200,5 +236,7 @@ def create_app(config: Config) -> FastAPI:
     async def cancel_job(job_id: str) -> dict[str, str]:
         await job_manager.cancel(job_id)
         return {"status": "cancelled"}
+
+    app.include_router(build_model_router(require_token))
 
     return app

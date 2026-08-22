@@ -216,7 +216,13 @@ def test_constructor_kwargs_are_exactly_the_documented_set_on_cpu(
         "cpu_threads",
         "local_files_only",
     }
-    assert kwargs["model_size_or_path"] == "large-v3"
+    # The literal, already-model-specific `model_path` itself, not the bare
+    # model id (Defect 2 fix): `config.model_path`/`TRANSCRIBER_MODEL_PATH`
+    # already names the exact snapshot directory
+    # (`docs/config-contract.md`), and `faster_whisper` special-cases a
+    # literal local directory via `os.path.isdir(...)`, bypassing the hub
+    # cache convention entirely.
+    assert kwargs["model_size_or_path"] == "/my/models"
     assert kwargs["device"] == "cpu"
     assert kwargs["download_root"] == "/my/models"
     assert kwargs["local_files_only"] is True
@@ -257,6 +263,73 @@ def test_whisper_model_constructor_failure_maps_to_model_load(
 
     assert exc_info.value.kind == ErrorKind.MODEL_LOAD
     assert "disk full" in exc_info.value.message
+
+
+def test_auto_resolved_cuda_construction_failure_falls_back_to_cpu_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E4: `ctranslate2.get_cuda_device_count() > 0` succeeds even when
+    cuBLAS/cuDNN cannot actually be loaded (e.g. the first-run CUDA runtime
+    download never ran) -- an `auto`-resolved `cuda` whose model
+    construction fails with a CUDA/CTranslate2 runtime-load error must fall
+    back to CPU and still produce a usable model, rather than hard-failing
+    `model_load` on a machine the spec documents CPU as a best-effort
+    fallback for."""
+    monkeypatch.setattr(local_whisper, "_cuda_device_count", lambda: 1)
+    calls: list[dict[str, Any]] = []
+
+    class _FallbackModel:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+            if kwargs["device"] == "cuda":
+                raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+        def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, _FWInfo]:
+            return iter(_default_segments()), _FWInfo()
+
+    monkeypatch.setattr(local_whisper, "WhisperModel", _FallbackModel)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="auto"))
+    result = provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert result.text == "hello there world"
+    assert len(calls) == 2
+    assert calls[0]["device"] == "cuda"
+    assert calls[1]["device"] == "cpu"
+    assert calls[1]["compute_type"] == "int8"
+    info = provider.describe()
+    assert info.device == "cpu"
+    assert info.compute_type == "int8"
+    assert info.model_state == "loaded"
+
+
+def test_explicit_cuda_device_construction_failure_does_not_fall_back_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """E4 (negative case): an operator who names `device: cuda` explicitly
+    gets exactly what they asked for -- a load failure there must still
+    raise `model_load`, never silently downgrade to CPU."""
+    calls: list[dict[str, Any]] = []
+
+    class _AlwaysCudaFailModel:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+            raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+    monkeypatch.setattr(local_whisper, "WhisperModel", _AlwaysCudaFailModel)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="cuda"))
+
+    with pytest.raises(ServiceError) as exc_info:
+        provider.transcribe(
+            Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+        )
+
+    assert exc_info.value.kind == ErrorKind.MODEL_LOAD
+    assert len(calls) == 1, "an explicit device must never trigger a second, cpu, attempt"
+    assert provider.describe().device == "cuda"
 
 
 def test_transcribe_decode_failure_maps_to_audio_decode_naming_file(
