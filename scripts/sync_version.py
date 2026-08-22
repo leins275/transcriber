@@ -1,10 +1,16 @@
 """Product version single source of truth (FR-5).
 
 ``version.txt`` at the repo root is the single source of truth. This script
-propagates it into the five downstream manifests that carry their own copy
-of the version and never edits anything else in those files: it rewrites
-only the ``version`` field, preserving key order, indentation and any other
+propagates it into the six downstream manifests that carry their own copy of
+the version and never edits anything else in those files: it rewrites only
+the ``version`` field, preserving key order, indentation and any other
 content byte-for-byte.
+
+One of those six is not a manifest at all but Python source --
+``transcription/__init__.py``'s ``__version__``. It is here because it is
+not cosmetic: ``/health`` reports that value, and the sqlite ledger stamps
+it into every job row as ``service_version``. Left unsynced, a release
+reports the previous version at runtime and mislabels its own history.
 
 The two lockfiles carry their own copies as well -- ``Cargo.lock`` has one
 ``version`` line per workspace member, and ``services/transcription/uv.lock``
@@ -40,7 +46,7 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 @dataclass(frozen=True)
 class Manifest:
     path: Path
-    kind: str  # "json" | "toml"
+    kind: str  # "json" | "toml" | "python"
     section: str | None = None  # only meaningful for kind == "toml"
 
 
@@ -75,11 +81,15 @@ MANIFESTS: list[Manifest] = [
     Manifest(REPO_ROOT / "apps/desktop/src-tauri/Cargo.toml", "toml", "package"),
     Manifest(REPO_ROOT / "crates/vault/Cargo.toml", "toml", "package"),
     Manifest(REPO_ROOT / "services/transcription/pyproject.toml", "toml", "project"),
+    Manifest(REPO_ROOT / "services/transcription/src/transcription/__init__.py", "python"),
 ]
 
 _JSON_VERSION_RE = re.compile(r'("version"\s*:\s*)"([^"]*)"')
 _TOML_VERSION_LINE_RE = re.compile(r'(?m)^version\s*=\s*"([^"]*)"\s*$')
 _TOML_SECTION_HEADER_RE = re.compile(r"(?m)^\[(?P<name>[^\]]+)\]\s*$")
+# A module-level `__version__ = "..."` assignment, anchored to the start of a
+# line so a mention inside a docstring or a comment is never rewritten.
+_PY_VERSION_RE = re.compile(r'(?m)^(__version__\s*=\s*")([^"]*)(")')
 
 
 def _lock_version_re(name: str) -> re.Pattern[str]:
@@ -184,9 +194,28 @@ def _lock_label(package: LockPackage) -> str:
     return f"{package.path.relative_to(REPO_ROOT).as_posix()} ({package.name})"
 
 
+def _read_python_version(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    match = _PY_VERSION_RE.search(text)
+    if not match:
+        raise ValueError(f"no module-level __version__ found in {path}")
+    return match.group(2)
+
+
+def _write_python_version(path: Path, version: str) -> None:
+    newline = _detect_newline(path)
+    text = path.read_text(encoding="utf-8")
+    new_text, count = _PY_VERSION_RE.subn(rf"\g<1>{version}\g<3>", text, count=1)
+    if count == 0:
+        raise ValueError(f"no module-level __version__ found in {path}")
+    path.write_text(new_text, encoding="utf-8", newline=newline)
+
+
 def manifest_version(manifest: Manifest) -> str:
     if manifest.kind == "json":
         return _read_json_version(manifest.path)
+    if manifest.kind == "python":
+        return _read_python_version(manifest.path)
     assert manifest.section is not None
     return _read_toml_version(manifest.path, manifest.section)
 
@@ -194,6 +223,8 @@ def manifest_version(manifest: Manifest) -> str:
 def set_manifest_version(manifest: Manifest, version: str) -> None:
     if manifest.kind == "json":
         _write_json_version(manifest.path, version)
+    elif manifest.kind == "python":
+        _write_python_version(manifest.path, version)
     else:
         assert manifest.section is not None
         _write_toml_version(manifest.path, manifest.section, version)

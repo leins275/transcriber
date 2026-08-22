@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "sync_version.py"
 
@@ -261,9 +263,7 @@ def test_uv_lock_project_entry_matches_version_txt():
     # failure, before this was synced.
     version = sync_version.read_version()
     transcription = next(
-        package
-        for package in sync_version.LOCK_PACKAGES
-        if package.path == sync_version.UV_LOCK
+        package for package in sync_version.LOCK_PACKAGES if package.path == sync_version.UV_LOCK
     )
     assert sync_version.lock_version(transcription) == version
 
@@ -301,12 +301,74 @@ def test_set_syncs_the_uv_lock_project_without_touching_dependencies():
 
         after = lock.read_text(encoding="utf-8")
         changed = [
-            (a, b)
-            for a, b in zip(before.splitlines(), after.splitlines(), strict=True)
-            if a != b
+            (a, b) for a, b in zip(before.splitlines(), after.splitlines(), strict=True) if a != b
         ]
         # Exactly one line: the project's own version. Every other
         # `[[package]]` in that file is a third-party dependency.
         assert len(changed) == 1, changed
     finally:
         _restore(snapshot)
+
+
+# -- the Python package's own `__version__` --------------------------------
+#
+# Not cosmetic: `/health` reports it and the sqlite ledger stamps it into
+# every job row as `service_version`, so a release that leaves it behind
+# reports the previous version at runtime and mislabels its own history.
+
+
+def test_transcription_package_version_matches_version_txt():
+    package_init = next(m for m in sync_version.MANIFESTS if m.kind == "python")
+    assert sync_version.manifest_version(package_init) == sync_version.read_version()
+
+
+def test_check_fails_when_only_the_package_version_drifts():
+    package_init = next(m for m in sync_version.MANIFESTS if m.kind == "python")
+    snapshot = _snapshot([package_init.path])
+    try:
+        text = package_init.path.read_text(encoding="utf-8")
+        package_init.path.write_text(
+            text.replace('__version__ = "', '__version__ = "9.9.9', 1),
+            encoding="utf-8",
+            newline=sync_version._detect_newline(package_init.path),
+        )
+
+        result = _run("--check")
+
+        assert result.returncode == 1
+        assert "__init__.py" in result.stderr
+    finally:
+        _restore(snapshot)
+
+
+# A module that mentions `__version__` three times but assigns it once:
+# in a docstring, in a commented-out line, and for real.
+FIXTURE_MODULE = "\n".join(
+    [
+        "'A docstring mentioning __version__ = 0.0.1 in prose.'",
+        "",
+        '__version__ = "0.1.0"',
+        '# __version__ = "0.0.9" (an old value, commented out)',
+        "",
+    ]
+)
+
+
+def test_set_rewrites_only_the_assignment_not_the_docstring(tmp_path):
+    # Anchored to the start of a line, so a `__version__` mentioned in prose
+    # or in a commented-out line is never rewritten.
+    module = tmp_path / "__init__.py"
+    module.write_text(FIXTURE_MODULE, encoding="utf-8", newline="\n")
+
+    sync_version._write_python_version(module, "2.0.0")
+
+    written = module.read_text(encoding="utf-8")
+    assert '__version__ = "2.0.0"' in written
+    assert "in prose" in written
+    assert "0.0.1" in written, "the docstring must be untouched"
+    assert "0.0.9" in written, "the commented-out line must be untouched"
+
+
+def test_read_python_version_reports_a_module_with_no_version():
+    with pytest.raises(ValueError):
+        sync_version._read_python_version(REPO_ROOT / "scripts" / "sync_version.py")
