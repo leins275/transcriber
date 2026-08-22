@@ -142,6 +142,63 @@ def test_api_key_in_overrides_raises_config_error(tmp_app_dir: Path) -> None:
         load_config(env=env, overrides={"provider_api_key": "sk-from-argv"})
 
 
+def test_real_desktop_config_json_model_shape_unpacks_into_flat_fields(
+    tmp_app_dir: Path,
+) -> None:
+    """Field report / Bug 3 regression: F3's real config.json schema
+    (docs/config-contract.md) nests the model choice as
+    ``"model": {"id": ..., "path": ...}``. Before the fix, the generic
+    known-field passthrough copied this dict verbatim onto `Config.model`
+    (a field that must be a plain string), which surfaced many calls later
+    as an unhandled `sqlite3.ProgrammingError` on every job submission
+    (HTTP 500 `internal`) -- this is the exact config.json shape the
+    installed app writes.
+    """
+    _write_config(
+        tmp_app_dir,
+        {
+            "schema_version": 1,
+            "meetings_root": str(tmp_app_dir),
+            "service": {"base_url": None},
+            "model": {
+                "id": "faster-whisper-large-v3",
+                "path": r"C:\Apps\Transcriber\models\faster-whisper-large-v3",
+            },
+        },
+    )
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.model == "faster-whisper-large-v3"
+    assert cfg.model_path == r"C:\Apps\Transcriber\models\faster-whisper-large-v3"
+
+
+def test_real_desktop_config_json_with_null_model_id_and_path_keeps_defaults(
+    tmp_app_dir: Path,
+) -> None:
+    """The first-run/no-override shape (`model.id`/`model.path` both
+    `null`, exactly what the installer and the app's first-run wizard
+    write) must leave `Config.model` at its string default -- never a
+    `dict` -- and `Config.model_path` at its own computed default."""
+    _write_config(
+        tmp_app_dir,
+        {
+            "schema_version": 1,
+            "meetings_root": str(tmp_app_dir),
+            "service": {"base_url": None},
+            "model": {"id": None, "path": None},
+        },
+    )
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert isinstance(cfg.model, str)
+    assert cfg.model == "large-v3"
+    assert cfg.model_path == str(tmp_app_dir / "models")
+
+
 def test_default_model_is_large_v3(tmp_app_dir: Path) -> None:
     """E5: the default local model must be large-v3, never a smaller size
     that silently downloads over the network."""
