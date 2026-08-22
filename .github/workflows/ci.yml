@@ -1,16 +1,27 @@
 # Quality gate — the same four `make` targets a developer runs locally
 # (format / lint / type / test), across all three payloads.
 #
-# Runs on `windows-latest` and nowhere else, on purpose. This is not caution:
-# the Rust side imports `std::os::windows::process::CommandExt` and shells out
-# to `explorer.exe`, so it does not compile on Linux at all. Splitting the
-# TypeScript and Python halves onto a cheaper runner would buy a few minutes
-# and cost the ability to say "CI is green" about the thing that actually
-# ships.
+# Split by payload and run in parallel. Serially this was the sum of three
+# independent toolchains; now it is the length of the slowest one, which is
+# Rust (a cold release-profile-adjacent build dominates everything else).
+# The jobs share nothing, so there is no ordering between them to preserve.
+#
+# Where each job runs is a real constraint, not a preference:
+#
+#   rust      windows-only. `commands.rs` imports
+#             `std::os::windows::process::CommandExt` and shells out to
+#             explorer.exe — this code does not compile on Linux at all.
+#   python    windows-only. `runtime_dlls` and `cuda_runtime` are about
+#             Windows DLL loading, and their tests assert on it.
+#   scripts   windows-only. The build-system tests know about NSIS, the
+#             baked pyenv and Windows paths.
+#   frontend  Linux. React and vitest care about none of the above, and a
+#             Linux runner is both quicker to start and billed at 1x
+#             rather than the 2x Windows costs on a private repository.
 #
 # `make` is not installed on GitHub's Windows runners. The Makefile documents
 # a direct one-command-per-line equivalent for exactly this reason (see its
-# header); the steps below are that equivalent, kept in the same order.
+# header); the steps below are that equivalent.
 
 name: CI
 
@@ -30,10 +41,10 @@ permissions:
   contents: read
 
 jobs:
-  gate:
+  rust:
+    name: Rust
     runs-on: windows-latest
     timeout-minutes: 45
-
     steps:
       - uses: actions/checkout@v4
 
@@ -45,82 +56,134 @@ jobs:
         with:
           workspaces: . -> target
 
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      # No separate `cargo check`: clippy with `--all-targets` compiles
+      # strictly more than check does, so running both only pays for a
+      # second full compile with a different fingerprint.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: working tree is clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the Rust suites left the working tree dirty:"
+            git status --porcelain
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
       # `npm ci` (never `npm install`): FR-4 has release builds install from
       # the committed lock in frozen mode, and CI must hold to the same rule
       # or it is testing a different dependency tree than the one that ships.
-      - name: Install frontend dependencies
+      - name: Install dependencies
         run: npm ci --prefix apps/desktop
-
-      - name: Install service dependencies
-        run: uv sync --frozen --directory services/transcription
-
-      # -- format ------------------------------------------------------------
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
 
       - name: prettier
         run: npm --prefix apps/desktop run format:check
 
-      - name: ruff format
-        run: uv run --directory services/transcription ruff format --check .
-
-      # -- lint --------------------------------------------------------------
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
       - name: eslint
         run: npm --prefix apps/desktop run lint
+
+      - name: tsc
+        run: npm --prefix apps/desktop run type
+
+      - name: vitest
+        run: npm --prefix apps/desktop run test
+
+  python:
+    name: Python service
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --directory services/transcription
+
+      - name: ruff format
+        run: uv run --directory services/transcription ruff format --check .
 
       - name: ruff check
         run: uv run --directory services/transcription ruff check .
 
+      - name: mypy
+        run: uv run --directory services/transcription mypy src
+
+      - name: pytest
+        run: uv run --directory services/transcription pytest -q
+
+      - name: working tree is clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "the service suite left the working tree dirty:"
+            git status --porcelain
+            exit 1
+          fi
+
+  repo:
+    name: Build system
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # The single guard that every copy of the product version agrees --
+      # version.txt, the five manifests, and both lockfiles. A drift here is
+      # what breaks a release build with an error naming none of them.
       - name: version manifests in sync
         run: uv run scripts/sync_version.py --check
 
       - name: dependency locks committed
         run: uv run scripts/verify_locks.py --check
 
-      # -- type --------------------------------------------------------------
-      - name: cargo check
-        run: cargo check --workspace
-
-      - name: tsc
-        run: npm --prefix apps/desktop run type
-
-      - name: mypy
-        run: uv run --directory services/transcription mypy src
-
-      # -- test --------------------------------------------------------------
-      - name: cargo test
-        run: cargo test --workspace
-
-      - name: vitest
-        run: npm --prefix apps/desktop run test
-
-      - name: pytest (service)
-        run: uv run --directory services/transcription pytest -q
-
+      # `-m "not slow"` excludes `test_build_pyenv`'s real bake: it downloads a
+      # managed CPython and installs the frozen dependency tree, several
+      # minutes and a few hundred MB, which is not what a per-push gate is
+      # for. It skips itself locally when `uv` is off PATH, but a runner
+      # always has uv, so it has to be excluded explicitly.
+      #
+      # The bake is not left untested -- `release.yml` runs the real one as a
+      # stage of the installer build. And it runs it *before* the tag is
+      # pushed, so a bake that fails on a runner means no release is
+      # published, never a broken one.
       - name: pytest (scripts)
-        run: uv run --with pytest -- pytest scripts/tests -q
+        run: uv run --with pytest -- pytest scripts/tests -q -m "not slow"
 
-      # The suites above write into the tree (baked pyenv fixtures, __pycache__).
-      # NFR-6 requires them to clean up after themselves; a dirty tree here means
-      # a release build would commit something nobody wrote.
-      - name: working tree is clean after the suites
+      # These suites bake fixtures into the tree; NFR-6 requires them to
+      # clean up after themselves, and a dirty tree here would mean a
+      # release build committing something nobody wrote.
+      - name: working tree is clean
         shell: bash
         run: |
           if [ -n "$(git status --porcelain)" ]; then
-            echo "the test suites left the working tree dirty:"
+            echo "the build-system suite left the working tree dirty:"
             git status --porcelain
             exit 1
           fi
