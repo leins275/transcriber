@@ -949,6 +949,39 @@ pub async fn delete_vault_entry(
 }
 
 #[tauri::command]
+pub async fn set_speaker_labels(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    assignments: std::collections::HashMap<String, String>,
+) -> Result<(), AppError> {
+    meetings::set_speaker_labels_handler(&state, &entry_id, assignments).await
+}
+
+#[tauri::command]
+pub async fn read_summary(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<meetings::SummaryView, AppError> {
+    meetings::read_summary_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn transcribe_vault_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<JobSnapshot, AppError> {
+    meetings::transcribe_vault_entry_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn cancel_job(
+    state: tauri::State<'_, AppState>,
+    job_id: String,
+) -> Result<bool, AppError> {
+    meetings::cancel_job_handler(&state, &job_id).await
+}
+
+#[tauri::command]
 pub async fn list_service_jobs(
     state: tauri::State<'_, AppState>,
     limit: Option<u32>,
@@ -972,6 +1005,17 @@ mod tests {
     use crate::sidecar::{ReadyLine, SidecarError, SidecarSpawnConfig};
 
     use super::*;
+
+    /// The form of `root` that F1 will actually produce paths under: its
+    /// canonical spelling with the Windows extended-length prefix stripped,
+    /// exactly as `vault::Vault::open` resolves it. Falls back to the input
+    /// when it cannot be canonicalized, so a caller passing a path that does
+    /// not exist yet still gets something comparable.
+    fn expected_root_for(root: &std::path::Path) -> PathBuf {
+        root.canonicalize()
+            .map(|canonical| crate::paths::strip_verbatim(&canonical))
+            .unwrap_or_else(|_| root.to_path_buf())
+    }
 
     fn run<F: std::future::Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_multi_thread()
@@ -1853,10 +1897,17 @@ mod tests {
             let done = wait_for_terminal(&state, &snapshots[0].id, Duration::from_secs(5)).await;
 
             let meeting_dir = done.meeting_dir.expect("meeting_dir must be set");
+            // Compared against the *canonical* root: F1 canonicalizes every
+            // path it hands back, and a tempdir's own path need not be
+            // canonical -- a Windows CI runner exposes `%TEMP%` as the 8.3
+            // short form `C:\Users\RUNNER~1\...`. Asserting against the raw tempdir path
+            // tests the spelling of the test's fixture, not where the job
+            // was filed.
+            let expected_root = expected_root_for(new_root.path());
             assert!(
-                Path::new(&meeting_dir).starts_with(new_root.path()),
+                Path::new(&meeting_dir).starts_with(&expected_root),
                 "job must be filed under the newly configured root {:?}, got {meeting_dir}",
-                new_root.path()
+                expected_root
             );
             assert!(
                 !Path::new(&meeting_dir).starts_with(old_root.path()),
@@ -1921,10 +1972,13 @@ mod tests {
                     .expect("enqueue must succeed");
             let done = wait_for_terminal(&state, &snapshots[0].id, Duration::from_secs(5)).await;
             let meeting_dir = done.meeting_dir.expect("meeting_dir set");
+            // See the note in the E21 regression above: compare against the
+            // canonical root, not the tempdir's own spelling.
+            let expected_root = expected_root_for(new_root.path());
             assert!(
-                Path::new(&meeting_dir).starts_with(new_root.path()),
+                Path::new(&meeting_dir).starts_with(&expected_root),
                 "job must be filed under the newly configured root {:?}, got {meeting_dir}",
-                new_root.path()
+                expected_root
             );
         });
     }
