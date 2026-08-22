@@ -34,9 +34,10 @@ use crate::paths::{SOURCE_STEM, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME};
 /// One meeting folder found while listing the vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeetingEntry {
-    /// The project code this meeting sits under, or `None` for a meeting
-    /// under `unsorted/` — the sorted/unsorted classification this listing
-    /// carries. See [`MeetingEntry::is_sorted`] for the same thing as a
+    /// The project code this meeting sits under, normalized to uppercase
+    /// (the folder on disk may be spelled in any case), or `None` for a
+    /// meeting under `unsorted/` — the sorted/unsorted classification this
+    /// listing carries. See [`MeetingEntry::is_sorted`] for the same thing as a
     /// predicate.
     pub project: Option<String>,
     /// The meeting folder's own name, exactly as it is on disk (`<date> -
@@ -95,11 +96,21 @@ pub fn list_meetings(root: &Path) -> Vec<MeetingEntry> {
 
         if name.eq_ignore_ascii_case(UNSORTED_DIR_NAME) {
             collect_meetings(&top_entry.path(), None, &mut entries);
-        } else if code::validate(&name).is_ok() {
+        } else if let Ok(project) = code::validate(&name) {
             // A junk root-level directory (not `unsorted/`, not a valid
             // project code — e.g. a stray folder an operator created by
             // hand) is silently skipped rather than treated as a project.
-            collect_meetings(&top_entry.path(), Some(name), &mut entries);
+            //
+            // The *normalized* code is reported, not the folder's own
+            // spelling: project-folder reuse is case-insensitive
+            // (`layout::ensure_project_dir`), so a vault can legitimately
+            // hold `els/` while every filename says `ELS`. Listing the
+            // uppercase code keeps one project from appearing as two.
+            collect_meetings(
+                &top_entry.path(),
+                Some(project.as_str().to_string()),
+                &mut entries,
+            );
         }
     }
 

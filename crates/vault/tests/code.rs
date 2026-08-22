@@ -7,6 +7,7 @@ use vault::error::Rejection;
 #[test]
 fn accepts_valid_codes() {
     assert!(code::validate("ELS").is_ok());
+    assert!(code::validate("els").is_ok());
     assert!(code::validate("GIS").is_ok());
     assert!(code::validate("AB").is_ok());
     assert!(code::validate("A1B2C3").is_ok());
@@ -29,9 +30,20 @@ fn rejects_too_short_or_too_long() {
 }
 
 #[test]
-fn rejects_lowercase() {
-    assert_eq!(code::validate("els"), Err(Rejection::InvalidProjectCode));
-    assert_eq!(code::validate("Els"), Err(Rejection::InvalidProjectCode));
+fn accepts_any_case_and_normalizes_to_uppercase() {
+    // Supersedes R4's uppercase-only reading of FR-4: the project is
+    // decoded from the filename and always capitalized.
+    for raw in ["els", "Els", "eLs", "ELS"] {
+        let c =
+            code::validate(raw).unwrap_or_else(|e| panic!("{raw:?} should be valid, got {e:?}"));
+        assert_eq!(c.as_str(), "ELS", "for {raw:?}");
+    }
+    assert_eq!(
+        code::validate("a1b2c3")
+            .expect("mixed case + digits")
+            .as_str(),
+        "A1B2C3"
+    );
 }
 
 #[test]

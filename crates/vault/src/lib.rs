@@ -16,7 +16,7 @@
 //!
 //! split on the **first two** occurrences of the separator `" - "` (space,
 //! hyphen, space), so a title may itself contain `" - "`. `<Project code>`
-//! matches `^[A-Z][A-Z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
+//! matches `^[A-Za-z][A-Za-z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
 //! is exactly six digits in `YYMMDD` form denoting a real calendar date,
 //! `<Title>` is any non-empty, Windows-legal string that is not a reserved
 //! device name, and `<ext>` is one of the ten recording media extensions:
@@ -109,10 +109,17 @@ pub mod ingest;
 /// docs for exactly what "read-only" and "two levels" mean here.
 pub mod list;
 
+/// Post-ingest meeting management — rename, re-file and delete an existing
+/// meeting folder. Like [`list`], a scope extension over this crate's
+/// original spec; see the module docs for the containment gate that keeps
+/// these the only vault-mutating calls outside ingest.
+pub mod manage;
+
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
 pub use list::{list_meetings, MeetingEntry};
+pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME};

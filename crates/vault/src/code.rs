@@ -1,7 +1,20 @@
 //! Project code pattern (FR-4) and the reserved `unsorted` word (FR-15).
 //!
-//! Owned by T4. Hand-rolled `^[A-Z][A-Z0-9]{1,9}$` matching over `char`s —
-//! no `regex` dependency. Pure — no filesystem, no path types.
+//! Owned by T4. Hand-rolled `^[A-Za-z][A-Za-z0-9]{1,9}$` matching over
+//! `char`s — no `regex` dependency. Pure — no filesystem, no path types.
+//!
+//! ## Case (supersedes R4)
+//!
+//! The original resolution R4 read FR-4's `^[A-Z][A-Z0-9]{1,9}$` as
+//! uppercase-only, so `els - 260812 - Title.mp4` was classified *unsorted*
+//! rather than filed under `ELS/`. The operator has since resolved that the
+//! project is decoded from the filename and *always capitalized*: matching
+//! is now case-insensitive and [`validate`] normalizes the accepted code to
+//! uppercase, which is what the crate-level docs always described
+//! ("case-normalized to uppercase"). Folder reuse was already
+//! case-insensitive (`layout::ensure_project_dir`), so an existing `ELS/`
+//! folder is reused by a lowercase drop rather than a second folder being
+//! created beside it.
 
 use crate::error::Rejection;
 
@@ -11,9 +24,9 @@ const RESERVED_WORD: &str = "unsorted";
 
 /// A project code that has passed [`validate`], normalized to uppercase.
 ///
-/// Since R4 resolves FR-4's pattern as uppercase-only, normalization here is
-/// defensive and a no-op in practice — the raw input already matched
-/// `^[A-Z][A-Z0-9]{1,9}$`.
+/// Normalization is load-bearing: the pattern is matched case-insensitively
+/// (see the module docs), so `els`, `Els` and `ELS` all validate and all
+/// yield the same `ELS` code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectCode(String);
 
@@ -32,10 +45,10 @@ impl std::ops::Deref for ProjectCode {
     }
 }
 
-/// Validates a raw project code against `^[A-Z][A-Z0-9]{1,9}$` (R4: the
-/// pattern is uppercase-only — a lowercase code is a rejection, not
-/// something normalization repairs), applying the `unsorted` reserved-word
-/// check regardless of the pattern outcome so that `UNSORTED` maps to
+/// Validates a raw project code against `^[A-Za-z][A-Za-z0-9]{1,9}$`
+/// case-insensitively (superseding R4 — see the module docs) and returns it
+/// uppercased, applying the `unsorted` reserved-word check regardless of the
+/// pattern outcome so that `UNSORTED` maps to
 /// [`Rejection::ReservedProjectCode`] rather than a generic pattern failure.
 pub fn validate(raw: &str) -> Result<ProjectCode, Rejection> {
     if raw.eq_ignore_ascii_case(RESERVED_WORD) {
@@ -53,17 +66,18 @@ pub fn validate(raw: &str) -> Result<ProjectCode, Rejection> {
     Ok(ProjectCode(raw.to_ascii_uppercase()))
 }
 
-/// Hand-rolled match against `^[A-Z][A-Z0-9]{1,9}$` over `char`s.
+/// Hand-rolled match against `^[A-Za-z][A-Za-z0-9]{1,9}$` over `char`s.
 ///
-/// Length must be 2 to 10 chars: one leading uppercase letter, followed by
-/// one to nine uppercase letters/digits.
+/// Length must be 2 to 10 chars: one leading ASCII letter of either case,
+/// followed by one to nine ASCII letters/digits. Case is folded by
+/// [`validate`]'s uppercasing, not by this predicate.
 fn matches_pattern(raw: &str) -> bool {
     let mut chars = raw.chars();
 
     let Some(first) = chars.next() else {
         return false;
     };
-    if !first.is_ascii_uppercase() {
+    if !first.is_ascii_alphabetic() {
         return false;
     }
 
@@ -72,6 +86,5 @@ fn matches_pattern(raw: &str) -> bool {
         return false;
     }
 
-    rest.iter()
-        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    rest.iter().all(|c| c.is_ascii_alphanumeric())
 }

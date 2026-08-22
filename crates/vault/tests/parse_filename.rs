@@ -95,8 +95,15 @@ fn unsupported_extensions_abort_rather_than_route_to_unsorted() {
 }
 
 #[test]
-fn lowercase_project_code_is_unsorted() {
-    assert_unsorted("els - 260812 - x.mp4", Rejection::InvalidProjectCode);
+fn lowercase_project_code_is_sorted_and_capitalized() {
+    match classify_filename("els - 260812 - x.mp4").expect("should classify, not error") {
+        Classified::Sorted(parsed) => {
+            assert_eq!(parsed.project, "ELS");
+            assert_eq!(parsed.date, "260812");
+            assert_eq!(parsed.title, "x");
+        }
+        other => panic!("expected Sorted, got {other:?}"),
+    }
 }
 
 #[test]
@@ -145,7 +152,7 @@ fn first_failing_rule_wins() {
     // Code is checked before date before title — a name that is wrong in
     // more than one place reports the earliest, specific reason.
     assert_unsorted(
-        "els - 260230 - Q3: review.mp4",
+        "EL S - 260230 - Q3: review.mp4",
         Rejection::InvalidProjectCode,
     );
 }
