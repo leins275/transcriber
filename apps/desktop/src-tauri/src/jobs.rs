@@ -26,7 +26,8 @@ use vault::{Classification, CollisionOutcome};
 use crate::ingest;
 use crate::paths;
 use crate::service::{
-    JobState as ServiceJobState, JobStatus, ServiceError, SubmitRequest, TranscriptionService,
+    JobState as ServiceJobState, JobStatus, LlmSubmitRequest, ServiceError, SubmitRequest,
+    TranscriptionService,
 };
 
 /// How often a job's status is polled once it has been submitted.
@@ -67,6 +68,11 @@ pub struct JobSnapshot {
     pub id: String,
     pub source_path: String,
     pub file_name: String,
+    /// Which pipeline this job runs: `"transcribe"` (the default, so an
+    /// older frontend build sees no change) or one of F2's derived job
+    /// types (`"summarize"`, `"action_items"`, `"facts"`, `"report"`,
+    /// `"export"`). Additive to the frozen IPC contract.
+    pub job_type: String,
     pub state: JobState,
     pub classification: Option<String>,
     pub meeting_dir: Option<String>,
@@ -123,6 +129,10 @@ enum PendingWork {
         source_dest: PathBuf,
         classification: Option<String>,
     },
+    /// A derived (LLM) job over material already in the vault: nothing to
+    /// ingest, submitted via `submit_llm`, then polled exactly like a
+    /// transcription.
+    Llm { request: LlmSubmitRequest },
 }
 
 /// State shared between the registry handle, the worker task and every
@@ -187,6 +197,7 @@ fn snapshots_equal_ignoring_created_at(a: &JobSnapshot, b: &JobSnapshot) -> bool
     a.id == b.id
         && a.source_path == b.source_path
         && a.file_name == b.file_name
+        && a.job_type == b.job_type
         && a.state == b.state
         && a.classification == b.classification
         && a.meeting_dir == b.meeting_dir
@@ -336,6 +347,27 @@ impl JobRegistry {
         snapshot
     }
 
+    /// Registers a derived (LLM) job over material already in the vault.
+    ///
+    /// `input_path` is the meeting (or project) directory F2 reads;
+    /// `output_dir` is where its artifacts land -- both computed by the
+    /// command layer, never by the UI. Routed through the same queue as
+    /// every other job for FR-8's one-at-a-time ordering and the same
+    /// events/poll loop; the snapshot's `meeting_dir` points at the output
+    /// directory so Reveal opens where the artifacts landed.
+    pub async fn enqueue_llm(&self, request: LlmSubmitRequest) -> JobSnapshot {
+        let input = PathBuf::from(&request.input_path);
+        let mut snapshot = new_pending_snapshot(&input);
+        snapshot.job_type = request.kind.wire_name().to_string();
+        snapshot.meeting_dir = Some(request.output_dir.clone());
+        self.shared.store_and_emit(snapshot.clone()).await;
+        let _ = self.queue_tx.send(PendingJob {
+            snapshot: snapshot.clone(),
+            work: PendingWork::Llm { request },
+        });
+        snapshot
+    }
+
     /// Asks the service to cancel a job this app submitted.
     ///
     /// Returns `Ok(false)` when the job has no service-side id — it has not
@@ -378,6 +410,16 @@ async fn worker_loop(shared: Arc<Shared>, mut queue_rx: mpsc::UnboundedReceiver<
 
 async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
     let PendingJob { mut snapshot, work } = pending;
+
+    // A derived (LLM) job has nothing to ingest and no transcription
+    // bookkeeping: submit it, then join the same poll loop.
+    let work = match work {
+        PendingWork::Llm { request } => {
+            submit_llm_and_poll(shared, snapshot, request).await;
+            return;
+        }
+        other => other,
+    };
 
     // Where the recording ends up, however it got there.
     let (meeting_dir, source_dest) = match work {
@@ -423,6 +465,8 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             snapshot.classification = classification;
             (meeting_dir, source_dest)
         }
+        // Peeled off above; this match only ever sees ingest-shaped work.
+        PendingWork::Llm { .. } => unreachable!("llm work is handled before this match"),
     };
 
     let transcript_path = meeting_dir.join(TRANSCRIPT_FILE_NAME);
@@ -444,6 +488,43 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             // service could not be reached — this is a distinct
             // "awaiting/failed transcription" outcome, never reported as an
             // ingest failure.
+            snapshot.state = JobState::Failed;
+            snapshot.error_kind = Some(service_error_kind_str(&err).to_string());
+            snapshot.message = Some(err.to_string());
+            shared.store_and_emit(snapshot).await;
+            return;
+        }
+    };
+
+    shared
+        .service_job_ids
+        .write()
+        .await
+        .insert(snapshot.id.clone(), service_job_id.clone());
+
+    snapshot.state = JobState::Queued;
+    snapshot.progress = Some(0.0);
+    shared.store_and_emit(snapshot.clone()).await;
+
+    tokio::spawn(poll_until_terminal(
+        shared,
+        service,
+        snapshot,
+        service_job_id,
+    ));
+}
+
+/// Submits one derived (LLM) job and joins the shared poll loop -- the
+/// second half of `process_one`, minus everything ingest-specific.
+async fn submit_llm_and_poll(
+    shared: Arc<Shared>,
+    mut snapshot: JobSnapshot,
+    request: LlmSubmitRequest,
+) {
+    let service = shared.service.read().await.clone();
+    let service_job_id = match service.submit_llm(request).await {
+        Ok(service_job_id) => service_job_id,
+        Err(err) => {
             snapshot.state = JobState::Failed;
             snapshot.error_kind = Some(service_error_kind_str(&err).to_string());
             snapshot.message = Some(err.to_string());
@@ -568,6 +649,7 @@ fn new_pending_snapshot(source_path: &Path) -> JobSnapshot {
         id: Uuid::new_v4().to_string(),
         source_path: path_string(source_path),
         file_name: file_name_of(source_path),
+        job_type: "transcribe".to_string(),
         state: JobState::Pending,
         classification: None,
         meeting_dir: None,
@@ -638,6 +720,18 @@ fn now_rfc3339() -> String {
     let minute = (time_of_day % 3600) / 60;
     let second = time_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Today's local-agnostic (UTC) date in the vault's `YYMMDD` convention --
+/// used to name dated report/export folders, from the same pure-integer
+/// clock as [`now_rfc3339`].
+pub(crate) fn today_yymmdd() -> String {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let days = (elapsed.as_secs() as i64).div_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!("{:02}{month:02}{day:02}", year.rem_euclid(100))
 }
 
 fn civil_from_days(days: i64) -> (i64, u32, u32) {

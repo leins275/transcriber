@@ -29,6 +29,7 @@ from transcription import __version__
 from transcription.api import model_routes
 from transcription.api.model_routes import (
     ModelDownloadManager,
+    build_llm_model_download,
     build_model_router,
     is_model_present,
 )
@@ -67,17 +68,29 @@ def create_app(
     config: Config,
     *,
     model_download_factory: Callable[[], ModelDownload] | None = None,
+    llm_model_download_factory: Callable[[], ModelDownload] | None = None,
+    job_manager_factory: Callable[[Config, Ledger], JobManager] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1).
 
-    ``model_download_factory`` is a test-only seam (mirrors T10's
-    ``HubClient``/``Transport`` seams): production callers never pass it, so
-    :class:`ModelDownloadManager` builds its own real download from
-    ``config``.
+    ``model_download_factory``/``llm_model_download_factory`` are test-only
+    seams (mirroring T10's ``HubClient``/``Transport`` seams): production
+    callers never pass them, so each :class:`ModelDownloadManager` builds
+    its own real download from ``config``. ``job_manager_factory`` is the
+    equivalent seam for injecting a :class:`JobManager` wired with fake
+    LLM/diarizer/frame-extractor engines.
     """
     ledger = Ledger(config.db_path)
-    job_manager = JobManager(config, ledger)
+    job_manager = (
+        job_manager_factory(config, ledger)
+        if job_manager_factory is not None
+        else JobManager(config, ledger)
+    )
     model_download_manager = ModelDownloadManager(config, factory=model_download_factory)
+    llm_model_download_manager = ModelDownloadManager(
+        config,
+        factory=llm_model_download_factory or (lambda: build_llm_model_download(config)),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -94,6 +107,7 @@ def create_app(
     app.state.ledger = ledger
     app.state.job_manager = job_manager
     app.state.model_download_manager = model_download_manager
+    app.state.llm_model_download_manager = llm_model_download_manager
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         """Bearer-auth dependency for every `/v1/*` route (FR-9).
@@ -175,6 +189,9 @@ def create_app(
                 if model_routes._nvidia_gpu_present()
                 else None
             ),
+            # The LLM engine's counterpart to model/model_present, same
+            # E15-safe rule: never constructs (or imports) an engine.
+            **job_manager.llm_info(),
         }
 
     v1_deps = [Depends(require_token)]
@@ -182,7 +199,9 @@ def create_app(
     @app.post("/v1/jobs", status_code=202, dependencies=v1_deps)
     async def submit_job(payload: JobCreate) -> dict[str, str]:
         job_id = await job_manager.submit(
+            job_type=payload.job_type,
             audio_path=payload.audio_path,
+            input_path=payload.input_path,
             output_dir=payload.output_dir,
             language=payload.language,
             provider=payload.provider,
@@ -204,7 +223,9 @@ def create_app(
         return JobStatus(
             job_id=job.job_id,
             status=job.status,  # type: ignore[arg-type]
+            job_type=job.job_type,  # type: ignore[arg-type]
             progress=job.progress,
+            warnings=list(job.warnings),
             elapsed_sec=job.elapsed_sec,
             audio_duration_sec=job.audio_duration_sec,
             provider=job.provider,
@@ -223,6 +244,16 @@ def create_app(
                     ErrorKind.INVALID_REQUEST, f"result not available for job {job_id}"
                 ),
             )
+        if job.job_type != "transcribe":
+            # Derived jobs leave an artifact manifest, not a transcript.
+            if job.result_json is None:
+                return JSONResponse(
+                    status_code=404,
+                    content=_error_body(
+                        ErrorKind.INVALID_REQUEST, f"result not available for job {job_id}"
+                    ),
+                )
+            return json.loads(job.result_json)
         transcript_path = Path(job.output_path) / "transcript.json"
         if not transcript_path.exists():
             return JSONResponse(
@@ -239,5 +270,12 @@ def create_app(
         return {"status": "cancelled"}
 
     app.include_router(build_model_router(require_token))
+    app.include_router(
+        build_model_router(
+            require_token,
+            prefix="/v1/llm-model/download",
+            state_attr="llm_model_download_manager",
+        )
+    )
 
     return app

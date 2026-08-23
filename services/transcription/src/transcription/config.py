@@ -20,7 +20,7 @@ from typing import Any
 
 # Keys that must never be settable from an argv-shaped override (FR-9): credentials
 # come from the environment or the config file only, never from a CLI flag.
-_SECRET_KEYS = frozenset({"provider_api_key", "token", "hf_token"})
+_SECRET_KEYS = frozenset({"provider_api_key", "token", "hf_token", "llm_api_key"})
 
 _TRUE_STRINGS = frozenset({"1", "true", "yes"})
 
@@ -103,6 +103,41 @@ class Config:
     max_cloud_upload_mb: int = 25
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
+    # --- Local LLM (summaries / action items / facts / reports) ---
+    # Which LLM engine runs the derived-knowledge jobs: "llama_cpp" (built-in,
+    # the default) or "openai_compat" (an external OpenAI-compatible server
+    # such as LM Studio or Ollama, reached via `llm_base_url`).
+    llm_provider: str = "llama_cpp"
+    # Display/model id. For `llama_cpp` this names the local GGUF snapshot;
+    # for `openai_compat` it is the model name sent to the server.
+    llm_model: str = "qwen3.6-35b-a3b"
+    # Where GGUF snapshots live; empty means `<app_dir>/models/llm`.
+    llm_model_path: str = ""
+    # Hugging Face repo + revision the in-app GGUF download fetches, and the
+    # one file it selects out of that repo (GGUF repos carry many quants;
+    # downloading all of them would be hundreds of GB).
+    llm_model_repo: str = "Qwen/Qwen3.6-35B-A3B-GGUF"
+    llm_model_revision: str = "main"
+    llm_model_file: str = "qwen3.6-35b-a3b-q4_k_m.gguf"
+    # Context window the chunker budgets against and llama.cpp allocates.
+    llm_ctx: int = 16384
+    # 0 = pure CPU (the shipped wheel is CPU-only; the A3B MoE default is
+    # chosen precisely because CPU inference is viable). A future
+    # GPU-accelerated runtime plugs in through this same knob.
+    llm_gpu_layers: int = 0
+    # None lets llama.cpp pick (physical cores).
+    llm_threads: int | None = None
+    llm_temperature: float = 0.3
+    llm_max_output_tokens: int = 4096
+    # openai_compat only: the server to call, e.g. "http://127.0.0.1:1234/v1".
+    llm_base_url: str | None = None
+    # openai_compat only; env (TRANSCRIBER_LLM_API_KEY) or config file, never
+    # argv (FR-9). Local servers usually accept any value.
+    llm_api_key: str | None = None
+    # Keep the GGUF model resident between LLM jobs. Off by default so the
+    # ~20 GB working set is released and never sits next to a loaded whisper
+    # model; reloading is mmap-fast.
+    llm_keep_loaded: bool = False
 
     def public(self) -> dict[str, Any]:
         """What ``/health`` and logs may show: no token, no API key (FR-9)."""
@@ -120,6 +155,11 @@ class Config:
             "batch_size": self.batch_size,
             "max_cloud_upload_mb": self.max_cloud_upload_mb,
             "log_level": self.log_level,
+            "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
+            "llm_ctx": self.llm_ctx,
+            "llm_gpu_layers": self.llm_gpu_layers,
+            "llm_base_url": self.llm_base_url,
         }
 
 
@@ -266,10 +306,17 @@ def load_config(
 
     values["allowed_roots"] = tuple(allowed_roots)
 
+    # llm_api_key: env only as far as ambient variables go (the generic
+    # TRANSCRIBER_LLM_API_KEY pickup above already applied); the config file
+    # may also carry it, like provider_api_key. No extra fallbacks: local
+    # OpenAI-compatible servers rarely check the key at all.
+
     if "db_path" not in values or not values["db_path"]:
         values["db_path"] = str(app_dir / "data" / "jobs.sqlite3")
     if "model_path" not in values or not values["model_path"]:
         values["model_path"] = str(app_dir / "models")
+    if "llm_model_path" not in values or not values["llm_model_path"]:
+        values["llm_model_path"] = str(app_dir / "models" / "llm")
 
     if "compute_type" in values and values["compute_type"] in (None, ""):
         values["compute_type"] = None
@@ -297,6 +344,19 @@ def load_config(
             values[speakers_key] = int(values[speakers_key])
         elif speakers_key in values:
             values[speakers_key] = None
+    for llm_int_key in ("llm_ctx", "llm_gpu_layers", "llm_max_output_tokens"):
+        if llm_int_key in values:
+            values[llm_int_key] = int(values[llm_int_key])
+    if "llm_threads" in values and values["llm_threads"] not in (None, ""):
+        values["llm_threads"] = int(values["llm_threads"])
+    elif "llm_threads" in values:
+        values["llm_threads"] = None
+    if "llm_temperature" in values:
+        values["llm_temperature"] = float(values["llm_temperature"])
+    if "llm_keep_loaded" in values:
+        values["llm_keep_loaded"] = _parse_bool(values["llm_keep_loaded"])
+    if "llm_base_url" in values and values["llm_base_url"] in (None, ""):
+        values["llm_base_url"] = None
 
     token = values.get("token") or secrets.token_hex(32)
     values["token"] = token

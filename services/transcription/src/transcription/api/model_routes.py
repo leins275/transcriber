@@ -116,6 +116,38 @@ def build_setup_download(config: Config) -> ModelDownload | SetupDownload:
     return SetupDownload(cuda_runtime=cuda_runtime, model=model)
 
 
+def build_llm_model_download(
+    config: Config,
+    *,
+    hub_client: HubClient | None = None,
+    transport: Transport | None = None,
+) -> ModelDownload:
+    """The GGUF download for the built-in llama.cpp runtime.
+
+    Reuses :class:`ModelDownload` wholesale (resume, digest verification,
+    cancel, ``.ready`` marker) with a file filter selecting exactly the one
+    configured quantization -- a GGUF repo carries one file per quant, and
+    downloading the whole snapshot would move hundreds of GB.
+    """
+    wanted = config.llm_model_file.casefold()
+    return ModelDownload(
+        models_dir=config.llm_model_path,
+        allowed_roots=default_allowed_roots(config),
+        repo_id=config.llm_model_repo,
+        revision=config.llm_model_revision,
+        hub_client=hub_client,
+        transport=transport,
+        file_filter=lambda remote: remote.path.casefold() == wanted,
+    )
+
+
+def is_llm_model_present(config: Config) -> bool:
+    """Whether the configured GGUF file is on disk (the load-time check the
+    llama.cpp provider itself makes -- presence of the file, not the
+    ``.ready`` marker, so a hand-copied model also counts)."""
+    return (Path(config.llm_model_path) / config.llm_model_file).is_file()
+
+
 def is_model_present(config: Config) -> bool:
     """Whether the pinned snapshot's ``.ready`` marker exists under
     ``config.model_path`` (FR-17: the app must detect a missing model
@@ -340,26 +372,37 @@ class ModelDownloadManager:
         return status
 
 
-def build_model_router(require_token: Callable[..., None]) -> APIRouter:
-    """One router, mounted once by ``app.create_app`` -- its only edits
-    there are wiring ``app.state.model_download_manager`` and including this
-    router (FR-12, "no download logic in the route handlers")."""
+def build_model_router(
+    require_token: Callable[..., None],
+    *,
+    prefix: str = "/v1/model/download",
+    state_attr: str = "model_download_manager",
+) -> APIRouter:
+    """One router per download slot, mounted by ``app.create_app`` -- its
+    only edits there are wiring the manager onto ``app.state`` and including
+    this router (FR-12, "no download logic in the route handlers").
+
+    Mounted twice: the whisper slot at the default ``/v1/model/download``
+    and the GGUF slot at ``/v1/llm-model/download`` (``state_attr``
+    ``llm_model_download_manager``), each polling its own
+    :class:`ModelDownloadManager` with the identical wire shape.
+    """
     router = APIRouter()
     deps = [Depends(require_token)]
 
     def _manager(request: Request) -> ModelDownloadManager:
-        manager: ModelDownloadManager = request.app.state.model_download_manager
+        manager: ModelDownloadManager = getattr(request.app.state, state_attr)
         return manager
 
-    @router.post("/v1/model/download", status_code=202, dependencies=deps)
+    @router.post(prefix, status_code=202, dependencies=deps)
     async def start_download(request: Request) -> dict[str, Any]:
         return _manager(request).start()
 
-    @router.get("/v1/model/download", dependencies=deps)
+    @router.get(prefix, dependencies=deps)
     async def get_download_status(request: Request) -> dict[str, Any]:
         return _manager(request).status()
 
-    @router.delete("/v1/model/download", dependencies=deps)
+    @router.delete(prefix, dependencies=deps)
     async def cancel_download(request: Request) -> dict[str, Any]:
         return _manager(request).cancel()
 

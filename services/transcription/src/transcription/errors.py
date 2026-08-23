@@ -39,6 +39,9 @@ class ErrorKind(StrEnum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    # An LLM's structured output failed schema validation even after the one
+    # bounded repair retry (the LLM job types' equivalent of a decode fault).
+    LLM_OUTPUT = "llm_output"
     INTERNAL = "internal"
 
 

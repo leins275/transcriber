@@ -36,6 +36,8 @@ export type VaultPanelProps = {
    * their own -- see the component docs. */
   jobs: JobSnapshot[];
   onOpen: (entryId: string) => void;
+  /** Opens the project page (action items / facts / reports). */
+  onOpenProject: (project: string) => void;
   onReveal: (entryId: string) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
@@ -63,6 +65,7 @@ export function VaultPanel({
   entries,
   jobs,
   onOpen,
+  onOpenProject,
   onReveal,
   onRevealJob,
   onCancelJob,
@@ -191,6 +194,13 @@ export function VaultPanel({
                       <span className={styles.groupCount}>
                         {group.length} recording{group.length === 1 ? "" : "s"}
                       </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => onOpenProject(code)}
+                      >
+                        Open project →
+                      </button>
                     </div>
                     <VaultList entries={group} onOpen={onOpen} onReveal={onReveal} />
                   </div>

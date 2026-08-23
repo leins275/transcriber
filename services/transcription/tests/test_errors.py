@@ -17,6 +17,7 @@ ALL_KINDS = [
     "provider_unavailable",
     "timeout",
     "cancelled",
+    "llm_output",
     "internal",
 ]
 

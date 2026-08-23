@@ -20,6 +20,7 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
   return {
     id: "job-1",
     source_path: "C:\\Downloads\\ELS - 260822 - Incident review.mp4",
+    job_type: "transcribe",
     file_name: "ELS - 260822 - Incident review.mp4",
     state: "running",
     classification: "sorted",
@@ -39,6 +40,7 @@ function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {
     entries: [buildEntry()],
     jobs: [] as JobSnapshot[],
     onOpen: () => {},
+    onOpenProject: () => {},
     onReveal: () => {},
     onRevealJob: () => {},
     onCancelJob: () => {},

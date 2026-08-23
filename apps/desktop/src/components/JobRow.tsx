@@ -1,6 +1,6 @@
 import styles from "./JobRow.module.css";
 import { parseFileName } from "../lib/fileName";
-import type { JobSnapshot, JobState } from "../types";
+import type { JobSnapshot, JobState, JobType } from "../types";
 
 export type JobRowProps = {
   job: JobSnapshot;
@@ -23,6 +23,28 @@ const STATE_TEXT: Record<JobState, string> = {
   rejected: "Rejected",
 };
 
+/** What a running job of each type is doing, for the meta line. */
+const RUNNING_TEXT: Record<JobType, string> = {
+  transcribe: "Transcribing",
+  summarize: "Summarizing",
+  action_items: "Extracting action items",
+  facts: "Extracting facts",
+  report: "Writing project report",
+  export: "Exporting PDF",
+};
+
+/** A failed derived job loses no source material — unlike transcription's
+ * carefully-worded failure line, "failed" plus the service's own message
+ * (rendered below the meta line) says everything. */
+const FAILED_TEXT: Record<JobType, string> = {
+  transcribe: STATE_TEXT.failed,
+  summarize: "Summary failed.",
+  action_items: "Action-item extraction failed.",
+  facts: "Fact extraction failed.",
+  report: "Project report failed.",
+  export: "Export failed.",
+};
+
 /** The project name from the `Project - YYMMDD - Title` convention, for a
  * job the Rust side already classified `"sorted"` -- a display-only
  * re-derivation of the existing `file_name` field, not new data. */
@@ -32,11 +54,12 @@ function projectFor(job: JobSnapshot): string | null {
 }
 
 function metaLine(job: JobSnapshot, project: string | null): string {
+  const jobType: JobType = job.job_type ?? "transcribe";
   switch (job.state) {
     case "queued":
       return project ? `Queued · next in line · ${project}` : "Queued · next in line";
     case "running": {
-      const parts = ["Transcribing"];
+      const parts = [RUNNING_TEXT[jobType] ?? "Working"];
       if (job.progress != null) {
         parts.push(`${Math.round(job.progress * 100)}%`);
       }
@@ -45,6 +68,8 @@ function metaLine(job: JobSnapshot, project: string | null): string {
     }
     case "done":
       return project ? `Done · ${project}` : "Done";
+    case "failed":
+      return FAILED_TEXT[jobType] ?? STATE_TEXT.failed;
     default:
       return STATE_TEXT[job.state];
   }

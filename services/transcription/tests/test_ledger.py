@@ -34,6 +34,9 @@ FR5_COLUMNS = {
     "error_message",
     "meeting_json",
     "service_version",
+    # Schema v2 (LLM job types).
+    "job_type",
+    "result_json",
 }
 
 
@@ -72,7 +75,7 @@ def test_open_fresh_path_creates_file_and_schema(tmp_path: Path) -> None:
             journal_mode = raw.execute("PRAGMA journal_mode").fetchone()[0]
             user_version = raw.execute("PRAGMA user_version").fetchone()[0]
             assert journal_mode.lower() == "wal"
-            assert user_version == 1
+            assert user_version == 2
 
             columns = {row[1] for row in raw.execute("PRAGMA table_info(jobs)").fetchall()}
             assert FR5_COLUMNS <= columns
@@ -336,3 +339,109 @@ def test_concurrent_read_during_write_does_not_raise_locked(tmp_path: Path) -> N
     finally:
         writer.close()
         reader.close()
+
+
+_V1_DDL = """
+CREATE TABLE jobs (
+    job_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    device TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    output_path TEXT NOT NULL,
+    audio_duration_sec REAL,
+    elapsed_sec REAL,
+    realtime_factor REAL,
+    cost_usd REAL,
+    currency TEXT,
+    language TEXT,
+    segment_count INTEGER,
+    filtered_segment_count INTEGER,
+    error_kind TEXT,
+    error_message TEXT,
+    meeting_json TEXT,
+    service_version TEXT NOT NULL
+)
+"""
+
+
+def _build_v1_db(db_path: Path) -> None:
+    """A database exactly as a v1 (pre-LLM) build would leave it, with one row."""
+    raw = sqlite3.connect(db_path)
+    try:
+        raw.execute(_V1_DDL)
+        raw.execute(
+            """
+            INSERT INTO jobs (
+                job_id, created_at, status, provider, model, device,
+                source_path, output_path, service_version
+            ) VALUES ('old-job', '2026-01-01T00:00:00+00:00', 'succeeded',
+                      'local', 'large-v3', 'cpu', 'C:/vault/in.wav',
+                      'C:/vault/out', '0.4.0')
+            """
+        )
+        raw.execute("PRAGMA user_version=1")
+        raw.commit()
+    finally:
+        raw.close()
+
+
+def test_v1_database_migrates_in_place_and_old_rows_stay_readable(tmp_path: Path) -> None:
+    db_path = tmp_path / "jobs.sqlite3"
+    _build_v1_db(db_path)
+
+    ledger = Ledger(db_path)
+    try:
+        raw = sqlite3.connect(db_path)
+        try:
+            assert raw.execute("PRAGMA user_version").fetchone()[0] == 2
+            columns = {row[1] for row in raw.execute("PRAGMA table_info(jobs)").fetchall()}
+            assert {"job_type", "result_json"} <= columns
+        finally:
+            raw.close()
+
+        old_row = ledger.get_job("old-job")
+        assert old_row is not None
+        assert old_row["job_type"] == "transcribe"
+        assert old_row["result_json"] is None
+
+        # A new-style row round-trips through the migrated table.
+        ledger.insert_job(
+            "new-job",
+            job_type="summarize",
+            provider="llama_cpp",
+            model="qwen",
+            device="cpu",
+            source_path="C:/vault/ELS/260101 - m",
+            output_path="C:/vault/ELS/260101 - m",
+        )
+        ledger.finish_succeeded(
+            "new-job", elapsed_sec=1.5, result_json='{"artifacts": ["summary.md"]}'
+        )
+        new_row = ledger.get_job("new-job")
+        assert new_row is not None
+        assert new_row["job_type"] == "summarize"
+        assert new_row["result_json"] == '{"artifacts": ["summary.md"]}'
+        assert new_row["audio_duration_sec"] is None
+        assert new_row["realtime_factor"] is None
+    finally:
+        ledger.close()
+
+
+def test_a_newer_schema_version_is_still_rejected(tmp_path: Path) -> None:
+    from transcription.ledger import LedgerError
+
+    db_path = tmp_path / "jobs.sqlite3"
+    raw = sqlite3.connect(db_path)
+    try:
+        raw.execute("PRAGMA user_version=3")
+        raw.commit()
+    finally:
+        raw.close()
+
+    with pytest.raises(LedgerError):
+        Ledger(db_path)

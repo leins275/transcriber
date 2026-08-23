@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "./components/AppHeader";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
+import { ProjectPage } from "./components/ProjectPage";
 import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
@@ -29,7 +30,15 @@ import { projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
-import type { AppError, MeetingUpdate, ServiceStatusView, SettingsView } from "./types";
+import type {
+  AppError,
+  ArtifactKind,
+  JobType,
+  LlmModelDownloadStatus,
+  MeetingUpdate,
+  ServiceStatusView,
+  SettingsView,
+} from "./types";
 
 const INITIAL_SERVICE_STATUS: ServiceStatusView = {
   state: "starting",
@@ -74,6 +83,10 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+  // Which project page is open (action items / facts / reports) -- the same
+  // no-router pattern; opening a project closes any open recording and vice
+  // versa.
+  const [openProject, setOpenProject] = useState<string | null>(null);
   // The Settings page (redesign turn 6): the old sidebar's vault/model/
   // service content, behind the header's gear. Rendered over whatever else
   // is open; closing it returns there untouched.
@@ -142,6 +155,43 @@ function App() {
         // render yet rather than showing a false "missing" state.
       });
   }, [serviceStatus.state]);
+
+  // The assistant (GGUF) model's status, same gating; polled while a
+  // download is in flight so Settings shows live progress.
+  const [llmModelStatus, setLlmModelStatus] = useState<LlmModelDownloadStatus | null>(null);
+  useEffect(() => {
+    if (serviceStatus.state !== "ready") return;
+    api
+      .llmModelDownloadStatus()
+      .then(setLlmModelStatus)
+      .catch(() => {
+        // Older service / unreachable: stays `null`, the row renders inert.
+      });
+  }, [serviceStatus.state]);
+  useEffect(() => {
+    if (llmModelStatus?.state !== "downloading" && llmModelStatus?.state !== "verifying") return;
+    const handle = setInterval(() => {
+      api
+        .llmModelDownloadStatus()
+        .then(setLlmModelStatus)
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(handle);
+  }, [llmModelStatus?.state]);
+
+  const handleStartLlmDownload = useCallback(() => {
+    api
+      .startLlmModelDownload()
+      .then(setLlmModelStatus)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+
+  const handleCancelLlmDownload = useCallback(() => {
+    api
+      .cancelLlmModelDownload()
+      .then(setLlmModelStatus)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
 
   const modelDownloadCommands = useRef({
     start: () => api.startModelDownload(),
@@ -302,6 +352,36 @@ function App() {
     [upsertJob],
   );
 
+  // The LLM feature's on-demand jobs: each enqueues on the Rust side and
+  // pins the returned snapshot immediately, exactly like Transcribe.
+  const handleSummarize = useCallback(
+    async (entryId: string) => {
+      upsertJob(await api.summarizeVaultEntry(entryId));
+    },
+    [upsertJob],
+  );
+
+  const handleExtract = useCallback(
+    async (entryId: string, kind: ArtifactKind) => {
+      upsertJob(await api.extractVaultEntry(entryId, kind));
+    },
+    [upsertJob],
+  );
+
+  const handleExportPdf = useCallback(
+    async (entryId: string) => {
+      upsertJob(await api.exportRecording(entryId));
+    },
+    [upsertJob],
+  );
+
+  const handleExportEssence = useCallback(
+    async (project: string) => {
+      upsertJob(await api.exportProjectEssence(project));
+    },
+    [upsertJob],
+  );
+
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
   // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
@@ -319,6 +399,37 @@ function App() {
   // refresh reissues every id, so holding the entry itself would leave the
   // page rendering a stale copy of a meeting that has since moved.
   const openEntry = vaultEntries.find((entry) => entry.id === openEntryId) ?? null;
+
+  // Derived-job bookkeeping for the open pages: which LLM jobs are still in
+  // flight for the open recording (its buttons render busy), how many
+  // summarize jobs have finished for it (the summary tab re-reads), and how
+  // many derived jobs have finished at all (the project page re-lists).
+  const activeLlmJobs: JobType[] = openEntry
+    ? jobs
+        .filter(
+          (job) =>
+            job.job_type !== "transcribe" &&
+            (job.state === "pending" || job.state === "queued" || job.state === "running") &&
+            job.source_path === openEntry.meeting_dir,
+        )
+        .map((job) => job.job_type)
+    : [];
+  const summaryReloadToken = openEntry
+    ? jobs.filter(
+        (job) =>
+          job.job_type === "summarize" &&
+          job.state === "done" &&
+          job.source_path === openEntry.meeting_dir,
+      ).length
+    : 0;
+  const projectReloadToken = jobs.filter(
+    (job) => job.job_type !== "transcribe" && job.state === "done",
+  ).length;
+  const essenceBusy = jobs.some(
+    (job) =>
+      job.job_type === "report" &&
+      (job.state === "pending" || job.state === "queued" || job.state === "running"),
+  );
 
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
@@ -368,9 +479,12 @@ function App() {
               settings={settings}
               serviceStatus={serviceStatus}
               modelStatus={modelStatus}
+              llmModelStatus={llmModelStatus}
               appVersion={version}
               onBack={() => setSettingsOpen(false)}
               onChangeRoot={handleChooseFolder}
+              onStartLlmDownload={handleStartLlmDownload}
+              onCancelLlmDownload={handleCancelLlmDownload}
             />
           ) : inSetup ? (
             <FirstRun
@@ -394,6 +508,25 @@ function App() {
                   onUpdate={handleUpdateVaultEntry}
                   onDelete={handleDeleteVaultEntry}
                   onTranscribe={handleTranscribe}
+                  onSummarize={handleSummarize}
+                  onExtract={handleExtract}
+                  onExportPdf={handleExportPdf}
+                  activeLlmJobs={activeLlmJobs}
+                  summaryReloadToken={summaryReloadToken}
+                />
+              ) : openProject ? (
+                <ProjectPage
+                  project={openProject}
+                  onBack={() => setOpenProject(null)}
+                  onListArtifacts={api.listProjectArtifacts}
+                  onReadArtifact={api.readArtifact}
+                  onRevealArtifact={api.revealArtifact}
+                  onListReports={api.listProjectReports}
+                  onReadReport={api.readReport}
+                  onRevealReport={api.revealReport}
+                  onExportEssence={handleExportEssence}
+                  essenceBusy={essenceBusy}
+                  reloadToken={projectReloadToken}
                 />
               ) : (
                 <>
@@ -415,7 +548,14 @@ function App() {
                   <VaultPanel
                     entries={vaultEntries}
                     jobs={jobs}
-                    onOpen={setOpenEntryId}
+                    onOpen={(entryId) => {
+                      setOpenProject(null);
+                      setOpenEntryId(entryId);
+                    }}
+                    onOpenProject={(project) => {
+                      setOpenEntryId(null);
+                      setOpenProject(project);
+                    }}
                     onReveal={handleRevealVaultEntry}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}

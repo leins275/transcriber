@@ -91,6 +91,12 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         "model_state": "unloaded",
         "model_present": False,
         "cuda_runtime_present": None,
+        # The LLM engine's counterpart fields (same E15 rule: reported from
+        # config, never by constructing an engine). The default engine is
+        # the built-in one, whose GGUF is absent in a fresh tmp app dir.
+        "llm_provider": "llama_cpp",
+        "llm_model": "qwen3.6-35b-a3b",
+        "llm_model_present": False,
     }
 
 

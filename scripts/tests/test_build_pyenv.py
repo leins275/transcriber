@@ -61,6 +61,11 @@ def test_site_packages_holds_the_core_transcription_dependencies(baked_tree: Pat
     assert "faster_whisper" in names
     assert "ctranslate2" in names
     assert "huggingface_hub" in names
+    # The LLM feature's hard deps: the built-in llama.cpp runtime (CPU wheel
+    # from the project's own index) and the markdown -> PDF stack.
+    assert "llama_cpp" in names
+    assert "markdown" in names
+    assert "xhtml2pdf" in names
 
 
 def test_no_pytorch_anywhere_in_the_tree(baked_tree: Path) -> None:

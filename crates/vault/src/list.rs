@@ -29,7 +29,9 @@ use chrono::NaiveDate;
 
 use crate::code;
 use crate::date;
-use crate::paths::{SOURCE_STEM, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME};
+use crate::paths::{
+    RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
+};
 
 /// One meeting folder found while listing the vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +141,20 @@ fn collect_meetings(parent: &Path, project: Option<String>, out: &mut Vec<Meetin
             continue;
         };
         if !is_dir {
+            continue;
+        }
+
+        // The reserved artifact directories (`action items/`, `facts/`,
+        // `reports/`) live at this level but are not meetings -- without
+        // this check every one of them would surface as a bogus, undated
+        // meeting entry the moment an LLM job first writes one. Skipped
+        // case-insensitively (Windows filesystems are), and under
+        // `unsorted/` too: nothing writes them there, but a hand-created
+        // one is junk either way.
+        if RESERVED_PROJECT_DIR_NAMES
+            .iter()
+            .any(|reserved| meeting_name.eq_ignore_ascii_case(reserved))
+        {
             continue;
         }
 
@@ -342,6 +358,43 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].project.as_deref(), Some("ELS"));
+    }
+
+    #[test]
+    fn reserved_artifact_directories_are_never_listed_as_meetings() {
+        let dir = tempdir().expect("tempdir");
+        make_meeting(
+            &dir.path().join("ELS").join("260101 - Real meeting"),
+            true,
+            true,
+        );
+        for reserved in ["action items", "Facts", "REPORTS"] {
+            fs::create_dir_all(dir.path().join("ELS").join(reserved).join("some-item"))
+                .expect("create reserved dir");
+        }
+        // Under `unsorted/` too: nothing writes them there, but a
+        // hand-created one is junk, not a meeting.
+        fs::create_dir_all(dir.path().join("unsorted").join("facts")).expect("create junk dir");
+
+        let entries = list_meetings(dir.path());
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].meeting_name, "260101 - Real meeting");
+    }
+
+    #[test]
+    fn a_meeting_whose_name_merely_starts_with_a_reserved_word_still_lists() {
+        let dir = tempdir().expect("tempdir");
+        make_meeting(
+            &dir.path().join("ELS").join("260101 - facts review"),
+            true,
+            true,
+        );
+
+        let entries = list_meetings(dir.path());
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].meeting_name, "260101 - facts review");
     }
 
     #[test]

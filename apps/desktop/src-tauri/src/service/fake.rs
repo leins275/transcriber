@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    JobState, JobStatus, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth,
-    SubmitRequest, TranscriptionService,
+    JobState, JobStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, ServiceError,
+    ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// How many `status()` polls a scripted job spends in each phase.
@@ -188,6 +188,12 @@ struct Inner {
     next_outcome: ScriptedOutcome,
     jobs: HashMap<String, ScriptedJob>,
     model: FakeModelDownload,
+    /// The GGUF slot (the LLM feature) -- its own independent simulated
+    /// transfer, present by default so `--fake-service` dev sessions can
+    /// exercise the LLM job flow without a download step.
+    llm_model: FakeModelDownload,
+    /// Every derived-job submission this fake accepted, for assertions.
+    llm_submissions: Vec<LlmSubmitRequest>,
 }
 
 /// In-memory fake used by tests and by `--fake-service` dev mode (T11).
@@ -213,6 +219,8 @@ impl FakeService {
                 next_outcome: ScriptedOutcome::Succeed,
                 jobs: HashMap::new(),
                 model: FakeModelDownload::present(),
+                llm_model: FakeModelDownload::present(),
+                llm_submissions: Vec::new(),
             }),
         }
     }
@@ -226,6 +234,26 @@ impl FakeService {
             .expect("fake service mutex poisoned")
             .model = FakeModelDownload::absent();
         fake
+    }
+
+    /// A healthy fake whose simulated *LLM* model is not yet present -- the
+    /// first-use "download the GGUF" case.
+    pub fn with_llm_model_absent() -> Self {
+        let fake = Self::new();
+        fake.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .llm_model = FakeModelDownload::absent();
+        fake
+    }
+
+    /// Every derived-job submission this fake has accepted, in order.
+    pub fn llm_submissions(&self) -> Vec<LlmSubmitRequest> {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .llm_submissions
+            .clone()
     }
 
     /// Script the *next* started model transfer to fail once it reaches its
@@ -302,6 +330,7 @@ impl TranscriptionService for FakeService {
             // (`FakeModelDownload::advance_and_peek`, T13's own convention
             // for `present`/`model_present`).
             cuda_runtime_present: Some(inner.model.cuda_runtime_present),
+            llm_model_present: Some(inner.llm_model.present),
         })
     }
 
@@ -394,6 +423,45 @@ impl TranscriptionService for FakeService {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
         inner.model.cancel();
         Ok(inner.model.peek())
+    }
+
+    async fn submit_llm(&self, req: LlmSubmitRequest) -> Result<String, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        let job_id = Uuid::new_v4().to_string();
+        let outcome = std::mem::replace(&mut inner.next_outcome, ScriptedOutcome::Succeed);
+        let timing = inner.timing;
+        inner.llm_submissions.push(req);
+        inner.jobs.insert(
+            job_id.clone(),
+            ScriptedJob {
+                outcome,
+                timing,
+                polls: 0,
+            },
+        );
+        Ok(job_id)
+    }
+
+    async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.llm_model.advance_and_peek())
+    }
+
+    async fn start_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.llm_model.start();
+        Ok(inner.llm_model.peek())
+    }
+
+    async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.llm_model.cancel();
+        Ok(inner.llm_model.peek())
     }
 }
 

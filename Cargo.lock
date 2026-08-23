@@ -4199,6 +4199,7 @@ name = "transcriber-desktop"
 version = "0.5.1"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

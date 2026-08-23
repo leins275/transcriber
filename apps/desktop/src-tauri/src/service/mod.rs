@@ -79,6 +79,79 @@ pub trait TranscriptionService: Send + Sync {
             detail: "the job ledger is not supported by this service".to_string(),
         })
     }
+
+    /// `POST /v1/jobs` with a derived (LLM) job type -- summarize / extract
+    /// action items / extract facts / project report / per-recording export.
+    /// Returns F2's `job_id`, polled through the same `status()` as a
+    /// transcription. Default: unsupported (the house rule -- pipeline
+    /// fakes must not need an edit to keep compiling).
+    async fn submit_llm(&self, _req: LlmSubmitRequest) -> Result<String, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "llm jobs are not supported by this service".to_string(),
+        })
+    }
+
+    /// `GET /v1/llm-model/download` -- the GGUF slot's status. Same wire
+    /// shape as the whisper trio, its own independent transfer. Default:
+    /// unsupported (see `model_download_status`).
+    async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "llm model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/llm-model/download`. Default: unsupported.
+    async fn start_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "llm model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/llm-model/download`. Default: unsupported.
+    async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "llm model download is not supported by this service".to_string(),
+        })
+    }
+}
+
+/// The derived (LLM) job kinds F2 runs over already-transcribed material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmJobKind {
+    /// Write `<meeting>/summary.md` from the transcript.
+    Summarize,
+    /// Extract typed action items into `<project>/action items/`.
+    ActionItems,
+    /// Extract facts / answered questions into `<project>/facts/`.
+    Facts,
+    /// Project-essence status report into `<project>/reports/<date>/`.
+    Report,
+    /// Deterministic per-recording export into `<meeting>/exports/<date>/`.
+    Export,
+}
+
+impl LlmJobKind {
+    /// F2's `job_type` wire value (`schema.py::JobType`).
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            LlmJobKind::Summarize => "summarize",
+            LlmJobKind::ActionItems => "action_items",
+            LlmJobKind::Facts => "facts",
+            LlmJobKind::Report => "report",
+            LlmJobKind::Export => "export",
+        }
+    }
+}
+
+/// `POST /v1/jobs` request body for a derived job: F2 takes the meeting (or
+/// project) directory as `input_path` and writes its artifacts under
+/// `output_dir` -- both computed on this side, both validated against F2's
+/// own allowlist over there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmSubmitRequest {
+    pub kind: LlmJobKind,
+    pub input_path: String,
+    pub output_dir: String,
 }
 
 /// One row of F2's sqlite job ledger (`services/transcription/.../ledger.py`
@@ -204,6 +277,10 @@ pub struct ServiceHealth {
     /// never use), `Some(bool)` otherwise: whether the CUDA runtime wheels'
     /// `.ready` marker exists under the app folder's `runtime/`.
     pub cuda_runtime_present: Option<bool>,
+    /// F2's `llm_model_present` field (the LLM feature) -- whether the
+    /// configured GGUF file is on disk. `None` when the field is absent
+    /// (a build of F2 older than the feature).
+    pub llm_model_present: Option<bool>,
 }
 
 /// Wire-level model-download state (mirrors F2's `DownloadState`, T13,
