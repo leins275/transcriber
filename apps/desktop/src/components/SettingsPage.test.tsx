@@ -44,9 +44,12 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     settings: buildSettings(),
     serviceStatus: readyStatus,
     modelStatus: modelStatus(),
+    llmModelStatus: null,
     appVersion: "0.3.0" as string | null,
     onBack: () => {},
     onChangeRoot: () => {},
+    onStartLlmDownload: () => {},
+    onCancelLlmDownload: () => {},
     ...overrides,
   };
   return render(<SettingsPage {...props} />);

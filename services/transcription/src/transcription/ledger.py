@@ -21,7 +21,7 @@ from typing import Any
 
 from transcription import __version__
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at TEXT,
     finished_at TEXT,
     status TEXT NOT NULL,
+    job_type TEXT NOT NULL DEFAULT 'transcribe',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     device TEXT NOT NULL,
@@ -45,10 +46,24 @@ CREATE TABLE IF NOT EXISTS jobs (
     filtered_segment_count INTEGER,
     error_kind TEXT,
     error_message TEXT,
+    result_json TEXT,
     meeting_json TEXT,
     service_version TEXT NOT NULL
 )
 """
+
+# Columns added by each schema version bump, applied in order to a database
+# created by an older build. `ALTER TABLE ... ADD COLUMN` is the entire
+# migration story on purpose: rows are never rewritten, so a v1 row keeps
+# its meaning (`job_type` backfills to 'transcribe' via the column default).
+_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    # v1 -> v2: job-type discriminator + the result manifest for non-transcribe
+    # jobs (LLM summaries/extractions/reports write artifacts, not transcript.json).
+    2: (
+        "ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'transcribe'",
+        "ALTER TABLE jobs ADD COLUMN result_json TEXT",
+    ),
+}
 
 
 class LedgerError(Exception):
@@ -89,6 +104,14 @@ class Ledger:
                     f"{self.db_path}: ledger schema version {current_version} is newer than "
                     f"this build supports (max {SCHEMA_VERSION})"
                 )
+            # Migrate an existing older database before the CREATE TABLE IF
+            # NOT EXISTS below (a no-op once the table exists) so the DDL and
+            # the migrated table agree on the column set. `user_version` 0
+            # means a fresh database with no table yet -- nothing to migrate.
+            if current_version > 0:
+                for version in range(current_version + 1, SCHEMA_VERSION + 1):
+                    for statement in _MIGRATIONS[version]:
+                        self._conn.execute(statement)
             self._conn.execute(_DDL)
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC)"
@@ -110,6 +133,7 @@ class Ledger:
         device: str,
         source_path: str,
         output_path: str,
+        job_type: str = "transcribe",
         language: str | None = None,
         meeting_json: str | None = None,
     ) -> None:
@@ -118,13 +142,14 @@ class Ledger:
             self._conn.execute(
                 """
                 INSERT INTO jobs (
-                    job_id, created_at, status, provider, model, device,
+                    job_id, created_at, status, job_type, provider, model, device,
                     source_path, output_path, language, meeting_json, service_version
-                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     _now(),
+                    job_type,
                     provider,
                     model,
                     device,
@@ -160,12 +185,19 @@ class Ledger:
         job_id: str,
         *,
         elapsed_sec: float,
-        audio_duration_sec: float,
-        segment_count: int,
+        audio_duration_sec: float | None = None,
+        segment_count: int | None = None,
         filtered_segment_count: int = 0,
         cost_usd: float | None = None,
         currency: str | None = None,
+        result_json: str | None = None,
     ) -> None:
+        """Flip a row to ``succeeded``.
+
+        ``audio_duration_sec``/``segment_count`` describe a transcription's
+        output and stay ``NULL`` for the LLM job types, which instead record
+        their artifact manifest in ``result_json``.
+        """
         realtime_factor = elapsed_sec / audio_duration_sec if audio_duration_sec else None
         with self._lock:
             self._conn.execute(
@@ -179,7 +211,8 @@ class Ledger:
                     segment_count=?,
                     filtered_segment_count=?,
                     cost_usd=?,
-                    currency=?
+                    currency=?,
+                    result_json=?
                 WHERE job_id=?
                 """,
                 (
@@ -191,6 +224,7 @@ class Ledger:
                     filtered_segment_count,
                     cost_usd,
                     currency,
+                    result_json,
                     job_id,
                 ),
             )

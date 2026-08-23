@@ -12,6 +12,14 @@ dependencies = [
   "litellm>=1.60",
   "h11>=0.16",
   "huggingface_hub>=0.35",
+  # The built-in LLM runtime (summaries / action items / facts / reports).
+  # Pinned exactly: PyPI carries only sdists (needs CMake+MSVC); the
+  # prebuilt CPU wheel comes from the project's own index (see
+  # [[tool.uv.index]] below), whose available versions drift.
+  "llama-cpp-python==0.3.35",
+  # Markdown -> HTML -> PDF for reports and exports (pure-python stack).
+  "markdown>=3.6",
+  "xhtml2pdf>=0.2.16",
 ]
 
 [project.scripts]
@@ -40,6 +48,17 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
 ]
+
+[[tool.uv.index]]
+# llama-cpp-python's own CPU wheel index: the only source of prebuilt
+# Windows wheels (PyPI is sdist-only). `explicit = true` keeps every other
+# package resolving from PyPI.
+name = "llama-cpp-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+llama-cpp-python = { index = "llama-cpp-cpu" }
 
 [build-system]
 requires = ["hatchling"]
@@ -71,3 +90,9 @@ select = ["E", "F", "I", "B", "UP", "S"]
 [tool.mypy]
 strict = true
 files = ["src"]
+
+[[tool.mypy.overrides]]
+# All of these are imported lazily inside their seam modules only; none
+# ships usable type stubs.
+module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*"]
+ignore_missing_imports = true

@@ -157,3 +157,102 @@ class FakeDiarizer:
         if self.raise_kind is not None:
             raise ServiceError(self.raise_kind, f"fake diarizer raised {self.raise_kind.value}")
         return list(self._turns)
+
+
+class FakeLlm:
+    """A network-free stand-in for an LLM engine (`llm.base.LlmProvider`).
+
+    Scripted: each `complete()` call pops the next response from
+    `responses` (the last one repeats when the script runs dry, so a test
+    need not count map-reduce calls exactly). Records every messages list
+    and json_schema it was handed. Can raise a given kind, or cancel
+    cooperatively partway through a call.
+    """
+
+    name = "fake-llm"
+
+    def __init__(
+        self,
+        config: Any = None,
+        *,
+        responses: list[str] | None = None,
+        raise_kind: ErrorKind | None = None,
+        model: str = "fake-llm-model",
+    ) -> None:
+        self.config = config
+        self.responses = list(responses) if responses is not None else ["fake summary"]
+        self.raise_kind = raise_kind
+        self.model = model
+        self.calls: list[list[dict[str, str]]] = []
+        self.schemas: list[dict[str, Any] | None] = []
+        self.unload_calls = 0
+
+    def describe(self) -> Any:
+        from transcription.llm.base import LlmInfo
+
+        return LlmInfo(name=self.name, model=self.model, device="cpu", model_state="loaded")
+
+    def complete(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        json_schema: dict[str, Any] | None,
+        max_tokens: int,
+        temperature: float,
+        on_progress: Callable[[float], None],
+        cancel: CancelToken,
+    ) -> Any:
+        from transcription.llm.base import LlmCompletion
+
+        cancel.raise_if_cancelled()
+        if self.raise_kind is not None:
+            raise ServiceError(self.raise_kind, f"fake llm raised {self.raise_kind.value}")
+
+        self.calls.append(messages)
+        self.schemas.append(json_schema)
+        for fraction in (0.5, 1.0):
+            cancel.raise_if_cancelled()
+            on_progress(fraction)
+
+        if len(self.responses) > 1:
+            text = self.responses.pop(0)
+        else:
+            text = self.responses[0]
+        return LlmCompletion(text=text, completion_tokens=len(text) // 3)
+
+    def unload(self) -> None:
+        self.unload_calls += 1
+
+
+_FAKE_PNG = b"\x89PNG\r\n\x1a\nfake-png-bytes"
+
+
+class FakeFrameExtractor:
+    """A decode-free stand-in for `frame_extractor.PyAvFrameExtractor`."""
+
+    def __init__(
+        self,
+        *,
+        no_video: bool = False,
+        raise_kind: ErrorKind | None = None,
+    ) -> None:
+        self.no_video = no_video
+        self.raise_kind = raise_kind
+        self.calls: list[tuple[Path, list[float]]] = []
+
+    def extract(
+        self,
+        video_path: Path,
+        timestamps: list[float],
+        *,
+        cancel: CancelToken,
+    ) -> list[tuple[float, bytes]]:
+        cancel.raise_if_cancelled()
+        self.calls.append((video_path, list(timestamps)))
+        if self.raise_kind is not None:
+            raise ServiceError(
+                self.raise_kind, f"fake frame extractor raised {self.raise_kind.value}"
+            )
+        if self.no_video:
+            return []
+        return [(stamp, _FAKE_PNG) for stamp in sorted(timestamps)]

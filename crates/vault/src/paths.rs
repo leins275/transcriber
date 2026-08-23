@@ -57,6 +57,33 @@ pub const SUMMARY_FILE_NAME: &str = "summary.md";
 /// FR-15).
 pub const UNSORTED_DIR_NAME: &str = "unsorted";
 
+/// Reserved project-level directory for extracted action items
+/// (`<PROJECT>/action items/<slug>/`). Written by F2's LLM extraction
+/// jobs; the exact string is a cross-language contract mirrored in
+/// `services/transcription/src/transcription/artifacts.py`.
+pub const ACTION_ITEMS_DIR_NAME: &str = "action items";
+
+/// Reserved project-level directory for extracted facts and answered
+/// questions (`<PROJECT>/facts/<slug>/`). Same contract as
+/// [`ACTION_ITEMS_DIR_NAME`].
+pub const FACTS_DIR_NAME: &str = "facts";
+
+/// Reserved project-level directory for dated project-essence reports
+/// (`<PROJECT>/reports/<YYMMDD>/`). Same contract as
+/// [`ACTION_ITEMS_DIR_NAME`].
+pub const REPORTS_DIR_NAME: &str = "reports";
+
+/// Reserved directory *inside a meeting folder* for per-recording exports
+/// (`<meeting>/exports/<YYMMDD>/`). Listed here for the contract's sake;
+/// `list_meetings` never recurses into meeting folders, so it needs no
+/// listing exclusion.
+pub const EXPORTS_DIR_NAME: &str = "exports";
+
+/// Every project-level directory name that is *not* a meeting and must be
+/// skipped by the vault listing.
+pub const RESERVED_PROJECT_DIR_NAMES: [&str; 3] =
+    [ACTION_ITEMS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME];
+
 /// Joins `components` onto the canonicalized `root`, rejecting the whole
 /// call with [`VaultError::PathEscapesVault`] if any component could
 /// smuggle the result outside the vault (FR-14).

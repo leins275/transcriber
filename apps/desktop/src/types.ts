@@ -22,10 +22,15 @@ export type SettingsView = {
 export type JobState =
   "pending" | "ingesting" | "queued" | "running" | "done" | "failed" | "rejected";
 
+/** Which pipeline a job runs. `transcribe` is the original; the rest are
+ * the LLM feature's derived jobs (additive to the frozen contract). */
+export type JobType = "transcribe" | "summarize" | "action_items" | "facts" | "report" | "export";
+
 export type JobSnapshot = {
   id: string;
   source_path: string;
   file_name: string;
+  job_type: JobType;
   state: JobState;
   classification: "sorted" | "unsorted" | null;
   meeting_dir: string | null;
@@ -120,6 +125,51 @@ export type MeetingUpdate = {
   /** Six digits, `YYMMDD`. */
   date: string;
   title: string;
+};
+
+// LLM-feature extension to the IPC contract (additive): project-level
+// artifacts (action items / facts), dated reports, and the GGUF download.
+
+export type ArtifactKind = "action_items" | "facts";
+
+/** One artifact folder as `list_project_artifacts` lists it. */
+export type ArtifactView = {
+  slug: string;
+  screenshot_count: number;
+};
+
+export type ArtifactImageView = {
+  name: string;
+  /** `data:image/png;base64,...` — the webview has no filesystem access. */
+  data_url: string;
+};
+
+/** One artifact opened for reading: markdown (front matter stripped into
+ * `meta`) plus its screenshots. */
+export type ArtifactContentView = {
+  slug: string;
+  meta: Record<string, unknown>;
+  markdown: string;
+  images: ArtifactImageView[];
+};
+
+/** One dated report folder under `<project>/reports/`. */
+export type ReportView = {
+  name: string;
+  has_markdown: boolean;
+  has_pdf: boolean;
+};
+
+/** The GGUF (LLM model) download status — the whisper trio's shape minus
+ * the CUDA fields. */
+export type LlmModelDownloadStatus = {
+  state: "idle" | "downloading" | "verifying" | "complete" | "cancelled" | "error";
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  error_kind: string | null;
+  error_message: string | null;
+  model_present: boolean;
 };
 
 // Service-log extension to the IPC contract: one row of F2's own sqlite job

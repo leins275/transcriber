@@ -17,9 +17,14 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AppError,
+  ArtifactContentView,
+  ArtifactKind,
+  ArtifactView,
   JobSnapshot,
   LedgerJobView,
+  LlmModelDownloadStatus,
   MeetingUpdate,
+  ReportView,
   ServiceStatusView,
   SettingsView,
   SummaryView,
@@ -113,6 +118,36 @@ export const api = {
     call<ModelDownloadStatus>("start_model_download"),
   cancelModelDownload: (): Promise<ModelDownloadStatus> =>
     call<ModelDownloadStatus>("cancel_model_download"),
+  // LLM feature (additive): derived jobs over already-transcribed material,
+  // project-artifact browsing, and the GGUF model-download trio. Meetings
+  // are named by their vault-entry id, projects by their validated code --
+  // never by a path.
+  summarizeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("summarize_vault_entry", { entryId }),
+  extractVaultEntry: (entryId: string, kind: ArtifactKind): Promise<JobSnapshot> =>
+    call<JobSnapshot>("extract_vault_entry", { entryId, kind }),
+  exportRecording: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("export_recording", { entryId }),
+  exportProjectEssence: (project: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("export_project_essence", { project }),
+  listProjectArtifacts: (project: string, kind: ArtifactKind): Promise<ArtifactView[]> =>
+    call<ArtifactView[]>("list_project_artifacts", { project, kind }),
+  readArtifact: (project: string, kind: ArtifactKind, slug: string): Promise<ArtifactContentView> =>
+    call<ArtifactContentView>("read_artifact", { project, kind, slug }),
+  revealArtifact: (project: string, kind: ArtifactKind, slug: string): Promise<void> =>
+    call<void>("reveal_artifact", { project, kind, slug }),
+  listProjectReports: (project: string): Promise<ReportView[]> =>
+    call<ReportView[]>("list_project_reports", { project }),
+  readReport: (project: string, name: string): Promise<string> =>
+    call<string>("read_report", { project, name }),
+  revealReport: (project: string, name: string): Promise<void> =>
+    call<void>("reveal_report", { project, name }),
+  llmModelDownloadStatus: (): Promise<LlmModelDownloadStatus> =>
+    call<LlmModelDownloadStatus>("llm_model_download_status"),
+  startLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>
+    call<LlmModelDownloadStatus>("start_llm_model_download"),
+  cancelLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>
+    call<LlmModelDownloadStatus>("cancel_llm_model_download"),
 };
 
 /** Upsert-by-id feed of job transitions (FR-8, FR-14). */

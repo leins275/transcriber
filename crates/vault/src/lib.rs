@@ -44,9 +44,12 @@
 //! ```
 //!
 //! Every ingested recording — sorted or unsorted — gets its own folder, so
-//! that later artifacts (a transcript, eventually a summary) can be
-//! written next to the source. `source.*`, `transcript.json`, `summary.md`
-//! and `unsorted` are reserved names owned by the vault contract.
+//! that later artifacts (a transcript, a summary, a per-recording export)
+//! can be written next to the source. `source.*`, `transcript.json`,
+//! `summary.md`, `exports` (inside a meeting folder) and `unsorted` are
+//! reserved names owned by the vault contract, as are the project-level
+//! artifact directories `action items`, `facts` and `reports` written by
+//! F2's LLM jobs (never listed as meetings; see [`list`]).
 //!
 //! ## Usage (the call F3's `#[command]` will make)
 //!
@@ -118,11 +121,23 @@ pub mod list;
 /// these the only vault-mutating calls outside ingest.
 pub mod manage;
 
+/// Read-only enumeration of the project-level artifacts (action items,
+/// facts, reports) written by F2's LLM jobs. Same best-effort contract as
+/// [`list`].
+pub mod artifacts;
+
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
+pub use artifacts::{
+    list_project_artifacts, list_reports, ArtifactEntry, ArtifactKind, ReportEntry,
+};
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
 pub use list::{list_meetings, MeetingEntry};
 pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
-pub use paths::{SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME};
+pub use paths::{
+    ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME,
+    RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME,
+    UNSORTED_DIR_NAME,
+};

@@ -1,17 +1,22 @@
 import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { ServiceStatusView, SettingsView } from "../types";
+import type { LlmModelDownloadStatus, ServiceStatusView, SettingsView } from "../types";
 
 export type SettingsPageProps = {
   settings: SettingsView;
   serviceStatus: ServiceStatusView;
   modelStatus: ModelDownloadStatus | null;
+  /** The GGUF (assistant LLM) model's status -- `null` while unknown, which
+   * omits the actions rather than showing a false "missing". */
+  llmModelStatus: LlmModelDownloadStatus | null;
   /** The installed build's version, once known -- `null` simply omits the
    * row rather than showing a placeholder. */
   appVersion: string | null;
   onBack: () => void;
   onChangeRoot: () => void;
+  onStartLlmDownload: () => void;
+  onCancelLlmDownload: () => void;
 };
 
 function extensionList(extensions: string[]): string {
@@ -32,9 +37,12 @@ export function SettingsPage({
   settings,
   serviceStatus,
   modelStatus,
+  llmModelStatus,
   appVersion,
   onBack,
   onChangeRoot,
+  onStartLlmDownload,
+  onCancelLlmDownload,
 }: SettingsPageProps) {
   return (
     <section className={styles.page} role="region" aria-label="Settings">
@@ -91,6 +99,61 @@ export function SettingsPage({
             )
           ) : (
             <div className={styles.line}>large-v3</div>
+          )}
+        </div>
+      </div>
+
+      <div className={styles.row}>
+        <div className={styles.kicker}>Assistant</div>
+        <div className={styles.value}>
+          {llmModelStatus === null ? (
+            <div className={styles.line}>Local language model</div>
+          ) : llmModelStatus.model_present ? (
+            <>
+              <div className={styles.line}>
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                Local language model installed
+              </div>
+              <p className={styles.hint}>
+                Summaries, action items, facts and project reports run on this machine.
+              </p>
+            </>
+          ) : llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying" ? (
+            <>
+              <div className={styles.line}>
+                Downloading the language model · {Math.round(llmModelStatus.percent)}%
+                <button type="button" className="btn btn-ghost" onClick={onCancelLlmDownload}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={styles.line}>
+                Local language model not installed
+                <button type="button" className="btn btn-secondary" onClick={onStartLlmDownload}>
+                  Download (~19 GB)
+                </button>
+              </div>
+              {llmModelStatus.error_message && (
+                <p className={styles.warning}>{llmModelStatus.error_message}</p>
+              )}
+              <p className={styles.hint}>
+                Needed for summaries, action items, facts and project reports. Everything runs
+                locally; nothing leaves this machine.
+              </p>
+            </>
           )}
         </div>
       </div>

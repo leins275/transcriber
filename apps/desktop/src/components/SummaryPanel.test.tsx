@@ -31,11 +31,22 @@ describe("SummaryPanel", () => {
     expect(screen.getByText(/summary\.md/)).toBeInTheDocument();
   });
 
-  it("says plainly that nothing generates summaries yet", async () => {
+  it("points the empty state at the Summarize action", async () => {
     render(<SummaryPanel entryId="v-1" onLoad={() => Promise.resolve(buildSummary())} />);
 
-    // An honest empty state, not "coming soon": the operator can act on it.
-    expect(await screen.findByText(/needs a language model/i)).toBeInTheDocument();
+    // Actionable, not "coming soon": the Summarize button generates one.
+    expect(await screen.findByText(/Summarize/)).toBeInTheDocument();
+  });
+
+  it("reloads when the reload token bumps (a summarize job finished)", async () => {
+    const onLoad = vi.fn().mockResolvedValue(buildSummary());
+    const { rerender } = render(<SummaryPanel entryId="v-1" onLoad={onLoad} reloadToken={0} />);
+    await screen.findByText(/no summary/i);
+
+    rerender(<SummaryPanel entryId="v-1" onLoad={onLoad} reloadToken={1} />);
+    await screen.findByText(/no summary/i);
+
+    expect(onLoad).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a read failure instead of pretending there is no summary", async () => {

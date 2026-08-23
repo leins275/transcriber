@@ -79,9 +79,53 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
+| `llm_provider` | `TRANSCRIBER_LLM_PROVIDER` | `llama_cpp` (built-in; `openai_compat` calls an external server) |
+| `llm_model` | `TRANSCRIBER_LLM_MODEL` | `qwen3.6-35b-a3b` |
+| `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
+| `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | the pinned Qwen GGUF repo + quant the in-app download fetches |
+| `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `16384` |
+| `llm_gpu_layers` | `TRANSCRIBER_LLM_GPU_LAYERS` | `0` (pure CPU; the shipped wheel is CPU-only) |
+| `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
+| `llm_temperature` | `TRANSCRIBER_LLM_TEMPERATURE` | `0.3` |
+| `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
+| `llm_base_url` | `TRANSCRIBER_LLM_BASE_URL` | none (`openai_compat` only, e.g. `http://127.0.0.1:1234/v1` for LM Studio) |
+| `llm_api_key` | `TRANSCRIBER_LLM_API_KEY` | none -- env or config file, never a CLI flag (FR-9) |
+| `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the ~20 GB working set after each LLM job) |
 
 `Config.public()` (what `/health` and log lines may show) never includes
-`token`, `provider_api_key` or `hf_token`.
+`token`, `provider_api_key`, `hf_token` or `llm_api_key`.
+
+## Derived (LLM) jobs
+
+Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
+`input_path` (a meeting or project directory under the allowed roots)
+instead of `audio_path`:
+
+| `job_type` | reads | writes |
+|---|---|---|
+| `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` |
+| `action_items` | same | `<project>/action items/<slug>/<slug>.md` + `screenshot-*.png` |
+| `facts` | same | `<project>/facts/<slug>/...` (same shape) |
+| `report` | everything in a project directory | `<project>/reports/<YYMMDD>/report.md` + `report.pdf` |
+| `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `export.pdf` |
+
+All of them run on the built-in llama.cpp runtime (`llm_provider:
+"llama_cpp"`, a GGUF fetched via `POST /v1/llm-model/download` or
+`download-llm-model`) or an external OpenAI-compatible server
+(`llm_provider: "openai_compat"` + `llm_base_url`). Long transcripts are
+map-reduced against `llm_ctx`; extraction output is grammar-constrained
+JSON with one bounded repair retry (`error_kind: "llm_output"` after
+that). Screenshots come from the recording's video track via PyAV at the
+timestamps the model cites -- an audio-only recording simply gets none,
+and a failed screenshot pass degrades (items are written without images,
+the job records a warning) rather than failing the job. PDF rendering
+degrades the same way: the `.md` is always written first.
+
+Every job type shares the one serial worker: an LLM job queued behind a
+transcription waits, and vice versa -- which is also what guarantees
+whisper and the LLM never infer concurrently. With the default
+`llm_keep_loaded: false` the GGUF's working set is released after each
+LLM job.
 
 ## Speaker diarization (pyannote)
 

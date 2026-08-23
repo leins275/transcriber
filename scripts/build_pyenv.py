@@ -160,6 +160,14 @@ def export_requirements(
     _run(cmd, cwd=service_dir)
 
 
+# llama-cpp-python ships no Windows wheel on PyPI (sdist only, needs
+# CMake+MSVC); pyproject.toml pins it to the project's own CPU wheel index
+# via [tool.uv.sources]. `uv export` flattens that back to a bare
+# `name==version` line, so the install step below must be told about the
+# index again or it would fall back to PyPI's sdist and try to compile.
+LLAMA_CPP_CPU_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+
+
 def install_dependencies(
     uv_exe: str, python_exe: Path, requirements_file: Path, target_dir: Path
 ) -> None:
@@ -175,6 +183,8 @@ def install_dependencies(
             "--target",
             str(target_dir),
             "--no-deps",
+            "--extra-index-url",
+            LLAMA_CPP_CPU_INDEX,
             "-r",
             str(requirements_file),
         ]

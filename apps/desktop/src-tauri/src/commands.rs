@@ -48,6 +48,11 @@ pub mod ledger;
 /// transcript, rename/re-file it, delete it (`src/commands/meetings.rs`).
 pub mod meetings;
 
+/// The LLM feature's commands (`src/commands/llm.rs`): derived jobs
+/// (summary, action items, facts, exports, reports), artifact browsing and
+/// the GGUF model-download trio.
+pub mod llm;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever

@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import styles from "./SummaryPanel.module.css";
+import { Markdown } from "./Markdown";
 import type { SummaryView } from "../types";
 
 export type SummaryPanelProps = {
   entryId: string;
   onLoad: (entryId: string) => Promise<SummaryView>;
+  /** Bump to re-read `summary.md` — App increments it when a summarize job
+   * for this entry finishes, so a freshly generated summary appears without
+   * reopening the page. */
+  reloadToken?: number;
 };
 
 function messageOf(error: unknown): string {
@@ -15,23 +20,14 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * A meeting's `summary.md`, if anything has written one.
+ * A meeting's `summary.md` — written by the Summarize job (the LLM
+ * feature), or by hand; `summary.md` has been a reserved vault name since
+ * F1's first spec, so both read identically here.
  *
- * Nothing in this app generates summaries — that needs a language model, and
- * it is a feature in its own right rather than something to fake here. But
- * `summary.md` has been a reserved name in the vault contract since F1's
- * first spec, so a summary written by hand (or by whatever eventually
- * generates them) is readable the day it appears.
- *
- * The empty state therefore names the exact path a summary would live at,
- * rather than saying "coming soon" — that turns a disabled tab into
- * something the operator can actually act on.
- *
- * Rendered as preformatted text, not parsed Markdown: pulling in a Markdown
- * renderer to display a file this app does not yet produce would be
- * machinery ahead of a use case.
+ * The empty state names the exact path a summary would live at and points
+ * at the Summarize button, so an empty tab is actionable rather than dead.
  */
-export function SummaryPanel({ entryId, onLoad }: SummaryPanelProps) {
+export function SummaryPanel({ entryId, onLoad, reloadToken = 0 }: SummaryPanelProps) {
   const [summary, setSummary] = useState<SummaryView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +49,7 @@ export function SummaryPanel({ entryId, onLoad }: SummaryPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [entryId, onLoad]);
+  }, [entryId, onLoad, reloadToken]);
 
   if (loading) {
     return (
@@ -72,15 +68,15 @@ export function SummaryPanel({ entryId, onLoad }: SummaryPanelProps) {
   }
 
   if (summary?.markdown) {
-    return <pre className={styles.markdown}>{summary.markdown}</pre>;
+    return <Markdown markdown={summary.markdown} />;
   }
 
   return (
     <div className={styles.empty}>
       <p className={styles.emptyLead}>No summary for this meeting yet.</p>
       <p className={styles.emptyDetail}>
-        Nothing generates summaries yet — that needs a language model. Anything written to{" "}
-        <span className="mono">{summary?.path ?? "summary.md"}</span> shows up here.
+        Use <strong>Summarize</strong> above to generate one with the local language model. Anything
+        written to <span className="mono">{summary?.path ?? "summary.md"}</span> shows up here.
       </p>
     </div>
   );

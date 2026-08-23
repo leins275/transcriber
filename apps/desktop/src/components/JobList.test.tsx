@@ -7,6 +7,7 @@ function buildJob(id: string, file_name: string): JobSnapshot {
   return {
     id,
     source_path: `C:\\Meetings\\inbox\\${file_name}`,
+    job_type: "transcribe",
     file_name,
     state: "pending",
     classification: null,

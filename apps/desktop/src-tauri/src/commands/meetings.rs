@@ -209,7 +209,10 @@ fn parse_transcript(
 /// Both halves matter: the id lookup is what stops the UI naming an arbitrary
 /// path, and the containment re-check is what stops an id issued before the
 /// operator changed their meetings root from still resolving into the old one.
-async fn resolve_entry(state: &AppState, entry_id: &str) -> Result<(PathBuf, PathBuf), AppError> {
+pub(super) async fn resolve_entry(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<(PathBuf, PathBuf), AppError> {
     let target = state
         .vault_index
         .read()
@@ -232,7 +235,7 @@ async fn resolve_entry(state: &AppState, entry_id: &str) -> Result<(PathBuf, Pat
 }
 
 /// The meeting folder's own name, for messages and the returned view.
-fn meeting_name_of(meeting_dir: &Path) -> String {
+pub(super) fn meeting_name_of(meeting_dir: &Path) -> String {
     meeting_dir
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

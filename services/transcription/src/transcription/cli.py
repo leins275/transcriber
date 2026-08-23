@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from transcription.api.model_routes import build_download
+from transcription.api.model_routes import build_download, build_llm_model_download
 from transcription.config import Config, ConfigError, load_config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.jobs import TERMINAL_STATUSES, JobManager, JobState
@@ -45,6 +45,7 @@ EXIT_CODES: dict[ErrorKind, int] = {
     ErrorKind.PROVIDER_UNAVAILABLE: 6,
     ErrorKind.TIMEOUT: 7,
     ErrorKind.CANCELLED: 8,
+    ErrorKind.LLM_OUTPUT: 9,
     ErrorKind.INTERNAL: 1,
 }
 
@@ -113,6 +114,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     download_model_parser.set_defaults(func=_cmd_download_model)
 
+    download_llm_parser = subparsers.add_parser(
+        "download-llm-model", help="download the configured LLM GGUF model and exit"
+    )
+    _add_common_flags(download_llm_parser)
+    download_llm_parser.set_defaults(func=_cmd_download_llm_model)
+
     return parser
 
 
@@ -161,7 +168,21 @@ def _cmd_download_model(args: argparse.Namespace, config: Config) -> int:
     except ServiceError as exc:
         print(redact(exc.message), file=sys.stderr)
         return EXIT_CODES.get(exc.kind, EXIT_CODES[ErrorKind.INTERNAL])
+    return _run_download(download, models_dir=args.output_dir or config.model_path)
 
+
+def _cmd_download_llm_model(args: argparse.Namespace, config: Config) -> int:
+    """`download-llm-model`: the GGUF counterpart of `download-model`, same
+    core, same wire behaviour, its own destination (`llm_model_path`)."""
+    try:
+        download = build_llm_model_download(config)
+    except ServiceError as exc:
+        print(redact(exc.message), file=sys.stderr)
+        return EXIT_CODES.get(exc.kind, EXIT_CODES[ErrorKind.INTERNAL])
+    return _run_download(download, models_dir=config.llm_model_path)
+
+
+def _run_download(download: Any, *, models_dir: str) -> int:
     last_reported: float | None = None
 
     def on_progress(event: dict[str, object]) -> None:
@@ -196,7 +217,7 @@ def _cmd_download_model(args: argparse.Namespace, config: Config) -> int:
         "revision": download.revision,
         "downloaded_bytes": download.downloaded_bytes,
         "total_bytes": download.total_bytes,
-        "models_dir": args.output_dir or config.model_path,
+        "models_dir": models_dir,
     }
     sys.stdout.write(json.dumps(summary) + "\n")
     return 0

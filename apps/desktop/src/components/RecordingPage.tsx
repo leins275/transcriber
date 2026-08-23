@@ -7,7 +7,14 @@ import { formatDuration } from "../lib/format";
 import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
 import { speakerNames } from "../lib/turns";
 import { groupIntoTurns } from "../lib/turns";
-import type { MeetingUpdate, SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type {
+  ArtifactKind,
+  JobType,
+  MeetingUpdate,
+  SummaryView,
+  TranscriptView,
+  VaultMeetingView,
+} from "../types";
 
 export type RecordingPageProps = {
   entry: VaultMeetingView;
@@ -20,6 +27,16 @@ export type RecordingPageProps = {
   onUpdate: (entryId: string, update: MeetingUpdate) => Promise<void>;
   onDelete: (entryId: string) => Promise<void>;
   onTranscribe: (entryId: string) => Promise<void>;
+  /** The LLM feature's on-demand jobs over this recording. */
+  onSummarize: (entryId: string) => Promise<void>;
+  onExtract: (entryId: string, kind: ArtifactKind) => Promise<void>;
+  onExportPdf: (entryId: string) => Promise<void>;
+  /** Derived-job types currently in flight for this entry — the matching
+   * buttons render busy instead of firing twice. */
+  activeLlmJobs: JobType[];
+  /** Bumped when a summarize job for this entry finishes, so the summary
+   * tab re-reads `summary.md`. */
+  summaryReloadToken: number;
 };
 
 type Tab = "transcript" | "summary";
@@ -53,6 +70,11 @@ export function RecordingPage({
   onUpdate,
   onDelete,
   onTranscribe,
+  onSummarize,
+  onExtract,
+  onExportPdf,
+  activeLlmJobs,
+  summaryReloadToken,
 }: RecordingPageProps) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [panel, setPanel] = useState<Panel>("none");
@@ -113,6 +135,18 @@ export function RecordingPage({
     }
   }, [entry.id, onTranscribe]);
 
+  const runLlm = useCallback(
+    async (action: (entryId: string) => Promise<void>) => {
+      setError(null);
+      try {
+        await action(entry.id);
+      } catch (caught) {
+        setError(messageOf(caught));
+      }
+    },
+    [entry.id],
+  );
+
   const confirmDelete = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -166,6 +200,52 @@ export function RecordingPage({
               <button type="button" className="btn" disabled={busy} onClick={transcribe}>
                 {busy ? "Queueing…" : entry.has_transcript ? "Re-transcribe" : "Transcribe"}
               </button>
+            )}
+            {entry.has_transcript && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={activeLlmJobs.includes("summarize")}
+                  onClick={() => void runLlm(onSummarize)}
+                >
+                  {activeLlmJobs.includes("summarize") ? "Summarizing…" : "Summarize"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={!entry.project || activeLlmJobs.includes("action_items")}
+                  title={
+                    entry.project
+                      ? undefined
+                      : "File this recording under a project first — action items are stored per project"
+                  }
+                  onClick={() => void runLlm((id) => onExtract(id, "action_items"))}
+                >
+                  {activeLlmJobs.includes("action_items") ? "Extracting…" : "Action items"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={!entry.project || activeLlmJobs.includes("facts")}
+                  title={
+                    entry.project
+                      ? undefined
+                      : "File this recording under a project first — facts are stored per project"
+                  }
+                  onClick={() => void runLlm((id) => onExtract(id, "facts"))}
+                >
+                  {activeLlmJobs.includes("facts") ? "Extracting…" : "Facts"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={activeLlmJobs.includes("export")}
+                  onClick={() => void runLlm(onExportPdf)}
+                >
+                  {activeLlmJobs.includes("export") ? "Exporting…" : "Export PDF"}
+                </button>
+              </>
             )}
             <button type="button" className="btn btn-ghost" onClick={() => onReveal(entry.id)}>
               Reveal
@@ -280,7 +360,11 @@ export function RecordingPage({
 
         {tab === "summary" && (
           <div role="tabpanel" id="recording-panel-summary" aria-labelledby="recording-tab-summary">
-            <SummaryPanel entryId={entry.id} onLoad={onReadSummary} />
+            <SummaryPanel
+              entryId={entry.id}
+              onLoad={onReadSummary}
+              reloadToken={summaryReloadToken}
+            />
           </div>
         )}
       </div>

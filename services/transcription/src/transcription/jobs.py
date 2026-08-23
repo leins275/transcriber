@@ -22,20 +22,49 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from transcription import paths, transcript
+from transcription import artifacts, exporting, frames, paths, transcript
 from transcription.config import Config
 from transcription.diarization import label_segments
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
 from transcription.errors import ErrorKind, ServiceError, redact
+from transcription.frame_extractor import FrameExtractorProtocol, PyAvFrameExtractor
 from transcription.ledger import Ledger
+from transcription.llm import BUILTIN_ENGINE, get_llm_provider, validate_llm_provider_name
+from transcription.llm.base import LlmProvider, Message
+from transcription.llm.chunking import chunk_lines
+from transcription.llm.extraction import merge_items, snap_timestamps
+from transcription.llm.prompts import (
+    action_items_messages,
+    facts_messages,
+    render_transcript_lines,
+    repair_messages,
+)
+from transcription.llm.report import collect_project_materials, report_from_materials
+from transcription.llm.shapes import (
+    ActionItemsOut,
+    FactsOut,
+    LlmOutputError,
+    parse_llm_json,
+)
+from transcription.llm.summarize import summarize_chunks
+from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
 from transcription.schema import DiarizationInfo, Segment
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+
+# Every job type this manager can run. All of them share the single serial
+# worker: an LLM job queued behind a transcription waits, and vice versa --
+# which is also the RAM guarantee that whisper and the LLM never infer
+# concurrently.
+KNOWN_JOB_TYPES = frozenset(
+    {"transcribe", "summarize", "action_items", "facts", "report", "export"}
+)
 
 _logger = logging.getLogger("transcription")
 
@@ -54,6 +83,7 @@ class JobState:
     model: str
     source_path: str
     output_path: str
+    job_type: str = "transcribe"
     language: str | None = None
     diarize: bool = False
     progress: float = 0.0
@@ -62,6 +92,10 @@ class JobState:
     cost_usd: float | None = None
     error_kind: ErrorKind | None = None
     error_message: str | None = None
+    # The artifact manifest a non-transcribe job leaves behind (JSON text).
+    result_json: str | None = None
+    # Non-fatal degradations (failed screenshots, failed PDF render).
+    warnings: list[str] = field(default_factory=list)
     cancel_token: CancelToken = field(default_factory=CancelToken)
 
 
@@ -74,6 +108,8 @@ class JobManager:
         ledger: Ledger,
         *,
         diarizer_factory: Callable[[Config], DiarizerProtocol] | None = None,
+        llm_factory: Callable[[Config], LlmProvider] | None = None,
+        frame_extractor_factory: Callable[[], FrameExtractorProtocol] | None = None,
     ) -> None:
         self._config = config
         self._ledger = ledger
@@ -86,6 +122,18 @@ class JobManager:
         self._diarizer: DiarizerProtocol | None = None
         self._diarizer_factory: Callable[[Config], DiarizerProtocol] = (
             diarizer_factory if diarizer_factory is not None else PyannoteDiarizer
+        )
+        # The LLM engine and the frame extractor, cached the same way;
+        # `llm_factory`/`frame_extractor_factory` are the matching test seams.
+        self._llm: LlmProvider | None = None
+        self._llm_factory: Callable[[Config], LlmProvider] = (
+            llm_factory
+            if llm_factory is not None
+            else (lambda config: get_llm_provider(config.llm_provider, config))
+        )
+        self._frame_extractor: FrameExtractorProtocol | None = None
+        self._frame_extractor_factory: Callable[[], FrameExtractorProtocol] = (
+            frame_extractor_factory if frame_extractor_factory is not None else PyAvFrameExtractor
         )
         # Guards `self._providers` against two threads racing to construct
         # the same not-yet-cached provider (E15: resolution now happens off
@@ -137,10 +185,51 @@ class JobManager:
                 self._diarizer = self._diarizer_factory(self._config)
             return self._diarizer
 
+    def _get_llm(self) -> LlmProvider:
+        """Resolve (and cache) the LLM engine.
+
+        Same off-event-loop rule as `_get_provider` (E15): construction can
+        lazily import an LLM library, so callers reach this via
+        `asyncio.to_thread`. The instance is cached even with
+        `llm_keep_loaded=false` -- what unloads after a job is the model
+        weights (`provider.unload()`), not the provider object.
+        """
+        with self._provider_lock:
+            if self._llm is None:
+                self._llm = self._llm_factory(self._config)
+            return self._llm
+
+    def _get_frame_extractor(self) -> FrameExtractorProtocol:
+        with self._provider_lock:
+            if self._frame_extractor is None:
+                self._frame_extractor = self._frame_extractor_factory()
+            return self._frame_extractor
+
+    def llm_info(self) -> dict[str, Any]:
+        """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
+
+        Mirrors `provider_info()`: never constructs an engine. `model_present`
+        reports whether the configured GGUF file is on disk (always `True`
+        for the external-server engine, whose model is not this process's
+        concern).
+        """
+        if self._config.llm_provider == BUILTIN_ENGINE:
+            model_file = Path(self._config.llm_model_path) / self._config.llm_model_file
+            model_present = model_file.is_file()
+        else:
+            model_present = True
+        return {
+            "llm_provider": self._config.llm_provider,
+            "llm_model": self._config.llm_model,
+            "llm_model_present": model_present,
+        }
+
     async def submit(
         self,
         *,
-        audio_path: str,
+        job_type: str = "transcribe",
+        audio_path: str | None = None,
+        input_path: str | None = None,
         output_dir: str,
         language: str | None = None,
         provider: str | None = None,
@@ -151,15 +240,61 @@ class JobManager:
         """Validate, insert the ledger row and enqueue a job (FR-2, FR-9).
 
         Returns the new job id immediately, before the job runs. Raises
-        `ServiceError(invalid_request)` and creates no ledger row when
-        `audio_path`/`output_dir` fall outside the configured allowlist.
+        `ServiceError(invalid_request)` and creates no ledger row when the
+        input/output paths fall outside the configured allowlist, when the
+        job type is unknown, or when a derived job's input directory holds
+        no ``transcript.json`` to work from.
         """
+        if job_type not in KNOWN_JOB_TYPES:
+            known = ", ".join(sorted(KNOWN_JOB_TYPES))
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"unknown job type {job_type!r}; known job types: {known}",
+            )
+
         allowed_roots = [Path(root) for root in self._config.allowed_roots]
-        resolved_audio = paths.resolve_under_roots(audio_path, allowed_roots, must_exist=True)
+        if job_type == "transcribe":
+            if not audio_path:
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST, "a transcribe job requires audio_path"
+                )
+            resolved_source = paths.resolve_under_roots(audio_path, allowed_roots, must_exist=True)
+        else:
+            if not input_path:
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST, f"a {job_type} job requires input_path"
+                )
+            resolved_source = paths.resolve_under_roots(input_path, allowed_roots, must_exist=True)
+            if not resolved_source.is_dir():
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    f"input_path must be a directory: {resolved_source.name}",
+                )
+            # The per-meeting derived jobs read the transcript; reject a
+            # meeting that has none before any ledger row exists. A report's
+            # input is a whole project directory, checked in its runner
+            # (some meetings legitimately lack transcripts).
+            if (
+                job_type in ("summarize", "action_items", "facts", "export")
+                and not (resolved_source / "transcript.json").is_file()
+            ):
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    f"no transcript.json in {resolved_source.name}; transcribe first",
+                )
         resolved_output = paths.ensure_output_dir(output_dir, allowed_roots)
 
-        provider_name = provider or self._config.provider
-        model_name = model or self._config.model
+        if job_type == "transcribe":
+            provider_name = provider or self._config.provider
+            model_name = model or self._config.model
+        elif job_type == "export":
+            # Deterministic assembly: no model runs at all.
+            provider_name = "none"
+            model_name = "none"
+        else:
+            provider_name = provider or self._config.llm_provider
+            model_name = model or self._config.llm_model
+            validate_llm_provider_name(provider_name)
 
         # Defense in depth (field report): `self._config.model` is only
         # ever a plain string once `config.py::load_config` has parsed
@@ -194,15 +329,19 @@ class JobManager:
         # acceptance, NFR-1, E15). `_run_job` resolves it off the event loop
         # once the job is actually dequeued, and the ledger's `device`
         # column is filled in then (`mark_running`), not at submission.
-        validate_provider_name(provider_name)
+        # (LLM provider names were validated above, same rule via
+        # `validate_llm_provider_name`.)
+        if job_type == "transcribe":
+            validate_provider_name(provider_name)
 
         job_id = uuid.uuid4().hex
         job = JobState(
             job_id=job_id,
             status="queued",
+            job_type=job_type,
             provider=provider_name,
             model=model_name,
-            source_path=str(resolved_audio),
+            source_path=str(resolved_source),
             output_path=str(resolved_output),
             language=language,
             # Per-job flag wins; `None` defers to the configured default.
@@ -212,13 +351,14 @@ class JobManager:
 
         self._ledger.insert_job(
             job_id,
+            job_type=job_type,
             provider=provider_name,
             model=model_name,
             # Placeholder until `_run_job` resolves the real provider and
             # corrects it via `mark_running(..., device=...)` (E15); never
             # surfaced as a job's final/terminal device.
             device=self._config.device,
-            source_path=str(resolved_audio),
+            source_path=str(resolved_source),
             output_path=str(resolved_output),
             language=language,
             meeting_json=json.dumps(meeting) if meeting is not None else None,
@@ -298,7 +438,13 @@ class JobManager:
                 # Already resolved -- e.g. cancelled while still queued.
                 continue
             try:
-                await self._run_job(job, loop)
+                # Looked up per job (not captured at construction) so the
+                # test seam of replacing `_run_job` on an instance keeps
+                # working.
+                if job.job_type == "transcribe":
+                    await self._run_job(job, loop)
+                else:
+                    await self._run_derived_job(job, loop)
             except Exception as exc:  # noqa: BLE001 - the worker must never die (NFR-7)
                 # `_run_job` already attributes everything it can reach; this
                 # is defense in depth for a bug that still escapes it. Catching
@@ -483,6 +629,380 @@ class JobManager:
                 job.job_id, elapsed_sec=elapsed, kind=ErrorKind.INTERNAL, message=str(exc)
             )
 
+    # ------------------------------------------------------------------
+    # Derived jobs (summarize / action_items / facts / report / export)
+    # ------------------------------------------------------------------
+
+    def _llm_budget_tokens(self) -> int:
+        """The chunker's token budget: half the context window, leaving the
+        other half for the prompt scaffolding and the answer."""
+        return max(1024, self._config.llm_ctx // 2)
+
+    async def _resolve_llm(self, job: JobState) -> LlmProvider:
+        """Resolve the LLM engine off the event loop; failures are this
+        job's `model_load`, never a worker crash (the `_run_job` rule)."""
+        try:
+            return await asyncio.to_thread(self._get_llm)
+        except ServiceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - reclassified, not swallowed
+            raise ServiceError(
+                ErrorKind.MODEL_LOAD,
+                f"failed to load llm provider {job.provider!r}: {redact(str(exc))}",
+            ) from exc
+
+    async def _run_derived_job(self, job: JobState, loop: asyncio.AbstractEventLoop) -> None:
+        """Run one non-transcribe job with the shared success/failure tail.
+
+        The job body runs as one synchronous function on the single-worker
+        executor (the same thread whisper inference uses), so LLM inference,
+        frame decoding and artifact writes never touch the event loop, and
+        no two jobs' heavy work ever overlaps.
+        """
+        start = time.monotonic()
+        uses_llm = job.job_type != "export"
+        try:
+            if uses_llm:
+                provider = await self._resolve_llm(job)
+                job.status = "running"
+                self._ledger.mark_running(job.job_id, device=provider.describe().device)
+                if job.job_type == "summarize":
+                    body = functools.partial(self._summarize_sync, job, provider)
+                elif job.job_type in ("action_items", "facts"):
+                    body = functools.partial(self._extract_sync, job, provider)
+                else:
+                    body = functools.partial(self._report_sync, job, provider)
+            else:
+                job.status = "running"
+                self._ledger.mark_running(job.job_id)
+                body = functools.partial(self._export_sync, job)
+            manifest = await loop.run_in_executor(self._executor, body)
+
+            elapsed = time.monotonic() - start
+            job.status = "succeeded"
+            job.progress = 1.0
+            job.elapsed_sec = elapsed
+            job.result_json = json.dumps(manifest, ensure_ascii=False)
+            self._ledger.finish_succeeded(
+                job.job_id, elapsed_sec=elapsed, result_json=job.result_json
+            )
+        except ServiceError as exc:
+            elapsed = time.monotonic() - start
+            job.elapsed_sec = elapsed
+            if exc.kind is ErrorKind.CANCELLED:
+                job.status = "cancelled"
+                job.error_kind = ErrorKind.CANCELLED
+                self._ledger.finish_cancelled(job.job_id, elapsed_sec=elapsed)
+            else:
+                job.status = "failed"
+                job.error_kind = exc.kind
+                job.error_message = exc.message
+                self._ledger.finish_failed(
+                    job.job_id, elapsed_sec=elapsed, kind=exc.kind, message=exc.message
+                )
+        except Exception as exc:  # noqa: BLE001 - anything unclassified is `internal` (FR-8)
+            elapsed = time.monotonic() - start
+            job.status = "failed"
+            job.error_kind = ErrorKind.INTERNAL
+            job.error_message = str(exc)
+            job.elapsed_sec = elapsed
+            self._ledger.finish_failed(
+                job.job_id, elapsed_sec=elapsed, kind=ErrorKind.INTERNAL, message=str(exc)
+            )
+        finally:
+            # Release the model weights unless the operator opted to keep
+            # them resident: a ~20 GB working set must not sit around while
+            # whisper jobs run (reloading is mmap-fast).
+            if uses_llm and not self._config.llm_keep_loaded and self._llm is not None:
+                try:
+                    self._llm.unload()
+                except Exception:  # noqa: BLE001 - unload must never take the worker down
+                    _logger.warning("failed to unload the LLM after job %s", job.job_id)
+
+    def _load_transcript_lines(self, meeting_dir: Path) -> tuple[list[str], dict[str, Any]]:
+        """The meeting's transcript as `[m:ss] Speaker: text` lines, with the
+        operator's manual speaker labels applied over the diarized ones."""
+        data = exporting.load_transcript(meeting_dir)
+        if data is None:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"transcript.json is missing or unreadable in {meeting_dir.name}",
+            )
+        segments_raw = data.get("segments")
+        segments = segments_raw if isinstance(segments_raw, list) else []
+        lines = render_transcript_lines(segments, exporting.load_speaker_overrides(meeting_dir))
+        if not lines:
+            raise ServiceError(ErrorKind.UNSUPPORTED_INPUT, "the transcript is empty")
+        return lines, data
+
+    def _complete_text(
+        self,
+        job: JobState,
+        provider: LlmProvider,
+        messages: list[Message],
+        *,
+        json_schema: dict[str, Any] | None = None,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> str:
+        completion = provider.complete(
+            messages,
+            json_schema=json_schema,
+            max_tokens=self._config.llm_max_output_tokens,
+            temperature=self._config.llm_temperature,
+            on_progress=on_progress if on_progress is not None else (lambda fraction: None),
+            cancel=job.cancel_token,
+        )
+        return completion.text
+
+    def _summarize_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
+        meeting_dir = Path(job.source_path)
+        lines, _ = self._load_transcript_lines(meeting_dir)
+        chunks = chunk_lines(lines, self._llm_budget_tokens())
+        total_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
+        calls_done = 0
+
+        def complete(messages: list[Message]) -> str:
+            nonlocal calls_done
+            text = self._complete_text(
+                job,
+                provider,
+                messages,
+                on_progress=lambda fraction: setattr(
+                    job, "progress", min(0.99, (calls_done + fraction) / total_calls)
+                ),
+            )
+            calls_done += 1
+            job.progress = min(0.99, calls_done / total_calls)
+            return text
+
+        summary = summarize_chunks(chunks, complete)
+        summary_path = artifacts.write_text_atomic(
+            summary + "\n", Path(job.output_path) / "summary.md"
+        )
+        return {"artifacts": [str(summary_path)]}
+
+    def _constrained_items(
+        self,
+        job: JobState,
+        provider: LlmProvider,
+        messages: list[Message],
+        wrapper_cls: type[ActionItemsOut] | type[FactsOut],
+        on_progress: Callable[[float], None],
+    ) -> list[Any]:
+        """One schema-constrained completion with the one bounded repair retry."""
+        schema = wrapper_cls.model_json_schema()
+        text = self._complete_text(
+            job, provider, messages, json_schema=schema, on_progress=on_progress
+        )
+        try:
+            return list(parse_llm_json(text, wrapper_cls).items)
+        except LlmOutputError as first_error:
+            repair = repair_messages(messages, first_error.raw, str(first_error))
+            text = self._complete_text(
+                job, provider, repair, json_schema=schema, on_progress=on_progress
+            )
+            try:
+                return list(parse_llm_json(text, wrapper_cls).items)
+            except LlmOutputError as second_error:
+                raise ServiceError(
+                    ErrorKind.LLM_OUTPUT,
+                    f"the model returned invalid {job.job_type} output even after a "
+                    f"repair attempt: {second_error}",
+                ) from second_error
+
+    @staticmethod
+    def _find_source_file(meeting_dir: Path) -> Path | None:
+        """The meeting's `source.<ext>` recording, if any."""
+        try:
+            for entry in meeting_dir.iterdir():
+                if entry.is_file() and entry.stem.casefold() == "source":
+                    return entry
+        except OSError:
+            return None
+        return None
+
+    def _extract_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
+        meeting_dir = Path(job.source_path)
+        lines, data = self._load_transcript_lines(meeting_dir)
+        chunks = chunk_lines(lines, self._llm_budget_tokens())
+
+        if job.job_type == "action_items":
+            wrapper_cls: type[ActionItemsOut] | type[FactsOut] = ActionItemsOut
+            messages_fn: Callable[[str], list[Message]] = action_items_messages
+            type_key = "type"
+        else:
+            wrapper_cls = FactsOut
+            messages_fn = facts_messages
+            type_key = "kind"
+
+        # The LLM owns the first 80% of the progress bar; screenshots and
+        # artifact writes own the rest (the diarization progress-split rule).
+        llm_share = 0.8
+
+        def progress_for(base: float, span: float) -> Callable[[float], None]:
+            def on_progress(fraction: float) -> None:
+                job.progress = min(0.99, base + fraction * span)
+
+            return on_progress
+
+        per_chunk: list[list[Any]] = []
+        for index, chunk in enumerate(chunks):
+            job.cancel_token.raise_if_cancelled()
+            per_chunk.append(
+                self._constrained_items(
+                    job,
+                    provider,
+                    messages_fn(chunk),
+                    wrapper_cls,
+                    on_progress=progress_for(
+                        (index / len(chunks)) * llm_share, llm_share / len(chunks)
+                    ),
+                )
+            )
+        items = merge_items(per_chunk)
+
+        segments_raw = data.get("segments")
+        segments = segments_raw if isinstance(segments_raw, list) else []
+        segment_starts = [float(seg.get("start", 0.0)) for seg in segments if isinstance(seg, dict)]
+        source_info = data.get("source")
+        duration = None
+        if isinstance(source_info, dict):
+            raw_duration = source_info.get("duration_sec")
+            duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
+
+        source_file = self._find_source_file(meeting_dir)
+        project_name = Path(job.output_path).parent.name
+        created = datetime.now(UTC).isoformat()
+
+        md_paths: list[Path] = []
+        screenshots_broken = False
+        for index, item in enumerate(items):
+            job.cancel_token.raise_if_cancelled()
+            snapped = snap_timestamps(list(item.timestamps), segment_starts, duration)
+            images: list[tuple[str, bytes]] = []
+            screenshots_status = "none"
+            planned = frames.plan_screenshots(snapped, duration)
+            if source_file is not None and planned and not screenshots_broken:
+                try:
+                    extracted = self._get_frame_extractor().extract(
+                        source_file, planned, cancel=job.cancel_token
+                    )
+                    images = [(frames.screenshot_name(stamp), png) for stamp, png in extracted]
+                    screenshots_status = "succeeded" if images else "none"
+                except ServiceError as exc:
+                    if exc.kind is ErrorKind.CANCELLED:
+                        raise
+                    screenshots_broken = True
+                    screenshots_status = f"failed ({exc.kind.value})"
+                    job.warnings.append(
+                        f"screenshots failed ({exc.kind.value}): {exc.message}; "
+                        "items were written without images"
+                    )
+                except Exception as exc:  # noqa: BLE001 - degraded, never job-fatal
+                    screenshots_broken = True
+                    screenshots_status = "failed (internal)"
+                    job.warnings.append(
+                        f"screenshots failed: {exc}; items were written without images"
+                    )
+            elif screenshots_broken:
+                screenshots_status = "failed"
+
+            meta: dict[str, Any] = {
+                type_key: getattr(item, type_key),
+                "title": item.title,
+                "source_project": project_name,
+                "source_meeting": meeting_dir.name,
+                "source_recording": source_file.name if source_file is not None else None,
+                "timestamps": snapped,
+                "created": created,
+                "model": job.model,
+                "job_id": job.job_id,
+                "screenshots": screenshots_status,
+            }
+            md_paths.append(
+                artifacts.write_item(
+                    Path(job.output_path),
+                    title=item.title,
+                    meta=meta,
+                    body_md=item.description_md,
+                    images=images,
+                )
+            )
+            job.progress = min(
+                0.99, llm_share + ((index + 1) / max(1, len(items))) * (1 - llm_share)
+            )
+
+        return {"artifacts": [str(path) for path in md_paths], "item_count": len(md_paths)}
+
+    def _report_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
+        project_dir = Path(job.source_path)
+        materials = collect_project_materials(project_dir)
+        if not materials.strip():
+            raise ServiceError(
+                ErrorKind.UNSUPPORTED_INPUT,
+                f"project {project_dir.name} has no transcripts, summaries or items to report on",
+            )
+
+        calls_done = 0
+
+        def complete(messages: list[Message]) -> str:
+            nonlocal calls_done
+            text = self._complete_text(
+                job,
+                provider,
+                messages,
+                on_progress=lambda fraction: setattr(
+                    job,
+                    "progress",
+                    min(0.85, 0.05 + (calls_done + fraction) * 0.2),
+                ),
+            )
+            calls_done += 1
+            return text
+
+        report_md = report_from_materials(
+            materials,
+            project_dir.name,
+            complete,
+            budget_tokens=self._llm_budget_tokens(),
+        )
+
+        out_dir = Path(job.output_path)
+        md_path = artifacts.write_text_atomic(report_md + "\n", out_dir / "report.md")
+        artifact_paths = [str(md_path)]
+        job.progress = 0.9
+        try:
+            pdf_path = render_pdf(report_md, out_dir / "report.pdf", base_dir=out_dir)
+            artifact_paths.append(str(pdf_path))
+        except PdfRenderError as exc:
+            job.warnings.append(f"PDF render failed: {exc}; report.md was written")
+        return {"artifacts": artifact_paths}
+
+    def _export_sync(self, job: JobState) -> dict[str, Any]:
+        meeting_dir = Path(job.source_path)
+        export_dir = Path(job.output_path)
+        parent = meeting_dir.parent
+        project_dir = None if parent.name.casefold() == "unsorted" else parent
+
+        job.progress = 0.1
+        export_md, warnings = exporting.build_export_md(
+            meeting_dir=meeting_dir,
+            meeting_name=meeting_dir.name,
+            project_dir=project_dir,
+            export_dir=export_dir,
+        )
+        job.warnings.extend(warnings)
+        md_path = artifacts.write_text_atomic(export_md, export_dir / "export.md")
+        artifact_paths = [str(md_path)]
+        job.progress = 0.5
+        job.cancel_token.raise_if_cancelled()
+        try:
+            pdf_path = render_pdf(export_md, export_dir / "export.pdf", base_dir=export_dir)
+            artifact_paths.append(str(pdf_path))
+        except PdfRenderError as exc:
+            job.warnings.append(f"PDF render failed: {exc}; export.md was written")
+        return {"artifacts": artifact_paths}
+
 
 def _job_state_from_ledger_row(row: dict[str, Any]) -> JobState:
     """Reconstruct a terminal job's `JobState` from its ledger row.
@@ -495,6 +1015,7 @@ def _job_state_from_ledger_row(row: dict[str, Any]) -> JobState:
     return JobState(
         job_id=row["job_id"],
         status=row["status"],
+        job_type=row.get("job_type") or "transcribe",
         provider=row["provider"],
         model=row["model"],
         source_path=row["source_path"],
@@ -506,4 +1027,5 @@ def _job_state_from_ledger_row(row: dict[str, Any]) -> JobState:
         cost_usd=row.get("cost_usd"),
         error_kind=ErrorKind(error_kind_raw) if error_kind_raw else None,
         error_message=row.get("error_message"),
+        result_json=row.get("result_json"),
     )

@@ -23,8 +23,10 @@ ADAPTED_FILES = [
 ]
 
 # Strings that would tie a non-provider module to a concrete provider library
-# (FR-4): only `providers/` and `config.py` may reference these.
-_PROVIDER_LIBRARY_STRINGS = ("litellm", "faster_whisper", "openai", "groq")
+# (FR-4): only `providers/`, `llm/` and `config.py` may reference these.
+# (`openai` also catches the `openai_compat` engine name; modules outside
+# `llm/` reach engine names through `transcription.llm`'s constants instead.)
+_PROVIDER_LIBRARY_STRINGS = ("litellm", "faster_whisper", "openai", "groq", "llama_cpp")
 
 # Real subprocess/shell usage, not incidental prose mentioning the word.
 _SHELL_TRUE = re.compile(r"shell\s*=\s*True")
@@ -38,11 +40,12 @@ def _all_source_files() -> list[Path]:
 
 def _isolation_scope_files() -> list[Path]:
     providers_dir = SRC_ROOT / "providers"
+    llm_dir = SRC_ROOT / "llm"
     config_py = SRC_ROOT / "config.py"
     return [
         path
         for path in _all_source_files()
-        if providers_dir not in path.parents and path != config_py
+        if providers_dir not in path.parents and llm_dir not in path.parents and path != config_py
     ]
 
 

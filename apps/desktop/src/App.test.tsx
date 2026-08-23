@@ -22,6 +22,7 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
   return {
     id: "job-1",
     source_path: "C:\\x\\good.mp4",
+    job_type: "transcribe",
     file_name: "good.mp4",
     state: "pending",
     classification: null,

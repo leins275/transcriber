@@ -164,12 +164,18 @@ class ModelDownload:
         revision: str = MODEL_REVISION,
         hub_client: HubClient | None = None,
         transport: Transport | None = None,
+        file_filter: Callable[[RemoteFile], bool] | None = None,
     ) -> None:
         self._models_dir = ensure_output_dir(models_dir, allowed_roots)
         self.repo_id = repo_id
         self.revision = revision
         self._hub_client = hub_client or HuggingFaceHubClient()
         self._transport = transport or HttpTransport()
+        # Optional selection over the repo's file list, applied right after
+        # `list_files()`: a GGUF repo carries one file per quantization
+        # (hundreds of GB in total), and the LLM download wants exactly one
+        # of them. `None` keeps the whole snapshot (the whisper behaviour).
+        self._file_filter = file_filter
         self._cancel_event = threading.Event()
 
         self.state: DownloadState = DownloadState.IDLE
@@ -223,7 +229,12 @@ class ModelDownload:
         self.error = None
 
         try:
-            self._files = self._hub_client.list_files(self.repo_id, self.revision)
+            self._files = self._list_selected_files()
+        except ServiceError as exc:
+            self.state = DownloadState.ERROR
+            self.error = exc
+            on_progress(self._progress_event())
+            raise
         except Exception as exc:
             self.state = DownloadState.ERROR
             self.error = ServiceError(
@@ -330,6 +341,25 @@ class ModelDownload:
         self.state = DownloadState.COMPLETE
         emit(force=True)
 
+    def _list_selected_files(self) -> list[RemoteFile]:
+        """The remote file list with `file_filter` applied.
+
+        A filter that matches nothing is an error, not an empty download: it
+        means the configured file name does not exist in the repo, and a
+        silent zero-file "success" would write a `.ready` marker over
+        nothing.
+        """
+        files = self._hub_client.list_files(self.repo_id, self.revision)
+        if self._file_filter is None:
+            return files
+        selected = [f for f in files if self._file_filter(f)]
+        if not selected:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"no file in {self.repo_id!r} matches the configured selection",
+            )
+        return selected
+
     def _verify_snapshot(self, snapshot_dir: Path) -> tuple[bool, str]:
         for remote_file in self._files:
             path = snapshot_dir / remote_file.path
@@ -357,7 +387,7 @@ class ModelDownload:
         snapshot_dir = self._models_dir
         if not self._files:
             try:
-                self._files = self._hub_client.list_files(self.repo_id, self.revision)
+                self._files = self._list_selected_files()
             except Exception:
                 return False
         ok, _reason = self._verify_snapshot(snapshot_dir)

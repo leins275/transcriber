@@ -8,12 +8,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from transcription.errors import ErrorKind
 
 JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 ModelState = Literal["unloaded", "loading", "loaded"]
+
+# The job-type discriminator. `transcribe` is the original (and default) job;
+# the rest are the derived-knowledge jobs added by the LLM feature:
+# `summarize`/`action_items`/`facts` read a meeting folder's transcript.json,
+# `report` reads a whole project folder, and `export` deterministically
+# assembles one meeting's existing materials into a PDF (no LLM call).
+JobType = Literal["transcribe", "summarize", "action_items", "facts", "report", "export"]
 
 
 class Segment(BaseModel):
@@ -112,9 +119,18 @@ class TranscriptDoc(BaseModel):
 
 
 class JobCreate(BaseModel):
-    """``POST /v1/jobs`` request body (FR-2)."""
+    """``POST /v1/jobs`` request body (FR-2).
 
-    audio_path: str = Field(min_length=1)
+    A ``transcribe`` job (the default, so pre-feature clients are untouched)
+    takes ``audio_path``; every other job type takes ``input_path`` -- the
+    meeting folder (``summarize``/``action_items``/``facts``/``export``) or
+    the project folder (``report``) it reads. Exactly one of the two must be
+    supplied, matching the job type.
+    """
+
+    job_type: JobType = "transcribe"
+    audio_path: str | None = Field(default=None, min_length=1)
+    input_path: str | None = Field(default=None, min_length=1)
     output_dir: str = Field(min_length=1)
     language: str | None = None
     provider: str | None = None
@@ -124,13 +140,26 @@ class JobCreate(BaseModel):
     # an explicit true/false overrides it for this job only.
     diarize: bool | None = None
 
+    @model_validator(mode="after")
+    def _require_the_path_matching_the_job_type(self) -> JobCreate:
+        if self.job_type == "transcribe":
+            if not self.audio_path or self.input_path is not None:
+                raise ValueError("a transcribe job takes audio_path (and no input_path)")
+        elif not self.input_path or self.audio_path is not None:
+            raise ValueError(f"a {self.job_type} job takes input_path (and no audio_path)")
+        return self
+
 
 class JobStatus(BaseModel):
     """``GET /v1/jobs/{id}`` response body (FR-2, FR-8)."""
 
     job_id: str
     status: JobState
+    job_type: JobType = "transcribe"
     progress: float
+    # Non-fatal degradations (a failed screenshot pass, a failed PDF render)
+    # the job survived but the caller should surface.
+    warnings: list[str] = Field(default_factory=list)
     elapsed_sec: float | None = None
     audio_duration_sec: float | None = None
     provider: str | None = None

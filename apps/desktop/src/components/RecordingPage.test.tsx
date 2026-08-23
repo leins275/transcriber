@@ -51,6 +51,11 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
     onUpdate: () => Promise.resolve(),
     onDelete: () => Promise.resolve(),
     onTranscribe: () => Promise.resolve(),
+    onSummarize: () => Promise.resolve(),
+    onExtract: () => Promise.resolve(),
+    onExportPdf: () => Promise.resolve(),
+    activeLlmJobs: [],
+    summaryReloadToken: 0,
   };
   return render(<RecordingPage {...defaults} {...props} />);
 }

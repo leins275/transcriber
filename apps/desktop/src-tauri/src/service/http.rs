@@ -30,8 +30,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    JobStatus, LedgerJob, ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth,
-    SubmitRequest, TranscriptionService,
+    JobStatus, LedgerJob, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, ServiceError,
+    ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -134,6 +134,15 @@ struct SubmitBody<'a> {
     language: Option<&'a str>,
 }
 
+/// `POST /v1/jobs` request body for a derived (LLM) job -- F2's `JobCreate`
+/// with `job_type` + `input_path` instead of `audio_path`.
+#[derive(Serialize)]
+struct LlmSubmitBody<'a> {
+    job_type: &'a str,
+    input_path: &'a str,
+    output_dir: &'a str,
+}
+
 /// `POST /v1/jobs` `202` response body.
 #[derive(Deserialize)]
 struct SubmitResponse {
@@ -164,6 +173,10 @@ struct HealthResponse {
     /// default-on-absence convention as `model_present` above.
     #[serde(default)]
     cuda_runtime_present: Option<bool>,
+    /// `None` when the field is absent (a build of F2 older than the LLM
+    /// feature), same convention as above.
+    #[serde(default)]
+    llm_model_present: Option<bool>,
 }
 
 /// `GET`/`POST`/`DELETE /v1/model/download` response body (T13, FR-12).
@@ -350,6 +363,7 @@ impl TranscriptionService for HttpTranscriptionService {
             detail: None,
             model_present: parsed.model_present,
             cuda_runtime_present: parsed.cuda_runtime_present,
+            llm_model_present: parsed.llm_model_present,
         })
     }
 
@@ -460,6 +474,64 @@ impl TranscriptionService for HttpTranscriptionService {
 
     async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let request = self.authorize(self.client.delete(self.endpoint("/v1/model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn submit_llm(&self, req: LlmSubmitRequest) -> Result<String, ServiceError> {
+        let body = LlmSubmitBody {
+            job_type: req.kind.wire_name(),
+            input_path: &req.input_path,
+            output_dir: &req.output_dir,
+        };
+        let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: SubmitResponse = response.json().await.map_err(|err| ServiceError::Decode {
+            message: err.to_string(),
+        })?;
+        Ok(parsed.job_id)
+    }
+
+    async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.get(self.endpoint("/v1/llm-model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn start_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.post(self.endpoint("/v1/llm-model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(self.client.delete(self.endpoint("/v1/llm-model/download")));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
         if !response.status().is_success() {
             return Err(service_error_from_response(response).await);
