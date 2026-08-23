@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.5.1 — 2026-08-23
+
+### Bug fixes
+
+- **installer**: Kill the orphaned pyenv sidecar via WMI so updates stop failing on locked DLLs
+
 ## 0.5.0 — 2026-08-23
 
 ### Build & CI
