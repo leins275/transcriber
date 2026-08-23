@@ -193,6 +193,12 @@ impl JobContext {
         self.cancel.is_cancelled()
     }
 
+    /// A clone of the token, for handing to something that checks it on its
+    /// own schedule -- whisper's abort callback, a download loop.
+    pub fn cancel_token(&self) -> CancelToken {
+        self.cancel.clone()
+    }
+
     /// `Err(JobFailure)` when cancelled, for the `?` in a pipeline step.
     pub fn check_cancelled(&self) -> Result<(), JobFailure> {
         if self.is_cancelled() {
@@ -209,7 +215,12 @@ impl JobContext {
 /// it needs and decides which to load per job, which is what keeps the
 /// "never two big models at once" rule in one place. Phase B and C fill this
 /// in with whisper.cpp and llama.cpp; the tests use a fake.
-pub trait JobRunner: Send {
+///
+/// Deliberately **not** `Send`. A runner is built by the factory *on the
+/// worker thread* and never leaves it, which is what lets it hold a raw
+/// `whisper_context` or `llama_context` -- neither of which may cross threads.
+/// The factory is the thing that has to be `Send`; see [`RunnerFactory`].
+pub trait JobRunner {
     fn run(&mut self, job: &JobRequest, ctx: &JobContext) -> Result<JobOutcome, JobFailure>;
 
     /// The device the job resolved to (`cpu`, `cuda`, ...), recorded on the

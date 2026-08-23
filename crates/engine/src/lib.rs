@@ -15,11 +15,17 @@
 //! - [`ledger`] -- the SQLite job history, shared with (and migrated from) the
 //!   Python service's own database file.
 
+pub mod backends;
 pub mod config;
+pub mod diarize;
 pub mod fakes;
 pub mod jobs;
 pub mod ledger;
+pub mod llm;
+pub mod media;
 pub mod models;
+pub mod runner;
+pub mod stt;
 
 pub use config::{Config, ConfigError};
 pub use jobs::{

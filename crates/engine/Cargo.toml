@@ -15,6 +15,18 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # has: the ledger is a user's own history, and its schema migrations must not
 # depend on a system library's version.
 rusqlite = { version = "0.37", features = ["bundled"] }
+# Speech to text. The sys crate also builds the one ggml both engines share;
+# see crates/whisper-sys/PINS.md.
+whisper-sys = { path = "../whisper-sys" }
+# The LLM engine, and -- just as important -- the owner of the shared ggml
+# whose backends both engines load at startup. Same feature set as
+# whisper-sys's dependency on the sys crate, so there is exactly one ggml.
+llama-cpp-2 = { version = "0.1.154", default-features = false, features = [
+  "dynamic-backends",
+] }
+# `compression_ratio` is a deflate ratio -- faster-whisper reported it, and
+# whisper.cpp does not, so it is computed here with the same definition.
+flate2 = "1"
 
 [dev-dependencies]
 tempfile = "3"
