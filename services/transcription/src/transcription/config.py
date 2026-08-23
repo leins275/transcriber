@@ -115,10 +115,13 @@ class Config:
     llm_model_path: str = ""
     # Hugging Face repo + revision the in-app GGUF download fetches, and the
     # one file it selects out of that repo (GGUF repos carry many quants;
-    # downloading all of them would be hundreds of GB).
-    llm_model_repo: str = "Qwen/Qwen3.6-35B-A3B-GGUF"
-    llm_model_revision: str = "main"
-    llm_model_file: str = "qwen3.6-35b-a3b-q4_k_m.gguf"
+    # downloading all of them would be hundreds of GB). The Qwen org itself
+    # publishes no GGUF; ggml-org (the llama.cpp maintainers) is the
+    # canonical conversion. Revision pinned so verification always has a
+    # concrete digest set to compare against, like the whisper snapshot.
+    llm_model_repo: str = "ggml-org/Qwen3.6-35B-A3B-GGUF"
+    llm_model_revision: str = "baec3ebee244827cda0f4557eafa8b28f7545fa6"
+    llm_model_file: str = "Qwen3.6-35B-A3B-Q4_K_M.gguf"
     # Context window the chunker budgets against and llama.cpp allocates.
     llm_ctx: int = 16384
     # 0 = pure CPU (the shipped wheel is CPU-only; the A3B MoE default is

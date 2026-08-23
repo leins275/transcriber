@@ -143,7 +143,7 @@ export function SettingsPage({
               <div className={styles.line}>
                 Local language model not installed
                 <button type="button" className="btn btn-secondary" onClick={onStartLlmDownload}>
-                  Download (~19 GB)
+                  Download (~20 GB)
                 </button>
               </div>
               {llmModelStatus.error_message && (

@@ -82,7 +82,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_provider` | `TRANSCRIBER_LLM_PROVIDER` | `llama_cpp` (built-in; `openai_compat` calls an external server) |
 | `llm_model` | `TRANSCRIBER_LLM_MODEL` | `qwen3.6-35b-a3b` |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
-| `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | the pinned Qwen GGUF repo + quant the in-app download fetches |
+| `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | `ggml-org/Qwen3.6-35B-A3B-GGUF` (pinned revision) / `Qwen3.6-35B-A3B-Q4_K_M.gguf` |
 | `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `16384` |
 | `llm_gpu_layers` | `TRANSCRIBER_LLM_GPU_LAYERS` | `0` (pure CPU; the shipped wheel is CPU-only) |
 | `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
