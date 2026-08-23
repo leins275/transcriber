@@ -1,0 +1,9 @@
+{
+  "Security Issue": "security-issue",
+  "a/b\\c:d": "a-b-c-d",
+  "a   ///   b": "a-b",
+  "  ...hello...  ": "hello",
+  "Отчёт по проекту": "отчёт-по-проекту",
+  "///": "item",
+  "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ": "word-word-word-word-word-word-word-word-word-word-word-word"
+}

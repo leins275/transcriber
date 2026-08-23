@@ -1,3 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/vault", "apps/desktop/src-tauri"]
+members = [
+  "crates/vault",
+  "crates/wire",
+  "crates/whisper-sys",
+  "apps/desktop/src-tauri",
+]

@@ -1,0 +1,4 @@
+# whisper.cpp's top-level CMakeLists runs an unconditional configure_file that
+# writes this into the *source* tree on every build. It is a build artifact
+# living in vendored source, not something to track.
+bindings/javascript/package.json

@@ -1,0 +1,6 @@
+# These fixtures are byte-exact captures of what the Python writers produced,
+# and the tests next to them compare raw bytes. The repository-wide
+# `* text=auto eol=lf` rule would rewrite their CRLF -- which is precisely one
+# of the differences they exist to pin, since every `.md` in a user's vault was
+# written through Python's text mode. Opt out of all newline translation.
+* -text

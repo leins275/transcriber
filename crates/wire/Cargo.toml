@@ -1,0 +1,18 @@
+[package]
+version = "0.9.0"
+name = "wire"
+edition = "2021"
+description = "On-disk document formats shared by the engine and the desktop app: transcript.json, vault artifacts, and the error taxonomy"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# The vault crate already owns the path budget, the illegal-character set and
+# the reserved directory names. Artifact writing obeys exactly those rules, so
+# it depends on them rather than restating them -- a second copy of a contract
+# is a second thing to get out of sync.
+vault = { path = "../vault" }
+# Atomic writes need an unpredictable temp name inside the destination
+# directory, which is what makes the rename same-filesystem and therefore
+# atomic -- so this is a real dependency, not just a test one.
+tempfile = "3"

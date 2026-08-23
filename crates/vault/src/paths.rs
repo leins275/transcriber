@@ -252,8 +252,17 @@ fn sanitize_unsorted_stem(raw: &str) -> String {
     candidate.chars().take(MAX_UNSORTED_STEM_CHARS).collect()
 }
 
-fn is_illegal(c: char) -> bool {
+/// Whether `c` may not appear in a Windows file or folder name.
+///
+/// Public because artifact slugs (written by the engine, not by this crate)
+/// must obey exactly this set: a second copy of the list is a second thing to
+/// get out of sync.
+pub fn is_illegal_char(c: char) -> bool {
     ILLEGAL_CHARS.contains(&c) || c.is_control()
+}
+
+fn is_illegal(c: char) -> bool {
+    is_illegal_char(c)
 }
 
 /// Appends a numeric collision suffix to a base folder name:

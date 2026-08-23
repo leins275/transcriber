@@ -1,0 +1,26 @@
+[package]
+version = "0.9.0"
+name = "whisper-sys"
+edition = "2021"
+description = "Raw FFI bindings to whisper.cpp, built against the same ggml as llama.cpp"
+# Declaring what we link lets cargo reject a second crate linking whisper, and
+# lets dependents read the values build.rs prints.
+links = "whisper"
+
+[dependencies]
+# Not a mistake, and not for calling llama: this dependency exists so cargo
+# hands us `DEP_LLAMA_GGML_CMAKE_DIR`, the CMake package directory of the ggml
+# that llama-cpp-sys-2 already built. whisper.cpp is then compiled against
+# *that* ggml (`WHISPER_USE_SYSTEM_GGML=ON`) instead of vendoring a second
+# copy -- two ggml copies in one binary are duplicate symbols. See PINS.md.
+#
+# `dynamic-backends` is the feature that makes ggml a set of shared libraries
+# with runtime-loadable backends, which is also how one binary serves both
+# CPU-only and CUDA machines.
+llama-cpp-sys-2 = { version = "0.1.154", default-features = false, features = [
+  "dynamic-backends",
+] }
+
+[build-dependencies]
+bindgen = "0.72"
+cmake = "0.1"
