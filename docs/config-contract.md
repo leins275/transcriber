@@ -64,7 +64,11 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   or `model`, that F4's installer (or a future version) writes survives an
   app-side load → modify → save round-trip byte-for-byte in value. This is
   covered by `config.rs`'s `unknown_keys_survive_a_load_modify_save_round_trip`
-  test.
+  test. F2 reads *service-only* keys straight out of this same file through
+  that mechanism — e.g. a top-level `"diarize": true` (plus the other
+  `diarization_*` keys, see `services/transcription/README.md`) enables
+  speaker diarization without the app's `Settings` schema knowing the key
+  exists.
 - **Missing known keys fall back to their defaults** on load; a malformed
   JSON file returns a typed `config`-kind error naming the file, never a
   panic.

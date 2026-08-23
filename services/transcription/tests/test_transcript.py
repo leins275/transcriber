@@ -321,3 +321,59 @@ def test_health_model_state_literal_set() -> None:
             device="cuda",
             model_state="bogus",
         )
+
+
+# -- diarization block (speaker classification) ------------------------------
+
+
+def test_segment_speaker_is_omitted_when_absent_and_kept_when_set() -> None:
+    from transcription.schema import DiarizationInfo
+
+    unlabelled = Segment(id=0, start=0.0, end=1.0, text="hi")
+    labelled = Segment(id=1, start=1.0, end=2.0, text="there", speaker="Speaker 1")
+
+    assert "speaker" not in unlabelled.model_dump(mode="json")
+    assert labelled.model_dump(mode="json")["speaker"] == "Speaker 1"
+
+    # And through a full document round-trip.
+    doc = _make_doc()
+    doc = doc.model_copy(
+        update={
+            "segments": [labelled],
+            "diarization": DiarizationInfo(
+                status="succeeded", model="pyannote/speaker-diarization-3.1", speaker_count=1
+            ),
+        }
+    )
+    data = doc.model_dump(mode="json")
+    assert data["segments"][0]["speaker"] == "Speaker 1"
+    assert data["diarization"]["status"] == "succeeded"
+    assert data["diarization"]["speaker_count"] == 1
+
+
+def test_diarization_block_is_omitted_entirely_when_the_pass_never_ran() -> None:
+    data = _make_doc().model_dump(mode="json")
+
+    assert "diarization" not in data
+
+
+def test_a_failed_diarization_pass_is_recorded_with_its_taxonomy_kind() -> None:
+    from transcription.schema import DiarizationInfo
+
+    info = DiarizationInfo(
+        status="failed",
+        model="pyannote/speaker-diarization-3.1",
+        error_kind=ErrorKind.MODEL_LOAD,
+        error_message="missing hf token",
+    )
+    doc = _make_doc().model_copy(update={"diarization": info})
+
+    data = doc.model_dump(mode="json")
+    assert data["diarization"]["status"] == "failed"
+    assert data["diarization"]["error_kind"] == "model_load"
+
+
+def test_job_create_accepts_an_optional_diarize_flag() -> None:
+    assert JobCreate(audio_path="a.wav", output_dir="out").diarize is None
+    assert JobCreate(audio_path="a.wav", output_dir="out", diarize=True).diarize is True
+    assert JobCreate(audio_path="a.wav", output_dir="out", diarize=False).diarize is False

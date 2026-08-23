@@ -74,9 +74,45 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `max_cloud_upload_mb` | `TRANSCRIBER_MAX_CLOUD_UPLOAD_MB` | `25` |
 | `job_timeout_sec` | `TRANSCRIBER_JOB_TIMEOUT_SEC` | none |
 | `log_level` | `TRANSCRIBER_LOG_LEVEL` | `INFO` |
+| `diarize` | `TRANSCRIBER_DIARIZE` | `false` |
+| `diarization_model` | `TRANSCRIBER_DIARIZATION_MODEL` | `pyannote/speaker-diarization-3.1` |
+| `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
+| `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
+| `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
 
 `Config.public()` (what `/health` and log lines may show) never includes
-`token` or `provider_api_key`.
+`token`, `provider_api_key` or `hf_token`.
+
+## Speaker diarization (pyannote)
+
+With `diarize` on (config default, `--diarize`, or a per-job
+`"diarize": true` in `POST /v1/jobs`), a pyannote speaker-diarization pass
+runs after transcription: each segment gains a `"speaker"` field
+(`"Speaker 1"`, `"Speaker 2"`, ... numbered by first speech), and the
+document gains a `diarization` block recording the model, device and
+distinct speaker count. Attribution is word-timestamp-weighted majority
+voting against the diarized turns, so a segment brushing a neighbouring
+turn's edge still lands on the voice that actually spoke it; a segment no
+turn can claim keeps no `speaker` at all rather than a fabricated guess.
+
+Two prerequisites, both optional by design:
+
+- **The `diarization` extra** (`uv sync --extra diarization`) installs
+  `pyannote.audio` and the torch stack under it. Nothing imports these
+  until the first diarized job runs.
+- **A Hugging Face token** (`TRANSCRIBER_HF_TOKEN`, else
+  `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`): the default
+  `pyannote/speaker-diarization-3.1` model is gated -- accept its terms on
+  the hub once, then supply a token. Alternatively point
+  `diarization_model_path` at a local snapshot directory (containing the
+  pipeline's `config.yaml`) for fully offline loads.
+
+Diarization **degrades, never fails the job**: if the pass cannot run
+(extra not installed, model not fetchable, runtime error), the transcript
+is still written -- without speakers -- and the failure is attributed in
+the document's `diarization` block (`status: "failed"`, `error_kind`,
+`error_message`) and the service log. Cancelling the job mid-pass cancels
+the job as usual.
 
 ### Model weights and CUDA runtime are prerequisites, not this service's job
 

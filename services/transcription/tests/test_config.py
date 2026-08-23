@@ -246,3 +246,69 @@ def test_config_is_frozen_dataclass(tmp_app_dir: Path) -> None:
     assert isinstance(cfg, Config)
     with pytest.raises(Exception):  # noqa: B017 - frozen dataclass raises FrozenInstanceError
         cfg.model_path = "elsewhere"  # type: ignore[misc]
+
+
+# -- diarization -------------------------------------------------------------
+
+
+def test_diarization_defaults_are_off_and_pinned_to_pyannote(tmp_app_dir: Path) -> None:
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+    assert cfg.diarize is False
+    assert cfg.diarization_model == "pyannote/speaker-diarization-3.1"
+    assert cfg.diarization_model_path == ""
+    assert cfg.diarization_min_speakers is None
+    assert cfg.diarization_max_speakers is None
+    assert cfg.hf_token is None
+
+
+def test_diarize_parses_from_the_config_file_and_env(tmp_app_dir: Path) -> None:
+    _write_config(tmp_app_dir, {"diarize": True, "diarization_max_speakers": 4})
+
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+    assert cfg.diarize is True
+    assert cfg.diarization_max_speakers == 4
+
+    # Env is string-shaped and overrides the file.
+    cfg = load_config(
+        env={
+            "TRANSCRIBER_APP_DIR": str(tmp_app_dir),
+            "TRANSCRIBER_DIARIZE": "false",
+            "TRANSCRIBER_DIARIZATION_MIN_SPEAKERS": "2",
+        }
+    )
+    assert cfg.diarize is False
+    assert cfg.diarization_min_speakers == 2
+
+
+def test_hf_token_comes_from_the_environment_chain(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "HF_TOKEN": "hf_from_env"}
+    assert load_config(env=env).hf_token == "hf_from_env"  # noqa: S105 -- test fixture
+
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "HUGGING_FACE_HUB_TOKEN": "hf_hub"}
+    assert load_config(env=env).hf_token == "hf_hub"  # noqa: S105 -- test fixture
+
+    # The TRANSCRIBER_-prefixed form wins over the generic ones.
+    env = {
+        "TRANSCRIBER_APP_DIR": str(tmp_app_dir),
+        "TRANSCRIBER_HF_TOKEN": "hf_specific",
+        "HF_TOKEN": "hf_generic",
+    }
+    assert load_config(env=env).hf_token == "hf_specific"  # noqa: S105 -- test fixture
+
+
+def test_hf_token_cannot_be_supplied_via_overrides(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError):
+        load_config(env=env, overrides={"hf_token": "hf_from_argv"})
+
+
+def test_public_reports_diarization_but_never_the_token(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "HF_TOKEN": "hf_secret"}
+
+    public = load_config(env=env).public()
+
+    assert public["diarize"] is False
+    assert public["diarization_model"] == "pyannote/speaker-diarization-3.1"
+    assert "hf_secret" not in json.dumps(public)

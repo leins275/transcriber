@@ -188,6 +188,7 @@ def create_app(
             provider=payload.provider,
             model=payload.model,
             meeting=payload.meeting,
+            diarize=payload.diarize,
         )
         return {"job_id": job_id}
 

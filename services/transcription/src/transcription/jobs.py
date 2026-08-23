@@ -19,6 +19,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,11 +27,13 @@ from typing import Any
 
 from transcription import paths, transcript
 from transcription.config import Config
+from transcription.diarization import label_segments
+from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.ledger import Ledger
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
-from transcription.schema import Segment
+from transcription.schema import DiarizationInfo, Segment
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -52,6 +55,7 @@ class JobState:
     source_path: str
     output_path: str
     language: str | None = None
+    diarize: bool = False
     progress: float = 0.0
     elapsed_sec: float | None = None
     audio_duration_sec: float | None = None
@@ -64,11 +68,25 @@ class JobState:
 class JobManager:
     """FIFO queue, one serial worker, progress, cancel, ledger, transcript (FR-2)."""
 
-    def __init__(self, config: Config, ledger: Ledger) -> None:
+    def __init__(
+        self,
+        config: Config,
+        ledger: Ledger,
+        *,
+        diarizer_factory: Callable[[Config], DiarizerProtocol] | None = None,
+    ) -> None:
         self._config = config
         self._ledger = ledger
         self._jobs: dict[str, JobState] = {}
         self._providers: dict[str, TranscriptionProvider] = {}
+        # The diarization engine, cached like the providers so its pipeline
+        # loads once per process. `diarizer_factory` is a test seam mirroring
+        # `create_app`'s `model_download_factory`: production callers never
+        # pass it.
+        self._diarizer: DiarizerProtocol | None = None
+        self._diarizer_factory: Callable[[Config], DiarizerProtocol] = (
+            diarizer_factory if diarizer_factory is not None else PyannoteDiarizer
+        )
         # Guards `self._providers` against two threads racing to construct
         # the same not-yet-cached provider (E15: resolution now happens off
         # the event loop, on arbitrary `asyncio.to_thread` worker threads).
@@ -107,6 +125,18 @@ class JobManager:
                 self._providers[name] = get_provider(name, self._config)
             return self._providers[name]
 
+    def _get_diarizer(self) -> DiarizerProtocol:
+        """Resolve (and cache) the diarization engine.
+
+        Same off-event-loop rule as `_get_provider` (E15): constructing the
+        engine is cheap, but its first `diarize()` lazily imports the torch
+        stack, so every caller reaches this via `asyncio.to_thread`.
+        """
+        with self._provider_lock:
+            if self._diarizer is None:
+                self._diarizer = self._diarizer_factory(self._config)
+            return self._diarizer
+
     async def submit(
         self,
         *,
@@ -116,6 +146,7 @@ class JobManager:
         provider: str | None = None,
         model: str | None = None,
         meeting: dict[str, Any] | None = None,
+        diarize: bool | None = None,
     ) -> str:
         """Validate, insert the ledger row and enqueue a job (FR-2, FR-9).
 
@@ -174,6 +205,8 @@ class JobManager:
             source_path=str(resolved_audio),
             output_path=str(resolved_output),
             language=language,
+            # Per-job flag wins; `None` defers to the configured default.
+            diarize=self._config.diarize if diarize is None else bool(diarize),
         )
         self._jobs[job_id] = job
 
@@ -290,11 +323,62 @@ class JobManager:
         except Exception:  # noqa: BLE001 - the ledger write itself must never crash the loop
             _logger.error("failed to record job %s as failed after a worker crash", job.job_id)
 
+    async def _diarize_segments(
+        self,
+        job: JobState,
+        loop: asyncio.AbstractEventLoop,
+        segments: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], DiarizationInfo]:
+        """Run the diarization pass and label `segments` with speakers.
+
+        Degrades rather than failing the job: a transcript without speakers
+        is still the deliverable, so any non-cancellation failure here is
+        recorded in the returned `DiarizationInfo` (and logged) while the
+        segments pass through unlabelled. Cancellation propagates -- the
+        operator asked the whole job to stop.
+        """
+        try:
+            diarizer = await asyncio.to_thread(self._get_diarizer)
+            turns = await loop.run_in_executor(
+                self._executor,
+                functools.partial(diarizer.diarize, Path(job.source_path), cancel=job.cancel_token),
+            )
+            labelled, speaker_count = label_segments(segments, turns)
+            return labelled, DiarizationInfo(
+                status="succeeded",
+                model=diarizer.model,
+                device=diarizer.device,
+                speaker_count=speaker_count,
+            )
+        except ServiceError as exc:
+            if exc.kind is ErrorKind.CANCELLED:
+                raise
+            kind, message = exc.kind, exc.message
+        except Exception as exc:  # noqa: BLE001 - degraded, never job-fatal (FR-8)
+            kind, message = ErrorKind.INTERNAL, str(exc)
+
+        _logger.warning(
+            "diarization failed for job %s; transcript written without speakers",
+            job.job_id,
+            extra={"event": "diarization_failed", "error_kind": kind.value},
+        )
+        return segments, DiarizationInfo(
+            status="failed",
+            model=self._config.diarization_model,
+            error_kind=kind,
+            error_message=redact(message),
+        )
+
     async def _run_job(self, job: JobState, loop: asyncio.AbstractEventLoop) -> None:
         start = time.monotonic()
 
+        # With a diarization pass still ahead, transcription owns only the
+        # first 90% of the progress bar, so the bar never reads "done" while
+        # the job is visibly still running.
+        progress_scale = 0.9 if job.diarize else 1.0
+
         def on_progress(fraction: float) -> None:
-            job.progress = fraction
+            job.progress = fraction * progress_scale
 
         try:
             # Resolve (and, the first time, import) the provider off the
@@ -331,9 +415,16 @@ class JobManager:
                 ),
             )
 
+            segment_dicts = result.segments
+            diarization_info: DiarizationInfo | None = None
+            if job.diarize:
+                segment_dicts, diarization_info = await self._diarize_segments(
+                    job, loop, segment_dicts
+                )
+
             elapsed = time.monotonic() - start
             realtime_factor = elapsed / result.duration_sec if result.duration_sec else 0.0
-            segments = [Segment(**seg) for seg in result.segments]
+            segments = [Segment(**seg) for seg in segment_dicts]
 
             doc = transcript.build_document(
                 source_path=job.source_path,
@@ -350,6 +441,7 @@ class JobManager:
                 realtime_factor=realtime_factor,
                 cost_usd=result.cost_usd,
                 currency=result.currency,
+                diarization=diarization_info,
             )
             transcript.write_atomic(doc, job.output_path)
 

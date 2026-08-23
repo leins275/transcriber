@@ -50,7 +50,16 @@ EXIT_CODES: dict[ErrorKind, int] = {
 
 # Config fields settable from a shared CLI flag; deliberately excludes
 # `token`/`provider_api_key` -- credentials never come from argv (FR-9).
-_OVERRIDE_FIELDS = ("provider", "model", "model_path", "device", "language", "db_path", "log_level")
+_OVERRIDE_FIELDS = (
+    "provider",
+    "model",
+    "model_path",
+    "device",
+    "language",
+    "db_path",
+    "log_level",
+    "diarize",
+)
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -69,6 +78,12 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         help="an allowed root directory (repeatable)",
     )
     parser.add_argument("--log-level", default=None, dest="log_level")
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        default=None,
+        help="label segments with speakers (pyannote; needs the 'diarization' extra)",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

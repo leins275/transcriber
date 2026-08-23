@@ -20,7 +20,7 @@ from typing import Any
 
 # Keys that must never be settable from an argv-shaped override (FR-9): credentials
 # come from the environment or the config file only, never from a CLI flag.
-_SECRET_KEYS = frozenset({"provider_api_key", "token"})
+_SECRET_KEYS = frozenset({"provider_api_key", "token", "hf_token"})
 
 _TRUE_STRINGS = frozenset({"1", "true", "yes"})
 
@@ -84,6 +84,22 @@ class Config:
     # Re-segmentation: a pause between words at least this long starts a new
     # segment (utterance), in addition to sentence-ending punctuation.
     resegment_gap_sec: float = 0.6
+    # Speaker diarization (pyannote): off by default -- it needs the optional
+    # `diarization` extra installed and, for the hub-hosted gated model, a
+    # Hugging Face token. A per-job `diarize` flag overrides this default.
+    diarize: bool = False
+    diarization_model: str = "pyannote/speaker-diarization-3.1"
+    # A local snapshot directory (containing config.yaml) for offline loads;
+    # empty means load `diarization_model` from the Hugging Face hub/cache.
+    diarization_model_path: str = ""
+    # Optional speaker-count bounds passed through to the pipeline; `None`
+    # lets pyannote estimate the count itself.
+    diarization_min_speakers: int | None = None
+    diarization_max_speakers: int | None = None
+    # Hugging Face access token for the gated pyannote models. Environment
+    # only (TRANSCRIBER_HF_TOKEN, else HF_TOKEN/HUGGING_FACE_HUB_TOKEN),
+    # never argv (FR-9).
+    hf_token: str | None = None
     max_cloud_upload_mb: int = 25
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
@@ -99,6 +115,8 @@ class Config:
             "language": self.language,
             "filter_hallucinations": self.filter_hallucinations,
             "word_timestamps": self.word_timestamps,
+            "diarize": self.diarize,
+            "diarization_model": self.diarization_model,
             "batch_size": self.batch_size,
             "max_cloud_upload_mb": self.max_cloud_upload_mb,
             "log_level": self.log_level,
@@ -231,6 +249,14 @@ def load_config(
     if provider_api_key is not None:
         values["provider_api_key"] = provider_api_key
 
+    # hf_token: env only, same rule as provider_api_key -- the generic
+    # TRANSCRIBER_HF_TOKEN pickup above already applied; this adds the
+    # huggingface_hub-conventional variables as fallbacks.
+    if not values.get("hf_token"):
+        hf_token = env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")
+        if hf_token:
+            values["hf_token"] = hf_token
+
     # 4. explicit overrides (CLI flags) win over everything above
     for key, value in overrides.items():
         if key in known_fields:
@@ -264,6 +290,13 @@ def load_config(
         values["vad_min_silence_ms"] = int(values["vad_min_silence_ms"])
     if "resegment_gap_sec" in values:
         values["resegment_gap_sec"] = float(values["resegment_gap_sec"])
+    if "diarize" in values:
+        values["diarize"] = _parse_bool(values["diarize"])
+    for speakers_key in ("diarization_min_speakers", "diarization_max_speakers"):
+        if speakers_key in values and values[speakers_key] not in (None, ""):
+            values[speakers_key] = int(values[speakers_key])
+        elif speakers_key in values:
+            values[speakers_key] = None
 
     token = values.get("token") or secrets.token_hex(32)
     values["token"] = token

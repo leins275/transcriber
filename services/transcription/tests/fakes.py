@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from transcription.diarization import SpeakerTurn
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptResult
 
@@ -115,3 +116,44 @@ class FakeProvider:
             device=self.device,
             compute_type=self.compute_type,
         )
+
+
+def _default_turns() -> list[SpeakerTurn]:
+    """Turns matching `_default_segments`: one speaker per segment."""
+    return [
+        SpeakerTurn(start=0.0, end=0.5, speaker="SPEAKER_00"),
+        SpeakerTurn(start=0.5, end=1.0, speaker="SPEAKER_01"),
+    ]
+
+
+class FakeDiarizer:
+    """A network-free, torch-free stand-in for the pyannote engine.
+
+    Satisfies `diarizer.DiarizerProtocol`; can be configured to raise a
+    given :class:`ErrorKind` to exercise the degradation path.
+    """
+
+    name = "fake-diarizer"
+
+    def __init__(
+        self,
+        config: Any = None,
+        *,
+        turns: list[SpeakerTurn] | None = None,
+        raise_kind: ErrorKind | None = None,
+        model: str = "fake-diarization-model",
+        device: str = "cpu",
+    ) -> None:
+        self.config = config
+        self._turns = turns if turns is not None else _default_turns()
+        self.raise_kind = raise_kind
+        self.model = model
+        self.device = device
+        self.calls: list[Path] = []
+
+    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> list[SpeakerTurn]:
+        cancel.raise_if_cancelled()
+        self.calls.append(audio_path)
+        if self.raise_kind is not None:
+            raise ServiceError(self.raise_kind, f"fake diarizer raised {self.raise_kind.value}")
+        return list(self._turns)

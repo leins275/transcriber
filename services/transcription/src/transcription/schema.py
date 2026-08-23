@@ -33,12 +33,19 @@ class Segment(BaseModel):
     no_speech_prob: float | None = None
     compression_ratio: float | None = None
     words: list[dict[str, Any]] | None = None
+    # Set by the diarization pass (FR: speaker classification); `None` both
+    # when diarization was off and when no turn could claim the segment.
+    speaker: str | None = None
 
     @model_serializer(mode="wrap")
-    def _drop_words_when_absent(self, handler: Any) -> dict[str, Any]:
+    def _drop_absent_optionals(self, handler: Any) -> dict[str, Any]:
+        # `words` and `speaker` are omitted (not nulled) when absent so a
+        # transcript produced with the features off is byte-identical to one
+        # produced before they existed.
         data: dict[str, Any] = handler(self)
-        if data.get("words") is None:
-            data.pop("words", None)
+        for key in ("words", "speaker"):
+            if data.get(key) is None:
+                data.pop(key, None)
         return data
 
 
@@ -62,6 +69,23 @@ class Stats(BaseModel):
     currency: str | None
 
 
+class DiarizationInfo(BaseModel):
+    """What the transcript records about its diarization pass.
+
+    ``status: "failed"`` is a real, documented state: diarization degrades
+    rather than failing the whole job (the transcript is still valuable
+    without speakers), and this block is where the failure is attributed so
+    it never degrades *silently*.
+    """
+
+    status: Literal["succeeded", "failed"]
+    model: str
+    device: str | None = None
+    speaker_count: int | None = None
+    error_kind: ErrorKind | None = None
+    error_message: str | None = None
+
+
 class TranscriptDoc(BaseModel):
     """The ``transcript.json`` v1 document (FR-6)."""
 
@@ -74,6 +98,17 @@ class TranscriptDoc(BaseModel):
     text: str
     segments: list[Segment]
     stats: Stats
+    # Present only when diarization ran (succeeded or failed); omitted from
+    # the serialized document otherwise, keeping pre-feature readers'
+    # documents unchanged.
+    diarization: DiarizationInfo | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_diarization_when_absent(self, handler: Any) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if data.get("diarization") is None:
+            data.pop("diarization", None)
+        return data
 
 
 class JobCreate(BaseModel):
@@ -85,6 +120,9 @@ class JobCreate(BaseModel):
     provider: str | None = None
     model: str | None = None
     meeting: dict[str, Any] | None = None
+    # `None` defers to the service's configured default (`config.diarize`);
+    # an explicit true/false overrides it for this job only.
+    diarize: bool | None = None
 
 
 class JobStatus(BaseModel):

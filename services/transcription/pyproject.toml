@@ -24,6 +24,13 @@ cuda = [
   "nvidia-cublas-cu12>=12.3; sys_platform == 'win32'",
   "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32'",
 ]
+# Speaker diarization (pyannote). Optional because it pulls the full torch
+# stack (~GBs); the service degrades gracefully when it is absent and
+# `diarize` is requested (the transcript is written without speakers and the
+# failure is recorded in its `diarization` block).
+diarization = [
+  "pyannote.audio>=3.1,<4",
+]
 
 [dependency-groups]
 dev = [

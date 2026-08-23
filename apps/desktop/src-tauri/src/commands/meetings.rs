@@ -109,6 +109,10 @@ struct TranscriptFileSegment {
     end: f64,
     #[serde(default)]
     text: String,
+    /// F2's diarization label ("Speaker 1", ...), when the transcription ran
+    /// with speaker classification on. Absent otherwise.
+    #[serde(default)]
+    speaker: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,14 +146,24 @@ fn parse_transcript(
         ))
     })?;
 
+    // Diarized labels ship inside the transcript itself; they seed the
+    // viewer's speaker map so an auto-classified transcript opens already
+    // labelled. The handler overlays `speakers.json` on top afterwards —
+    // an operator's hand-applied label always outranks the model's.
+    let mut diarized: HashMap<String, String> = HashMap::new();
     let segments: Vec<TranscriptSegmentView> = parsed
         .segments
         .into_iter()
-        .map(|segment| TranscriptSegmentView {
-            id: segment.id,
-            start: segment.start,
-            end: segment.end,
-            text: segment.text,
+        .map(|segment| {
+            if let Some(speaker) = segment.speaker.filter(|name| !name.trim().is_empty()) {
+                diarized.insert(segment.id.to_string(), speaker);
+            }
+            TranscriptSegmentView {
+                id: segment.id,
+                start: segment.start,
+                end: segment.end,
+                text: segment.text,
+            }
         })
         .collect();
 
@@ -182,9 +196,9 @@ fn parse_transcript(
             .and_then(|provider| provider.device.clone()),
         text,
         segments,
-        // Filled in by the handler from the meeting folder; parsing stays a
-        // pure function of the transcript body.
-        speakers: HashMap::new(),
+        // Seeded with the transcript's own diarized labels; the handler
+        // overlays the meeting folder's `speakers.json` on top.
+        speakers: diarized,
         transcript_path: String::new(),
     })
 }
@@ -302,7 +316,13 @@ pub async fn read_transcript_handler(
             ))
         })?;
         let mut view = parse_transcript(&entry_id, &meeting_name, &body)?;
-        view.speakers = read_speaker_labels(&meeting_dir).assignments;
+        // Manual labels overlay (and outrank) the diarized ones the parser
+        // seeded: an operator's correction must never be undone by what the
+        // model guessed, while segments the operator never touched keep
+        // their automatic label.
+        for (segment_id, name) in read_speaker_labels(&meeting_dir).assignments {
+            view.speakers.insert(segment_id, name);
+        }
         view.transcript_path = transcript_path.to_string_lossy().into_owned();
         Ok(view)
     })
@@ -701,6 +721,76 @@ mod tests {
 
         assert_eq!(view.text, "first second");
         assert_eq!(view.segments.len(), 2);
+    }
+
+    #[test]
+    fn diarized_speaker_labels_seed_the_speaker_map() {
+        let body = r#"{"text": "hi", "segments": [
+            {"id": 0, "start": 0.0, "end": 1.0, "text": " hi", "speaker": "Speaker 1"},
+            {"id": 1, "start": 1.0, "end": 2.0, "text": " there", "speaker": "Speaker 2"},
+            {"id": 2, "start": 2.0, "end": 3.0, "text": " hm"}
+        ]}"#;
+
+        let view = parse_transcript("e", "m", body).expect("should parse");
+
+        assert_eq!(
+            view.speakers.get("0").map(String::as_str),
+            Some("Speaker 1")
+        );
+        assert_eq!(
+            view.speakers.get("1").map(String::as_str),
+            Some("Speaker 2")
+        );
+        assert!(
+            !view.speakers.contains_key("2"),
+            "a segment diarization could not attribute stays unassigned"
+        );
+    }
+
+    #[test]
+    fn a_transcript_without_diarization_seeds_no_labels() {
+        let view = parse_transcript("e", "m", BODY).expect("should parse");
+        assert!(view.speakers.is_empty());
+    }
+
+    #[test]
+    fn a_blank_diarized_label_is_ignored() {
+        let body = r#"{"segments": [
+            {"id": 0, "start": 0.0, "end": 1.0, "text": " hi", "speaker": "  "}
+        ]}"#;
+
+        let view = parse_transcript("e", "m", body).expect("should parse");
+
+        assert!(view.speakers.is_empty());
+    }
+
+    #[test]
+    fn manual_labels_overlay_and_outrank_diarized_ones() {
+        // Mirrors the handler's merge: the parser seeds the diarized labels,
+        // then `speakers.json` assignments are inserted over them.
+        let body = r#"{"segments": [
+            {"id": 0, "start": 0.0, "end": 1.0, "text": " hi", "speaker": "Speaker 1"},
+            {"id": 1, "start": 1.0, "end": 2.0, "text": " there", "speaker": "Speaker 2"}
+        ]}"#;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("write labels");
+
+        let mut view = parse_transcript("e", "m", body).expect("should parse");
+        for (segment_id, name) in read_speaker_labels(dir.path()).assignments {
+            view.speakers.insert(segment_id, name);
+        }
+
+        assert_eq!(view.speakers.get("0").map(String::as_str), Some("Maxim"));
+        assert_eq!(
+            view.speakers.get("1").map(String::as_str),
+            Some("Speaker 2")
+        );
     }
 
     #[test]

@@ -8,7 +8,14 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from transcription.schema import ProviderInfo, Segment, Source, Stats, TranscriptDoc
+from transcription.schema import (
+    DiarizationInfo,
+    ProviderInfo,
+    Segment,
+    Source,
+    Stats,
+    TranscriptDoc,
+)
 
 
 def build_document(
@@ -28,6 +35,7 @@ def build_document(
     cost_usd: float | None,
     currency: str | None,
     created_at: str | None = None,
+    diarization: DiarizationInfo | None = None,
 ) -> TranscriptDoc:
     """Pure assembly of a ``TranscriptDoc``; no filesystem access."""
     path = Path(source_path)
@@ -47,6 +55,7 @@ def build_document(
             cost_usd=cost_usd,
             currency=currency,
         ),
+        diarization=diarization,
     )
 
 
