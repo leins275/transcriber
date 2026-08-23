@@ -86,6 +86,11 @@ pub struct LlmModelDownloadStatusView {
     /// From `/health`'s `llm_model_present` (`false` when the service is
     /// unreachable or predates the feature).
     pub model_present: bool,
+    /// From `/health`'s `llm_gpu_build_present`: whether the first-run CUDA
+    /// build of the LLM runtime is on disk. `None` = no NVIDIA GPU here (or
+    /// unknown) -- the UI only offers "Enable GPU acceleration" on
+    /// `Some(false)`.
+    pub gpu_build_present: Option<bool>,
 }
 
 fn map_service_error(err: ServiceError) -> AppError {
@@ -509,17 +514,24 @@ pub async fn reveal_report_handler(
 
 // -- GGUF model download ----------------------------------------------------
 
-async fn llm_model_present(state: &AppState) -> bool {
+/// Health-derived fields the download status alone cannot answer:
+/// `(model_present, gpu_build_present)`.
+async fn llm_health_fields(state: &AppState) -> (bool, Option<bool>) {
     let service = state.service.read().await.clone();
-    service
-        .health()
-        .await
-        .ok()
-        .and_then(|health| health.llm_model_present)
-        .unwrap_or(false)
+    match service.health().await {
+        Ok(health) => (
+            health.llm_model_present.unwrap_or(false),
+            health.llm_gpu_build_present,
+        ),
+        Err(_) => (false, None),
+    }
 }
 
-fn build_llm_view(status: ModelDownloadStatus, model_present: bool) -> LlmModelDownloadStatusView {
+fn build_llm_view(
+    status: ModelDownloadStatus,
+    health: (bool, Option<bool>),
+) -> LlmModelDownloadStatusView {
+    let (model_present, gpu_build_present) = health;
     LlmModelDownloadStatusView {
         state: status.state.into(),
         downloaded_bytes: status.downloaded_bytes,
@@ -528,6 +540,7 @@ fn build_llm_view(status: ModelDownloadStatus, model_present: bool) -> LlmModelD
         error_kind: status.error_kind,
         error_message: status.error_message,
         model_present,
+        gpu_build_present,
     }
 }
 
@@ -540,7 +553,7 @@ pub async fn llm_model_download_status_handler(
         .llm_model_download_status()
         .await
         .map_err(map_service_error)?;
-    Ok(build_llm_view(status, llm_model_present(state).await))
+    Ok(build_llm_view(status, llm_health_fields(state).await))
 }
 
 /// `start_llm_model_download` handler body.
@@ -552,7 +565,7 @@ pub async fn start_llm_model_download_handler(
         .start_llm_model_download()
         .await
         .map_err(map_service_error)?;
-    Ok(build_llm_view(status, llm_model_present(state).await))
+    Ok(build_llm_view(status, llm_health_fields(state).await))
 }
 
 /// `cancel_llm_model_download` handler body.
@@ -564,7 +577,7 @@ pub async fn cancel_llm_model_download_handler(
         .cancel_llm_model_download()
         .await
         .map_err(map_service_error)?;
-    Ok(build_llm_view(status, llm_model_present(state).await))
+    Ok(build_llm_view(status, llm_health_fields(state).await))
 }
 
 // -- `#[tauri::command]` wrappers -------------------------------------------

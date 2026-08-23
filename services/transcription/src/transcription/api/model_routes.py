@@ -148,6 +148,39 @@ def is_llm_model_present(config: Config) -> bool:
     return (Path(config.llm_model_path) / config.llm_model_file).is_file()
 
 
+def llm_gpu_build_present(config: Config) -> bool | None:
+    """Whether the CUDA build of the LLM runtime has been fetched.
+
+    ``None`` on a host with no NVIDIA GPU (same convention as
+    ``cuda_runtime_present`` on ``/health``: never prompt about a payload
+    this machine could never use); otherwise the fetch's ``.ready`` marker.
+    """
+    if sys.platform != "win32" or not _nvidia_gpu_present():
+        return None
+    from transcription.llm.runtime_fetch import (  # noqa: PLC0415 - keeps llm/ lazy
+        is_llama_cuda_present,
+    )
+
+    return is_llama_cuda_present(config.app_dir)
+
+
+def build_llm_setup_download(config: Config) -> ModelDownload | SetupDownload:
+    """The real, production LLM download: the GGUF alone on a GPU-less
+    machine, or the CUDA llama.cpp build first and the GGUF second on a
+    machine with an NVIDIA GPU -- the exact `build_setup_download` shape,
+    reusing :class:`SetupDownload` unchanged (each phase short-circuits via
+    its own ``already_present()``, so re-POSTing after the GGUF landed
+    fetches only the missing GPU build, and vice versa)."""
+    gguf = build_llm_model_download(config)
+    if sys.platform != "win32" or not _nvidia_gpu_present():
+        return gguf
+    from transcription.llm.runtime_fetch import (  # noqa: PLC0415 - keeps llm/ lazy
+        build_llama_cuda_download,
+    )
+
+    return SetupDownload(cuda_runtime=build_llama_cuda_download(config), model=gguf)
+
+
 def is_model_present(config: Config) -> bool:
     """Whether the pinned snapshot's ``.ready`` marker exists under
     ``config.model_path`` (FR-17: the app must detect a missing model

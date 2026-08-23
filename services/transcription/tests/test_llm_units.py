@@ -194,6 +194,50 @@ def test_fit_gpu_layers_partial_full_and_none() -> None:
     assert fit_gpu_layers(11 * gb, 20 * gb, 0) == 0
 
 
+# --------------------------------------------------------------- reasoning
+
+
+def test_split_reasoning_handles_the_lone_closer_shape() -> None:
+    from transcription.llm.reasoning import split_reasoning
+
+    # llama.cpp's Qwen template opens <think> in the prompt, so the
+    # completion is "<thought></think><answer>".
+    answer, reasoning = split_reasoning(
+        "Here's a thinking process:\n1. Analyze.\n</think>\n\n# Summary\n\nThe answer."
+    )
+    assert answer == "# Summary\n\nThe answer."
+    assert reasoning is not None and "thinking process" in reasoning
+
+
+def test_split_reasoning_handles_paired_tags_and_plain_text() -> None:
+    from transcription.llm.reasoning import split_reasoning
+
+    answer, reasoning = split_reasoning("<think>hmm</think>The answer.")
+    assert answer == "The answer."
+    assert reasoning == "hmm"
+
+    answer, reasoning = split_reasoning("Just an answer, no thinking.")
+    assert answer == "Just an answer, no thinking."
+    assert reasoning is None
+
+
+# ------------------------------------------------------------ runtime fetch
+
+
+def test_llama_cuda_pins_are_shaped_like_real_artifacts() -> None:
+    from transcription.llm.runtime_fetch import LLAMA_CUDA_PACKAGES, llama_cuda_dir
+
+    assert len(LLAMA_CUDA_PACKAGES) == 2
+    for pkg in LLAMA_CUDA_PACKAGES:
+        assert pkg.size > 0
+        assert len(pkg.sha256) == 64
+        assert pkg.url.startswith("https://")
+    wheel = LLAMA_CUDA_PACKAGES[0]
+    assert wheel.extract_prefix == "llama_cpp/"
+    assert wheel.dest_subdir == "llama-cuda"
+    assert llama_cuda_dir("C:/app").as_posix().endswith("runtime/llama-cuda")
+
+
 # ---------------------------------------------------------------- prompts
 
 

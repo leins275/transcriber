@@ -170,6 +170,9 @@ export type LlmModelDownloadStatus = {
   error_kind: string | null;
   error_message: string | null;
   model_present: boolean;
+  /** Whether the first-run CUDA build of the LLM runtime is on disk.
+   * `null` = no NVIDIA GPU on this machine (never offer it) or unknown. */
+  gpu_build_present: boolean | null;
 };
 
 // Service-log extension to the IPC contract: one row of F2's own sqlite job

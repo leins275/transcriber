@@ -177,6 +177,9 @@ struct HealthResponse {
     /// feature), same convention as above.
     #[serde(default)]
     llm_model_present: Option<bool>,
+    /// Same convention; `None` also means "no NVIDIA GPU on this host".
+    #[serde(default)]
+    llm_gpu_build_present: Option<bool>,
 }
 
 /// `GET`/`POST`/`DELETE /v1/model/download` response body (T13, FR-12).
@@ -364,6 +367,7 @@ impl TranscriptionService for HttpTranscriptionService {
             model_present: parsed.model_present,
             cuda_runtime_present: parsed.cuda_runtime_present,
             llm_model_present: parsed.llm_model_present,
+            llm_gpu_build_present: parsed.llm_gpu_build_present,
         })
     }
 

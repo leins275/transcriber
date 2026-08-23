@@ -43,6 +43,7 @@ from transcription.llm.prompts import (
     render_transcript_lines,
     repair_messages,
 )
+from transcription.llm.reasoning import split_reasoning
 from transcription.llm.report import collect_project_materials, report_from_materials
 from transcription.llm.shapes import (
     ActionItemsOut,
@@ -743,7 +744,15 @@ class JobManager:
         *,
         json_schema: dict[str, Any] | None = None,
         on_progress: Callable[[float], None] | None = None,
+        reasoning_sink: list[str] | None = None,
     ) -> str:
+        """One completion, with the model's chain-of-thought split off.
+
+        Reasoning never reaches an artifact or the UI: it lands in
+        `reasoning_sink` when the caller wants to keep it (the summary and
+        report runners write it to a `*.reasoning.md` sidecar) and is
+        discarded otherwise.
+        """
         completion = provider.complete(
             messages,
             json_schema=json_schema,
@@ -752,7 +761,10 @@ class JobManager:
             on_progress=on_progress if on_progress is not None else (lambda fraction: None),
             cancel=job.cancel_token,
         )
-        return completion.text
+        answer, reasoning = split_reasoning(completion.text)
+        if reasoning and reasoning_sink is not None:
+            reasoning_sink.append(reasoning)
+        return answer
 
     def _summarize_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
@@ -760,6 +772,7 @@ class JobManager:
         chunks = chunk_lines(lines, self._llm_budget_tokens())
         total_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
         calls_done = 0
+        reasoning: list[str] = []
 
         def complete(messages: list[Message]) -> str:
             nonlocal calls_done
@@ -770,6 +783,7 @@ class JobManager:
                 on_progress=lambda fraction: setattr(
                     job, "progress", min(0.99, (calls_done + fraction) / total_calls)
                 ),
+                reasoning_sink=reasoning,
             )
             calls_done += 1
             job.progress = min(0.99, calls_done / total_calls)
@@ -779,6 +793,13 @@ class JobManager:
         summary_path = artifacts.write_text_atomic(
             summary + "\n", Path(job.output_path) / "summary.md"
         )
+        # The model's chain-of-thought, kept out of the summary (and the
+        # UI) but not thrown away: a sidecar next to it, for the curious.
+        if reasoning:
+            artifacts.write_text_atomic(
+                "\n\n---\n\n".join(reasoning) + "\n",
+                Path(job.output_path) / "summary.reasoning.md",
+            )
         return {"artifacts": [str(summary_path)]}
 
     def _constrained_items(
@@ -944,6 +965,7 @@ class JobManager:
             )
 
         calls_done = 0
+        reasoning: list[str] = []
 
         def complete(messages: list[Message]) -> str:
             nonlocal calls_done
@@ -956,6 +978,7 @@ class JobManager:
                     "progress",
                     min(0.85, 0.05 + (calls_done + fraction) * 0.2),
                 ),
+                reasoning_sink=reasoning,
             )
             calls_done += 1
             return text
@@ -969,6 +992,10 @@ class JobManager:
 
         out_dir = Path(job.output_path)
         md_path = artifacts.write_text_atomic(report_md + "\n", out_dir / "report.md")
+        if reasoning:
+            artifacts.write_text_atomic(
+                "\n\n---\n\n".join(reasoning) + "\n", out_dir / "report.reasoning.md"
+            )
         artifact_paths = [str(md_path)]
         job.progress = 0.9
         try:

@@ -281,6 +281,10 @@ pub struct ServiceHealth {
     /// configured GGUF file is on disk. `None` when the field is absent
     /// (a build of F2 older than the feature).
     pub llm_model_present: Option<bool>,
+    /// F2's `llm_gpu_build_present` field -- whether the first-run CUDA
+    /// build of the LLM runtime is on disk. `None` on a GPU-less host (or
+    /// an older F2): never offer GPU acceleration a machine cannot use.
+    pub llm_gpu_build_present: Option<bool>,
 }
 
 /// Wire-level model-download state (mirrors F2's `DownloadState`, T13,

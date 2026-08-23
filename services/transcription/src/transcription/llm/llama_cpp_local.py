@@ -12,9 +12,12 @@ thread of the first job that actually completes something.
 
 from __future__ import annotations
 
+import importlib
 import logging
+import sys
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +25,9 @@ from transcription.config import Config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.llm.base import LlmCompletion, LlmInfo, Message, ModelState
 from transcription.llm.gguf_meta import fit_gpu_layers, read_block_count
+from transcription.llm.runtime_fetch import llama_cuda_dir
 from transcription.providers.base import CancelToken
+from transcription.runtime_dlls import register_cuda_dll_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +136,43 @@ class LlamaCppProvider:
         """The GGUF file this provider will load (may not exist yet)."""
         return Path(self.config.llm_model_path) / self.config.llm_model_file
 
+    def _import_llama_cpp(self) -> Any:
+        """Import llama_cpp, preferring the first-run-fetched CUDA build
+        (``<app_dir>/runtime/llama-cuda``) over the baked CPU wheel.
+
+        Falls back to the baked build when the CUDA one cannot load (driver
+        removed, corrupt extraction) -- a slower summary beats a failed one.
+        """
+        if "llama_cpp" in sys.modules:
+            return sys.modules["llama_cpp"]
+
+        runtime_dir = llama_cuda_dir(self.config.app_dir)
+        if (runtime_dir / "llama_cpp").is_dir():
+            # cudart/cublas may have been extracted after this process's
+            # startup registration ran; re-registering is idempotent.
+            register_cuda_dll_dirs()
+            sys.path.insert(0, str(runtime_dir))
+            try:
+                module = importlib.import_module("llama_cpp")
+                logger.info("using the CUDA llama.cpp build from %s", runtime_dir)
+                return module
+            except Exception as exc:  # noqa: BLE001 - fall back, never fail the load here
+                logger.warning(
+                    "CUDA llama.cpp build failed to load (%s); "
+                    "falling back to the built-in CPU build",
+                    redact(str(exc)),
+                )
+                with suppress(ValueError):
+                    sys.path.remove(str(runtime_dir))
+                for name in [
+                    loaded
+                    for loaded in sys.modules
+                    if loaded == "llama_cpp" or loaded.startswith("llama_cpp.")
+                ]:
+                    sys.modules.pop(name, None)
+
+        return importlib.import_module("llama_cpp")
+
     def _load(self) -> Any:
         with self._lock:
             if self._llama is not None:
@@ -146,7 +188,9 @@ class LlamaCppProvider:
 
             self._state = "loading"
             try:
-                import llama_cpp  # noqa: PLC0415 - deliberate lazy import (NFR-1)
+                # Deliberately lazy (NFR-1), routed through the CUDA-build
+                # preference above.
+                llama_cpp = self._import_llama_cpp()
 
                 gpu_layers = self._resolve_gpu_layers(model_file, llama_cpp)
                 kwargs: dict[str, Any] = {

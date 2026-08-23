@@ -144,6 +144,47 @@ async def test_summarize_writes_summary_md_and_records_the_manifest(
         await manager.aclose()
 
 
+async def test_reasoning_is_stripped_from_the_summary_and_saved_to_a_sidecar(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    llm = FakeLlm(
+        responses=["Here's a thinking process:\n1. Read it all.\n</think>\n\n## The real summary"]
+    )
+    manager = _manager(config, ledger, llm)
+    try:
+        await _run_job(
+            manager, job_type="summarize", input_path=meeting_dir, output_dir=meeting_dir
+        )
+
+        summary = (meeting_dir / "summary.md").read_text(encoding="utf-8")
+        assert summary.strip() == "## The real summary"
+        assert "thinking process" not in summary
+
+        reasoning = (meeting_dir / "summary.reasoning.md").read_text(encoding="utf-8")
+        assert "thinking process" in reasoning
+    finally:
+        await manager.aclose()
+
+
+async def test_extraction_tolerates_a_reasoning_prefix_before_the_json(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    payload = _items_json(
+        [{"type": "task", "title": "One item", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[f"Let me think about this.\n</think>\n{payload}"])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting_dir.parent / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+        assert len(llm.calls) == 1, "the reasoning prefix must not trigger a repair round"
+    finally:
+        await manager.aclose()
+
+
 async def test_a_long_transcript_is_map_reduced(
     config: Config, ledger: Ledger, tmp_app_dir: Path
 ) -> None:
