@@ -108,6 +108,15 @@ export function SettingsPage({
         <div className={styles.value}>
           {llmModelStatus === null ? (
             <div className={styles.line}>Local language model</div>
+          ) : llmModelStatus.model_present &&
+            (llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying") ? (
+            // The GGUF is here; what's transferring is the GPU build.
+            <div className={styles.line}>
+              Downloading GPU acceleration · {Math.round(llmModelStatus.percent)}%
+              <button type="button" className="btn btn-ghost" onClick={onCancelLlmDownload}>
+                Cancel
+              </button>
+            </div>
           ) : llmModelStatus.model_present ? (
             <>
               <div className={styles.line}>
@@ -124,9 +133,18 @@ export function SettingsPage({
                   <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
                 Local language model installed
+                {llmModelStatus.gpu_build_present === false && (
+                  <button type="button" className="btn btn-secondary" onClick={onStartLlmDownload}>
+                    Enable GPU acceleration (~460 MB)
+                  </button>
+                )}
               </div>
               <p className={styles.hint}>
-                Summaries, action items, facts and project reports run on this machine.
+                {llmModelStatus.gpu_build_present === false
+                  ? "Summaries currently run on CPU. Enabling GPU acceleration downloads the " +
+                    "CUDA build of the local runtime and offloads as much of the model as " +
+                    "fits in your GPU's memory."
+                  : "Summaries, action items, facts and project reports run on this machine."}
               </p>
             </>
           ) : llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying" ? (

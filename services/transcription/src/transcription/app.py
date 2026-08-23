@@ -29,9 +29,10 @@ from transcription import __version__
 from transcription.api import model_routes
 from transcription.api.model_routes import (
     ModelDownloadManager,
-    build_llm_model_download,
+    build_llm_setup_download,
     build_model_router,
     is_model_present,
+    llm_gpu_build_present,
 )
 from transcription.config import Config
 from transcription.cuda_runtime import is_cuda_runtime_present
@@ -89,7 +90,7 @@ def create_app(
     model_download_manager = ModelDownloadManager(config, factory=model_download_factory)
     llm_model_download_manager = ModelDownloadManager(
         config,
-        factory=llm_model_download_factory or (lambda: build_llm_model_download(config)),
+        factory=llm_model_download_factory or (lambda: build_llm_setup_download(config)),
     )
 
     @asynccontextmanager
@@ -192,6 +193,11 @@ def create_app(
             # The LLM engine's counterpart to model/model_present, same
             # E15-safe rule: never constructs (or imports) an engine.
             **job_manager.llm_info(),
+            # Whether the first-run CUDA build of the LLM runtime is on disk
+            # (None on a GPU-less host, mirroring cuda_runtime_present) --
+            # what lets the app offer "Enable GPU acceleration" exactly when
+            # it would help.
+            "llm_gpu_build_present": llm_gpu_build_present(config),
         }
 
     v1_deps = [Depends(require_token)]

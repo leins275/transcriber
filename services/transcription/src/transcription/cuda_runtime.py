@@ -45,7 +45,15 @@ RUNTIME_DIRNAME = "runtime"
 
 @dataclass(frozen=True, kw_only=True)
 class CudaPackage:
-    """One pinned PyPI wheel this download fetches."""
+    """One pinned wheel this download fetches.
+
+    ``extract_prefix``/``dest_subdir`` decide what part of the wheel lands
+    where under the app-folder ``runtime/`` directory: the defaults keep the
+    original behaviour (the ``nvidia/`` DLL tree, merged directly into
+    ``runtime/``); the LLM feature's CUDA build of llama.cpp extracts its
+    own package tree into a ``runtime/<subdir>/`` of its own instead
+    (`transcription.llm.runtime_fetch`).
+    """
 
     name: str
     version: str
@@ -53,6 +61,8 @@ class CudaPackage:
     url: str
     size: int
     sha256: str
+    extract_prefix: str = "nvidia/"
+    dest_subdir: str = ""
 
 
 # Pinned to the exact versions/digests services/transcription/uv.lock
@@ -116,17 +126,22 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _extract_nvidia_trees(wheel_paths: Sequence[Path], dest_dir: Path) -> None:
-    """Extract only each wheel's `nvidia/` tree into `dest_dir`, merging
-    across wheels -- the same `nvidia/<component>/bin/*.dll` layout
-    `build_pyenv.py` already produces under a baked `--extra cuda`
-    `site-packages/`, so `runtime_dlls.py`'s lookup needs no format-specific
-    branch, only one extra directory to scan."""
-    for wheel_path in wheel_paths:
+def _extract_wheel_trees(downloads: Sequence[tuple[Path, CudaPackage]], runtime_dir: Path) -> None:
+    """Extract each wheel's configured tree into its configured destination.
+
+    The default spec keeps the original behaviour: only the ``nvidia/`` tree
+    (the DLLs CTranslate2 loads), merged across wheels directly into
+    ``runtime/`` -- the same ``nvidia/<component>/bin/*.dll`` layout
+    `build_pyenv.py` produces under a baked ``--extra cuda``
+    ``site-packages/``, so `runtime_dlls.py`'s lookup needs no
+    format-specific branch, only one extra directory to scan.
+    """
+    for wheel_path, pkg in downloads:
+        dest_dir = runtime_dir / pkg.dest_subdir if pkg.dest_subdir else runtime_dir
         with zipfile.ZipFile(wheel_path) as zf:
             for member in zf.namelist():
                 normalized = member.replace("\\", "/")
-                if not normalized.startswith("nvidia/") or normalized.endswith("/"):
+                if not normalized.startswith(pkg.extract_prefix) or normalized.endswith("/"):
                     continue
                 zf.extract(member, dest_dir)
 
@@ -148,10 +163,16 @@ class CudaRuntimeDownload:
         allowed_roots: tuple[Path, ...],
         packages: Sequence[CudaPackage] = CUDA_PACKAGES,
         transport: Transport | None = None,
+        marker_relpath: str = _READY_MARKER,
     ) -> None:
         self._runtime_dir = ensure_output_dir(Path(app_dir) / RUNTIME_DIRNAME, allowed_roots)
         self._packages = tuple(packages)
         self._transport = transport or HttpTransport()
+        # Where this download's `.ready` marker lives, relative to
+        # `runtime/`: the default is the CUDA runtime's own; a differently
+        # parameterized download (the llama.cpp CUDA build) uses its own
+        # subdirectory's marker so the two slots stay independent.
+        self._marker_relpath = marker_relpath
         self._cancel_event = threading.Event()
 
         self.state: DownloadState = DownloadState.IDLE
@@ -161,7 +182,7 @@ class CudaRuntimeDownload:
         self.error: ServiceError | None = None
 
     def already_present(self) -> bool:
-        return (self._runtime_dir / _READY_MARKER).exists()
+        return (self._runtime_dir / self._marker_relpath).exists()
 
     def cancel(self) -> None:
         """Signal cancellation; checked between chunks (stops within one chunk)."""
@@ -219,7 +240,7 @@ class CudaRuntimeDownload:
                 last_emit = now
                 on_progress(self._progress_event())
 
-        downloaded_wheel_paths: list[Path] = []
+        downloaded_wheel_paths: list[tuple[Path, CudaPackage]] = []
 
         for pkg in self._packages:
             if self._cancel_event.is_set():
@@ -243,7 +264,7 @@ class CudaRuntimeDownload:
                 # the extraction path that ends up on `PATH`.
                 if _sha256_file(dest) == pkg.sha256:
                     self.downloaded_bytes += pkg.size
-                    downloaded_wheel_paths.append(dest)
+                    downloaded_wheel_paths.append((dest, pkg))
                     emit()
                     continue
                 dest.unlink()
@@ -297,14 +318,14 @@ class CudaRuntimeDownload:
                 return
 
             incomplete.replace(dest)
-            downloaded_wheel_paths.append(dest)
+            downloaded_wheel_paths.append((dest, pkg))
 
         self.current_file = ""
         self.state = DownloadState.VERIFYING
         emit(force=True)
 
         try:
-            _extract_nvidia_trees(downloaded_wheel_paths, self._runtime_dir)
+            _extract_wheel_trees(downloaded_wheel_paths, self._runtime_dir)
         except Exception as exc:
             self.state = DownloadState.ERROR
             self.error = ServiceError(ErrorKind.INTERNAL, f"failed to extract CUDA runtime: {exc}")
@@ -327,7 +348,8 @@ class CudaRuntimeDownload:
         emit(force=True)
 
     def _write_ready_marker(self) -> None:
-        marker = self._runtime_dir / _READY_MARKER
+        marker = self._runtime_dir / self._marker_relpath
+        marker.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "packages": {pkg.name: pkg.version for pkg in self._packages},
             "verified_at": time.time(),

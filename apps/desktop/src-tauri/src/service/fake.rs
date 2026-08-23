@@ -331,6 +331,9 @@ impl TranscriptionService for FakeService {
             // for `present`/`model_present`).
             cuda_runtime_present: Some(inner.model.cuda_runtime_present),
             llm_model_present: Some(inner.llm_model.present),
+            // The fake behaves like a machine whose GPU build is already
+            // fetched -- dev sessions exercise the happy path by default.
+            llm_gpu_build_present: Some(true),
         })
     }
 
