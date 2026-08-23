@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.9.0 — 2026-08-23
+
+### Features
+
+- **llm**: GPU acceleration for the installed app; keep chain-of-thought out of artifacts
+
 ## 0.8.0 — 2026-08-23
 
 ### Features

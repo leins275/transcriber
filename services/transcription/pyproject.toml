@@ -1,6 +1,6 @@
 [project]
 name = "transcription"
-version = "0.8.0"
+version = "0.9.0"
 description = "Standalone transcription microservice: local faster-whisper + litellm cloud providers, over localhost HTTP and a one-shot CLI."
 readme = "README.md"
 requires-python = ">=3.12"
