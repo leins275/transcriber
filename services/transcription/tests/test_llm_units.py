@@ -21,6 +21,11 @@ from transcription.errors import ServiceError
 from transcription.frames import plan_screenshots, screenshot_name
 from transcription.llm.chunking import chunk_lines, estimate_tokens
 from transcription.llm.extraction import merge_items, snap_timestamps
+from transcription.llm.gguf_meta import (
+    VRAM_RESERVE_BYTES,
+    fit_gpu_layers,
+    read_block_count,
+)
 from transcription.llm.prompts import format_timestamp, render_transcript_lines
 from transcription.llm.shapes import (
     ActionItemsOut,
@@ -123,6 +128,70 @@ def test_plan_screenshots_dedupes_within_the_gap_and_caps_the_count() -> None:
 def test_screenshot_names_are_stable_and_sortable() -> None:
     assert screenshot_name(62.0) == "screenshot-0102.png"
     assert screenshot_name(3671.0) == "screenshot-10111.png"
+
+
+# ------------------------------------------------------------- gpu offload
+
+
+def _gguf_string(value: str) -> bytes:
+    import struct
+
+    encoded = value.encode("utf-8")
+    return struct.pack("<Q", len(encoded)) + encoded
+
+
+def _minimal_gguf(arch: str = "qwen3moe", block_count: int = 48) -> bytes:
+    """A hand-built GGUF v3 header with just enough metadata."""
+    import struct
+
+    header = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 0) + struct.pack("<Q", 3)
+    # general.architecture = <arch> (string, type 8)
+    kv1 = _gguf_string("general.architecture") + struct.pack("<I", 8) + _gguf_string(arch)
+    # a skipped array value on the way (type 9, float32 elements)
+    kv2 = (
+        _gguf_string("tokenizer.scores")
+        + struct.pack("<I", 9)
+        + struct.pack("<I", 6)
+        + struct.pack("<Q", 4)
+        + struct.pack("<4f", 0.0, 1.0, 2.0, 3.0)
+    )
+    # <arch>.block_count = block_count (uint32, type 4)
+    kv3 = (
+        _gguf_string(f"{arch}.block_count") + struct.pack("<I", 4) + struct.pack("<I", block_count)
+    )
+    return header + kv1 + kv2 + kv3
+
+
+def test_read_block_count_from_a_minimal_gguf_header(tmp_path: Path) -> None:
+    model = tmp_path / "model.gguf"
+    model.write_bytes(_minimal_gguf(block_count=48))
+    assert read_block_count(model) == 48
+
+
+def test_read_block_count_degrades_to_none_on_junk(tmp_path: Path) -> None:
+    junk = tmp_path / "junk.gguf"
+    junk.write_bytes(b"not a gguf file at all")
+    assert read_block_count(junk) is None
+    truncated = tmp_path / "trunc.gguf"
+    truncated.write_bytes(_minimal_gguf()[:20])
+    assert read_block_count(truncated) is None
+
+
+def test_fit_gpu_layers_partial_full_and_none() -> None:
+    gb = 1_000_000_000
+    # A 20 GB / 48-layer model against ~11 GB free: a real partial offload,
+    # never more than fits.
+    partial = fit_gpu_layers(11 * gb, 20 * gb, 48)
+    assert 0 < partial < 48
+    assert partial * (20 * gb / 49) <= 11 * gb - VRAM_RESERVE_BYTES
+
+    # A tiny model on a huge card: everything (-1, llama.cpp's "all").
+    assert fit_gpu_layers(24 * gb, 2 * gb, 32) == -1
+
+    # No usable VRAM after the reserve: stay on CPU.
+    assert fit_gpu_layers(1 * gb, 20 * gb, 48) == 0
+    assert fit_gpu_layers(0, 20 * gb, 48) == 0
+    assert fit_gpu_layers(11 * gb, 20 * gb, 0) == 0
 
 
 # ---------------------------------------------------------------- prompts

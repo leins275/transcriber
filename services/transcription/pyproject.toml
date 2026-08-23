@@ -12,14 +12,14 @@ dependencies = [
   "litellm>=1.60",
   "h11>=0.16",
   "huggingface_hub>=0.35",
-  # The built-in LLM runtime (summaries / action items / facts / reports).
-  # Pinned exactly: PyPI carries only sdists (needs CMake+MSVC); the
-  # prebuilt CPU wheel comes from the project's own index (see
-  # [[tool.uv.index]] below), whose available versions drift.
-  "llama-cpp-python==0.3.35",
   # Markdown -> HTML -> PDF for reports and exports (pure-python stack).
   "markdown>=3.6",
   "xhtml2pdf>=0.2.16",
+  # NVML bindings (pure-python ctypes over nvml.dll, no subprocess): how the
+  # llama.cpp engine measures free VRAM to auto-fit `llm_gpu_layers`.
+  # Harmless on machines with no NVIDIA driver -- only imported inside the
+  # auto-fit path, behind a try/except.
+  "nvidia-ml-py>=12",
 ]
 
 [project.scripts]
@@ -39,6 +39,26 @@ cuda = [
 diarization = [
   "pyannote.audio>=3.1,<4",
 ]
+# The built-in LLM runtime (summaries / action items / facts / reports), as
+# two mutually exclusive variants of the SAME pinned version -- the uv
+# "conflicting extras" pattern (the torch cpu/cu convention). Pinned exactly:
+# PyPI carries only sdists (needs CMake+MSVC); prebuilt wheels come from the
+# project's own indexes (see [[tool.uv.index]] below), whose available
+# versions drift. `llm-cpu` (~60 MB) is what the installer bakes; `llm-cuda`
+# (~480 MB, bundles the CUDA 12.4 runtime DLLs) is what the dev sidecar
+# selects on a machine with an NVIDIA GPU.
+llm-cpu = [
+  "llama-cpp-python==0.3.35",
+]
+llm-cuda = [
+  "llama-cpp-python==0.3.35",
+  # The cu124 wheel ships ggml-cuda.dll but NOT the CUDA runtime it links
+  # against; these wheels put cudart64_12/cublas64_12 under
+  # site-packages/nvidia/*/bin, which `runtime_dlls.register_cuda_dll_dirs`
+  # already registers with the OS loader at service startup.
+  "nvidia-cuda-runtime-cu12>=12.3,<13; sys_platform == 'win32'",
+  "nvidia-cublas-cu12>=12.3,<13; sys_platform == 'win32'",
+]
 
 [dependency-groups]
 dev = [
@@ -49,16 +69,30 @@ dev = [
   "mypy>=1.11",
 ]
 
+[tool.uv]
+# The two LLM-runtime variants ship the same import name from different
+# wheel indexes; installing both is impossible, so uv must treat the extras
+# as mutually exclusive.
+conflicts = [[{ extra = "llm-cpu" }, { extra = "llm-cuda" }]]
+
 [[tool.uv.index]]
-# llama-cpp-python's own CPU wheel index: the only source of prebuilt
-# Windows wheels (PyPI is sdist-only). `explicit = true` keeps every other
-# package resolving from PyPI.
+# llama-cpp-python's own wheel indexes: the only source of prebuilt Windows
+# wheels (PyPI is sdist-only). `explicit = true` keeps every other package
+# resolving from PyPI.
 name = "llama-cpp-cpu"
 url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "llama-cpp-cu124"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cu124"
+explicit = true
+
 [tool.uv.sources]
-llama-cpp-python = { index = "llama-cpp-cpu" }
+llama-cpp-python = [
+  { index = "llama-cpp-cpu", extra = "llm-cpu" },
+  { index = "llama-cpp-cu124", extra = "llm-cuda" },
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -94,5 +128,5 @@ files = ["src"]
 [[tool.mypy.overrides]]
 # All of these are imported lazily inside their seam modules only; none
 # ships usable type stubs.
-module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*"]
+module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*", "pynvml.*"]
 ignore_missing_imports = true

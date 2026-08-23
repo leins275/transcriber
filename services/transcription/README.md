@@ -84,7 +84,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
 | `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | `ggml-org/Qwen3.6-35B-A3B-GGUF` (pinned revision) / `Qwen3.6-35B-A3B-Q4_K_M.gguf` |
 | `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `16384` |
-| `llm_gpu_layers` | `TRANSCRIBER_LLM_GPU_LAYERS` | `0` (pure CPU; the shipped wheel is CPU-only) |
+| `llm_gpu_layers` | `TRANSCRIBER_LLM_GPU_LAYERS` | `-1` = auto-fit: as many whole layers as free VRAM holds (NVML + GGUF header), rest on CPU; `0` disables; positive pins |
 | `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
 | `llm_temperature` | `TRANSCRIBER_LLM_TEMPERATURE` | `0.3` |
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
@@ -126,6 +126,23 @@ transcription waits, and vice versa -- which is also what guarantees
 whisper and the LLM never infer concurrently. With the default
 `llm_keep_loaded: false` the GGUF's working set is released after each
 LLM job.
+
+### GPU offload
+
+`llama-cpp-python` comes in two mutually exclusive uv extras of the same
+pinned version: `llm-cpu` (what the installer bakes) and `llm-cuda` (the
+cu124 wheel plus the `nvidia-cuda-runtime-cu12`/`nvidia-cublas-cu12`
+runtime wheels, whose DLL directories `runtime_dlls` registers at
+startup). The desktop app's dev sidecar passes `--extra llm-cuda`
+automatically when `nvidia-smi` is on PATH, `--extra llm-cpu` otherwise.
+With the default `llm_gpu_layers: -1`, each model load measures free VRAM
+via NVML, reads the layer count from the GGUF header and offloads as many
+whole layers as fit (the decision is logged); the rest run on CPU.
+
+One uv gotcha when switching variants by hand: both wheels share a name
+and version, so `uv sync --extra llm-cuda` over an already-installed CPU
+wheel audits it as satisfied. Force the swap once with
+`uv sync --extra llm-cuda --reinstall-package llama-cpp-python`.
 
 ## Speaker diarization (pyannote)
 
