@@ -383,6 +383,12 @@ describe("App settings", () => {
 
     const user = userEvent.setup();
     render(<App />);
+    // The vault path lives on the Settings page now (redesign turn 6) --
+    // reach it through the header gear before asserting or changing it.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^settings$/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /^settings$/i }));
     await waitFor(() => expect(screen.getByText("D:\\Meetings")).toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: /change/i }));
@@ -547,6 +553,30 @@ describe("App model download wiring (T13)", () => {
 
     expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/model/i);
+    await settle();
+  });
+});
+
+describe("App settings page (redesign turn 6)", () => {
+  it("opens Settings from the header gear and returns to the library from the back link", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_settings") return buildSettings();
+      if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+      return null;
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /^settings$/i }));
+    expect(screen.getByRole("region", { name: /settings/i })).toBeInTheDocument();
+    expect(screen.getByText("D:\\Meetings")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /drop/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /recordings/i }));
+    expect(screen.queryByRole("region", { name: /settings/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /drop/i })).toBeInTheDocument();
     await settle();
   });
 });

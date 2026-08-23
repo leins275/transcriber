@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checkForUpdate, relaunchApp, type PendingUpdate } from "../api";
+import { api, checkForUpdate, relaunchApp, type PendingUpdate } from "../api";
 import { downloadPercent, type UpdateInfo, type UpdateState } from "../lib/update";
+
+/** How long a failed check's notice stays up before dismissing itself. Long
+ * enough to be read, short enough that an offline machine's app is not
+ * permanently wearing an error banner for the normal state of being
+ * offline. */
+export const UPDATE_ERROR_DISMISS_MS = 6000;
 
 /** The plugin reports absent release notes and dates as `undefined`; every
  * view type in this app uses `null` for "not present", and mixing the two
@@ -67,7 +73,15 @@ export function useUpdate() {
     let downloaded = 0;
     let total: number | null = null;
     try {
-      await update.downloadAndInstall((event) => {
+      // Download and install are two deliberate steps, not
+      // `downloadAndInstall`: between them the bundled Python sidecar must
+      // be stopped (`prepare_update`), because the NSIS installer
+      // overwrites `pyenv\` in place and a still-running interpreter holds
+      // locks on its own DLLs -- the "Error opening file for writing:
+      // ...\pyenv\..." install failure. Stopping only after the download
+      // has succeeded also means a failed/offline download never takes the
+      // transcription service down for nothing.
+      await update.download((event) => {
         if (event.event === "Started") {
           total = event.data.contentLength ?? null;
         } else if (event.event === "Progress") {
@@ -79,6 +93,8 @@ export function useUpdate() {
           });
         }
       });
+      await api.prepareUpdate();
+      await update.install();
       setState({ status: "installed", update: info });
     } catch (error: unknown) {
       const message =
@@ -88,6 +104,18 @@ export function useUpdate() {
       setState({ status: "error", message });
     }
   }, []);
+
+  // A failed check dismisses itself. It is worth saying once -- the app
+  // cannot tell whether it is current -- but it is a notification, not a
+  // condition the operator can act on, so it must not sit on screen for
+  // the rest of the session. The actionable states ("available",
+  // "installed") never auto-dismiss: hiding a button someone was about to
+  // click is worse than a lingering strip.
+  useEffect(() => {
+    if (state.status !== "error") return;
+    const handle = setTimeout(() => setState({ status: "idle" }), UPDATE_ERROR_DISMISS_MS);
+    return () => clearTimeout(handle);
+  }, [state.status]);
 
   const restart = useCallback(() => {
     relaunchApp().catch(() => {

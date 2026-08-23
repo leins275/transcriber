@@ -30,7 +30,7 @@ static assertions, which is still the only thing exercised in CI (no
 
 | Macro | Runs | What it does here |
 |---|---|---|
-| `NSIS_HOOK_PREINSTALL` | before files are copied into `$INSTDIR` | reserved (no-op) |
+| `NSIS_HOOK_PREINSTALL` | before files are copied into `$INSTDIR` | stops any process still executing out of `$INSTDIR\pyenv` (the orphaned Python sidecar an auto-update leaves behind) so overwriting `pyenv\` cannot fail with "Error opening file for writing"; filtered to that path, never a machine-wide kill |
 | `NSIS_HOOK_POSTINSTALL` | after files are copied | creates `models\`, `logs\`, `data\` (FR-8); parses `/VAULT=` in silent mode and writes `config.json` (FR-18) |
 | `NSIS_HOOK_PREUNINSTALL` | before the core uninstall Section removes files | decides upgrade-vs-real-uninstall, asks about the model directory, relocates `models\`/`logs\`/`data\` out of `$INSTDIR` |
 | `NSIS_HOOK_POSTUNINSTALL` | after the core uninstall Section has run | restores (or, on explicit opt-in, discards) the relocated folders |
