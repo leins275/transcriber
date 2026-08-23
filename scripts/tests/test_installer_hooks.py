@@ -53,6 +53,36 @@ def test_all_four_tauri_hook_macros_are_defined() -> None:
         _macro_body(text, name)  # asserts internally
 
 
+def test_preinstall_stops_only_processes_running_from_instdir_pyenv() -> None:
+    """Field report (v0.2.1 -> v0.3.0 auto-update): the update install failed
+    with "Error opening file for writing: ...\\pyenv\\python\\DLLs\\_asyncio.pyd"
+    because the app's bundled Python sidecar was still running while the new
+    installer overwrote $INSTDIR\\pyenv (the updater plugin exits the app
+    process on a path that skips its RunEvent::Exit sidecar cleanup).
+    NSIS_HOOK_PREINSTALL must terminate anything still executing out of
+    $INSTDIR\\pyenv before file copy -- and must stay filtered to that path,
+    never a machine-wide kill of every python.exe."""
+    body = _macro_body(_read_hooks(), "NSIS_HOOK_PREINSTALL")
+    kill_lines = [line for line in body.splitlines() if "Stop-Process" in line]
+    assert kill_lines, (
+        "expected NSIS_HOOK_PREINSTALL to Stop-Process the orphaned sidecar "
+        "before files are copied into $INSTDIR"
+    )
+    for line in kill_lines:
+        assert "$INSTDIR\\pyenv" in line, (
+            "the kill must be filtered to processes running from the bundled "
+            f"interpreter's own tree, never machine-wide: {line!r}"
+        )
+    assert "taskkill" not in body.lower(), (
+        "no taskkill by image name here -- that would reach python.exe "
+        "processes that are not ours"
+    )
+    assert re.search(r"^\s*Sleep\s+\d+", body, re.MULTILINE), (
+        "expected a settle delay after the kill so the OS releases the file "
+        "handles before the installer starts overwriting pyenv\\"
+    )
+
+
 def test_postinstall_creates_the_three_app_folder_subdirectories() -> None:
     body = _macro_body(_read_hooks(), "NSIS_HOOK_POSTINSTALL")
     for sub in ("models", "logs", "data"):

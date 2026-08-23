@@ -213,6 +213,7 @@ pub fn run() {
             commands::read_summary,
             commands::transcribe_vault_entry,
             commands::cancel_job,
+            commands::prepare_update,
             commands::list_service_jobs,
             commands::model::model_download_status,
             commands::model::start_model_download,

@@ -533,6 +533,57 @@ pub async fn apply_resolved_service(
     status
 }
 
+/// The `service://status` detail while the app is shutting the sidecar
+/// down for an update install — one constant so the handler and its tests
+/// cannot drift on the exact wording.
+pub const UPDATE_STOP_DETAIL: &str = "stopped for update";
+
+/// `prepare_update` — stops the bundled Python sidecar so the updater's
+/// installer can run.
+///
+/// The NSIS installer overwrites `pyenv\` in place, and a running
+/// `python.exe` from that tree holds locks on its own DLLs — installing
+/// over it fails with "Error opening file for writing: ...\pyenv\...".
+/// The updater plugin exits *this* process via `std::process::exit` when
+/// it launches the installer, which never runs `lib.rs`'s `RunEvent::Exit`
+/// hook, so the sidecar would be left running as an orphan. The frontend
+/// therefore calls this between downloading the update and installing it.
+///
+/// The service is swapped for an [`UnavailableTranscriptionService`] first
+/// (registry included, so an in-flight poll loop sees it too), then the
+/// sidecar process tree is terminated and awaited — by the time this
+/// returns, nothing of ours holds a file under `pyenv\` open.
+pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
+    let service: Arc<dyn TranscriptionService> =
+        Arc::new(UnavailableTranscriptionService::new(UPDATE_STOP_DETAIL));
+    *state.service.write().await = service.clone();
+    *state.service_base_url.write().await = None;
+
+    let root = {
+        let settings = state.settings.read().await;
+        settings
+            .meetings_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.config_dir.clone())
+    };
+    state
+        .registry
+        .read()
+        .await
+        .set_root_and_service(root, service)
+        .await;
+
+    state.sidecar.terminate().await;
+
+    state.status_sink.emit(&ServiceStatusView {
+        state: ServiceState::Unavailable,
+        base_url: None,
+        detail: Some(UPDATE_STOP_DETAIL.to_string()),
+    });
+    Ok(())
+}
+
 // -- Handler bodies (testable without a Tauri runtime) ---------------------
 
 /// `get_settings` — never fails; wrapped in `Result` to match the IPC
@@ -979,6 +1030,11 @@ pub async fn cancel_job(
     job_id: String,
 ) -> Result<bool, AppError> {
     meetings::cancel_job_handler(&state, &job_id).await
+}
+
+#[tauri::command]
+pub async fn prepare_update(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    prepare_update_handler(&state).await
 }
 
 #[tauri::command]
@@ -2291,6 +2347,63 @@ mod tests {
                     .len(),
                 1
             );
+        });
+    }
+
+    #[test]
+    fn prepare_update_terminates_the_sidecar_and_reports_unavailable() {
+        // The updater's installer overwrites pyenv\ in place; a still-running
+        // python.exe from that tree makes the install fail with "Error
+        // opening file for writing". prepare_update must have the sidecar
+        // fully terminated by the time it returns, and must tell the UI the
+        // service is down rather than leaving a stale "ready" on screen.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let status_sink = Arc::new(RecordingStatusSink::default());
+            let sidecar = Arc::new(RecordingSidecarController::default());
+            let state = AppState::new_with(
+                root.path().to_path_buf(),
+                root.path().to_path_buf(),
+                Settings::default(),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Some("http://127.0.0.1:4000".to_string()),
+                false,
+                Arc::new(RecordingSink::default()),
+                status_sink.clone(),
+                sidecar.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            prepare_update_handler(&state)
+                .await
+                .expect("prepare_update must succeed");
+
+            assert!(
+                sidecar.terminated.load(Ordering::SeqCst),
+                "prepare_update must terminate the sidecar before returning"
+            );
+            assert_eq!(*state.service_base_url.read().await, None);
+            let err = state
+                .service
+                .read()
+                .await
+                .health()
+                .await
+                .expect_err("the active service must now be unavailable");
+            assert!(matches!(
+                err,
+                crate::service::ServiceError::Unavailable { .. }
+            ));
+
+            let statuses = status_sink
+                .statuses
+                .lock()
+                .expect("status mutex poisoned")
+                .clone();
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].state, ServiceState::Unavailable);
+            assert_eq!(statuses[0].detail.as_deref(), Some(UPDATE_STOP_DETAIL));
         });
     }
 

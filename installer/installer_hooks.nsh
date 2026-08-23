@@ -84,14 +84,32 @@
 ; ---------------------------------------------------------------------------
 ; NSIS_HOOK_PREINSTALL
 ;
-; Reserved. Model/log/data preservation across an upgrade is handled below,
-; in NSIS_HOOK_PREUNINSTALL / NSIS_HOOK_POSTUNINSTALL, which Tauri's
+; Model/log/data preservation across an upgrade is handled below, in
+; NSIS_HOOK_PREUNINSTALL / NSIS_HOOK_POSTUNINSTALL, which Tauri's
 ; template runs against the *old* version's uninstaller before this new
 ; version's files are copied in. Residual risk for T14 to confirm
 ; empirically: that the new install's own file-copy step does not clear
 ; $INSTDIR before NSIS_HOOK_POSTINSTALL restores/creates the three
 ; subfolders (R1).
+;
+; Field report (v0.2.1 -> v0.3.0 auto-update): the update install failed
+; with "Error opening file for writing: ...\pyenv\python\DLLs\_asyncio.pyd".
+; The app's bundled Python sidecar (spawned from $INSTDIR\pyenv) was still
+; running while this installer tried to overwrite its DLLs. Tauri's updater
+; exits the *app* process before launching this installer, but that exit
+; path skips the app's own RunEvent::Exit sidecar cleanup, so the Python
+; process lives on as an orphan holding locks on the very files being
+; replaced. Newer app builds stop the sidecar themselves before installing
+; (the `prepare_update` command), but this hook runs from the *new*
+; installer, so it is the only fix that also covers updating *from* a
+; version that predates that command. Kill anything still executing out of
+; $INSTDIR\pyenv, then give the OS a moment to release the file handles.
+; The path filter keeps this strictly to our own bundled interpreter --
+; never a system-wide "taskkill python.exe".
 !macro NSIS_HOOK_PREINSTALL
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -Command "Get-Process | Where-Object { $$_.Path -like '$INSTDIR\pyenv\*' } | Stop-Process -Force"`
+  Pop $0
+  Sleep 1000
 !macroend
 
 ; ---------------------------------------------------------------------------

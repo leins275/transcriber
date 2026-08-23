@@ -3,6 +3,7 @@ import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import {
   api,
+  appVersion,
   chooseFile,
   chooseMeetingsFolder,
   onDragDrop,
@@ -54,6 +55,31 @@ describe("api.enqueuePaths", () => {
       cmd: "enqueue_paths",
       payload: { paths: ["C:\\Meetings\\in\\file.mp4"] },
     });
+  });
+});
+
+describe("api.prepareUpdate", () => {
+  it("invokes prepare_update with no arguments", async () => {
+    const seen: string[] = [];
+    mockIPC((cmd) => {
+      seen.push(cmd);
+      return null;
+    });
+
+    await api.prepareUpdate();
+
+    expect(seen).toContain("prepare_update");
+  });
+});
+
+describe("appVersion", () => {
+  it("resolves the version the app plugin reports", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "plugin:app|version") return "9.9.9";
+      return null;
+    });
+
+    await expect(appVersion()).resolves.toBe("9.9.9");
   });
 });
 

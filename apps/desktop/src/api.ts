@@ -7,6 +7,7 @@
  * (`getCurrentWebview().onDragDropEvent`) — there is no HTML5
  * `drop`/`dataTransfer` code path anywhere in this app (FR-4).
  */
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -93,6 +94,12 @@ export const api = {
   /** Resolves `false` when there was nothing left to cancel (the job never
    * reached the service, or already finished) -- information, not an error. */
   cancelJob: (jobId: string): Promise<boolean> => call<boolean>("cancel_job", { jobId }),
+  /** Stops the bundled Python sidecar so the updater's installer can
+   * overwrite `pyenv\` -- a running interpreter holds locks on its own
+   * DLLs, and the updater plugin's own app-exit path skips the normal
+   * sidecar cleanup. Called between downloading an update and installing
+   * it; by the time this resolves, nothing of ours holds those files open. */
+  prepareUpdate: (): Promise<void> => call<void>("prepare_update"),
   // F2's own sqlite job ledger, newest first (`GET /v1/jobs` behind the
   // Rust proxy). `limit` is clamped Rust-side to what F2 accepts.
   listServiceJobs: (limit?: number): Promise<LedgerJobView[]> =>
@@ -142,6 +149,13 @@ export async function checkForUpdate(): Promise<PendingUpdate | null> {
 /** Restarts the app so an installed update takes effect. */
 export async function relaunchApp(): Promise<void> {
   await relaunch();
+}
+
+/** The installed app's own version, from the Tauri config baked into this
+ * build -- what the sidebar shows so an operator can tell at a glance which
+ * build they are actually running. */
+export async function appVersion(): Promise<string> {
+  return await getVersion();
 }
 
 /** Window drag-drop events (FR-4, FR-5) — the only source of dropped paths. */
