@@ -3,6 +3,16 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.4.1 — 2026-08-23
+
+### Build & CI
+
+- Gate direct pushes to main with the full CI suite before tagging
+
+### Tests
+
+- **vault**: Make the filename-parse timing test robust to CI runner noise
+
 ## 0.4.0 — 2026-08-23
 
 ### Bug fixes
