@@ -10,7 +10,10 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::Command;
 
 use chrono::NaiveDate;
@@ -346,11 +349,13 @@ fn fr12_directory_as_source_returns_source_not_a_file() {
 /// would otherwise route around any single pre-seeded obstacle by trying
 /// the next numeric suffix. Restores the original permissions on drop so
 /// `tempfile`'s own cleanup can proceed.
+#[cfg(windows)]
 struct DenyFileCreationGuard {
     path: PathBuf,
     user_spec: String,
 }
 
+#[cfg(windows)]
 impl DenyFileCreationGuard {
     fn new(path: &Path) -> Self {
         let output = Command::new("whoami")
@@ -377,6 +382,7 @@ impl DenyFileCreationGuard {
     }
 }
 
+#[cfg(windows)]
 impl Drop for DenyFileCreationGuard {
     fn drop(&mut self) {
         let _ = Command::new("icacls")
@@ -387,6 +393,11 @@ impl Drop for DenyFileCreationGuard {
     }
 }
 
+// Windows-only mechanism (icacls inheritance is what lets subdirectory
+// creation succeed while the file write inside genuinely fails); the
+// rollback logic it exercises is platform-independent and stays covered by
+// the Windows CI run.
+#[cfg(windows)]
 #[test]
 fn fr12_failed_transfer_removes_only_the_meeting_directory_it_created() {
     let vault_dir = tempdir().expect("vault tempdir");

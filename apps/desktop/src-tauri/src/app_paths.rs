@@ -64,10 +64,25 @@ pub fn resolve_app_dir(exe_path: &Path, dev_override: Option<&Path>) -> PathBuf 
 /// `current_exe()` failing at all is exceptional enough (a broken process
 /// image) that falling back to `.` — same as [`resolve_app_dir`]'s own
 /// fallback — is preferable to panicking during startup (NFR-6).
+///
+/// On macOS the executable's own directory is `Transcriber.app/Contents/
+/// MacOS` — inside a bundle the updater replaces wholesale on every update —
+/// so the writable app folder (`models/`, `logs/`, `data/`) lives in
+/// `~/Library/Application Support/Transcriber` instead; only the read-only
+/// baked pyenv stays inside the bundle (see [`pyenv_dir`]).
 pub fn app_dir() -> PathBuf {
-    let dev_override = std::env::var_os(DEV_APP_DIR_ENV).map(PathBuf::from);
+    if let Some(dir) = std::env::var_os(DEV_APP_DIR_ENV).map(PathBuf::from) {
+        return dir;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("Transcriber");
+    }
     let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-    resolve_app_dir(&exe_path, dev_override.as_deref())
+    resolve_app_dir(&exe_path, None)
 }
 
 /// `<app folder>\models\` — writable without elevation, created empty by the
@@ -89,14 +104,55 @@ pub fn data_dir(app_dir: &Path) -> PathBuf {
 
 /// `<app folder>\pyenv\` — the whole baked tree (`python\`, `site-packages\`,
 /// `service\`) T6's `bundle.resources` deposits at the install root.
+///
+/// On macOS the bundle resources land in `Transcriber.app/Contents/
+/// Resources/pyenv` while the app folder is `~/Library/Application Support/
+/// Transcriber` (see [`app_dir`]), so the tree is resolved relative to the
+/// running executable there; anywhere the executable is not inside a
+/// `.app` bundle (dev builds, tests) this falls back to `<app folder>/pyenv`.
 pub fn pyenv_dir(app_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+        resolve_pyenv_dir(&exe_path, app_dir)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        app_dir.join(PYENV_DIR_NAME)
+    }
+}
+
+/// Pure-ish form of [`pyenv_dir`]'s macOS decision, testable with an
+/// arbitrary `exe_path`: an executable at `<X>.app/Contents/MacOS/<exe>`
+/// whose sibling `Contents/Resources/pyenv` exists resolves there; anything
+/// else resolves to `<app folder>/pyenv` (dev checkouts and tests, which
+/// fabricate the tree under a tempdir app folder).
+#[cfg(any(target_os = "macos", test))]
+pub fn resolve_pyenv_dir(exe_path: &Path, app_dir: &Path) -> PathBuf {
+    if let Some(exe_dir) = exe_path.parent() {
+        if exe_dir.file_name().is_some_and(|name| name == "MacOS") {
+            if let Some(contents_dir) = exe_dir.parent() {
+                let bundled = contents_dir.join("Resources").join(PYENV_DIR_NAME);
+                if bundled.is_dir() {
+                    return bundled;
+                }
+            }
+        }
+    }
     app_dir.join(PYENV_DIR_NAME)
 }
 
-/// `<app folder>\pyenv\python\python.exe` — the bundled interpreter
-/// `sidecar::SidecarSpawnConfig::production` launches.
+/// The bundled interpreter `sidecar::SidecarSpawnConfig::production`
+/// launches: `<pyenv>\python\python.exe` on Windows, `<pyenv>/python/bin/
+/// python3` elsewhere (the python-build-standalone layout T4 bakes puts the
+/// interpreter at the install root on Windows and under `bin/` on Unix).
 pub fn bundled_python_exe(app_dir: &Path) -> PathBuf {
-    pyenv_dir(app_dir).join("python").join("python.exe")
+    let python_dir = pyenv_dir(app_dir).join("python");
+    if cfg!(windows) {
+        python_dir.join("python.exe")
+    } else {
+        python_dir.join("bin").join("python3")
+    }
 }
 
 /// Resolves the whisper model directory, always inside
@@ -158,6 +214,7 @@ mod tests {
 
     // -- resolve_app_dir ---------------------------------------------------
 
+    #[cfg(windows)]
     #[test]
     fn resolve_app_dir_uses_the_running_executables_directory_by_default() {
         let exe = Path::new(r"C:\Users\op\AppData\Local\Programs\Transcriber\Transcriber.exe");
@@ -167,6 +224,19 @@ mod tests {
         assert_eq!(
             resolved,
             PathBuf::from(r"C:\Users\op\AppData\Local\Programs\Transcriber")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_app_dir_uses_the_running_executables_directory_by_default() {
+        let exe = Path::new("/Applications/Transcriber.app/Contents/MacOS/transcriber-desktop");
+
+        let resolved = resolve_app_dir(exe, None);
+
+        assert_eq!(
+            resolved,
+            PathBuf::from("/Applications/Transcriber.app/Contents/MacOS")
         );
     }
 
@@ -194,6 +264,7 @@ mod tests {
         assert_eq!(pyenv_dir(&app_dir), app_dir.join("pyenv"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn bundled_python_exe_resolves_under_pyenv_not_resources_pyenv() {
         // See the module docs: T6's real `bundle.resources` target mapping
@@ -209,6 +280,71 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn bundled_python_exe_resolves_to_the_unix_interpreter_under_pyenv() {
+        // Unix twin of the windows test above: python-build-standalone puts
+        // the interpreter under `bin/` there, not at the install root.
+        let app_dir = tempfile::tempdir().expect("tempdir");
+
+        let resolved = bundled_python_exe(app_dir.path());
+
+        assert_eq!(
+            resolved,
+            app_dir
+                .path()
+                .join("pyenv")
+                .join("python")
+                .join("bin")
+                .join("python3")
+        );
+    }
+
+    // -- resolve_pyenv_dir (macOS bundle layout) ---------------------------
+
+    #[test]
+    fn resolve_pyenv_dir_falls_back_to_the_app_folder_outside_a_bundle() {
+        let app_dir = tempfile::tempdir().expect("tempdir");
+        let exe = app_dir
+            .path()
+            .join("target")
+            .join("debug")
+            .join("transcriber-desktop");
+
+        let resolved = resolve_pyenv_dir(&exe, app_dir.path());
+
+        assert_eq!(resolved, app_dir.path().join("pyenv"));
+    }
+
+    #[test]
+    fn resolve_pyenv_dir_finds_the_bundled_tree_next_to_a_mac_bundle_exe() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let contents = root.path().join("Transcriber.app").join("Contents");
+        let bundled_pyenv = contents.join("Resources").join("pyenv");
+        std::fs::create_dir_all(&bundled_pyenv).expect("create bundle resources");
+        let exe = contents.join("MacOS").join("transcriber-desktop");
+        let app_dir = root.path().join("app-support");
+
+        let resolved = resolve_pyenv_dir(&exe, &app_dir);
+
+        assert_eq!(resolved, bundled_pyenv);
+    }
+
+    #[test]
+    fn resolve_pyenv_dir_ignores_a_bundle_without_a_baked_pyenv() {
+        // A dev build launched from inside a .app-shaped directory that has
+        // no baked resources must still fall back to the app folder.
+        let root = tempfile::tempdir().expect("tempdir");
+        let contents = root.path().join("Transcriber.app").join("Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).expect("create bundle dir");
+        let exe = contents.join("MacOS").join("transcriber-desktop");
+        let app_dir = root.path().join("app-support");
+
+        let resolved = resolve_pyenv_dir(&exe, &app_dir);
+
+        assert_eq!(resolved, app_dir.join("pyenv"));
+    }
+
     // -- model_dir ----------------------------------------------------------
 
     #[test]
@@ -217,10 +353,7 @@ mod tests {
 
         let resolved = model_dir(&app_dir, None);
 
-        assert_eq!(
-            resolved,
-            PathBuf::from(r"C:\Apps\Transcriber\models\faster-whisper-large-v3")
-        );
+        assert_eq!(resolved, models_dir(&app_dir).join(DEFAULT_MODEL_NAME));
     }
 
     #[test]
@@ -229,10 +362,7 @@ mod tests {
 
         let resolved = model_dir(&app_dir, Some("distil-large-v3"));
 
-        assert_eq!(
-            resolved,
-            PathBuf::from(r"C:\Apps\Transcriber\models\distil-large-v3")
-        );
+        assert_eq!(resolved, models_dir(&app_dir).join("distil-large-v3"));
     }
 
     #[test]
@@ -248,6 +378,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn model_dir_never_escapes_the_app_folder_via_a_different_drive() {
         let app_dir = PathBuf::from(r"C:\Apps\Transcriber");
@@ -275,7 +406,10 @@ mod tests {
     fn model_dir_treats_an_all_traversal_override_as_empty() {
         let app_dir = PathBuf::from(r"C:\Apps\Transcriber");
 
-        let resolved = model_dir(&app_dir, Some(r"..\.."));
+        // `..\..` only parses as two ParentDir components on Windows; the
+        // portable spelling exercises the same all-traversal case elsewhere.
+        let traversal = if cfg!(windows) { r"..\.." } else { "../.." };
+        let resolved = model_dir(&app_dir, Some(traversal));
 
         assert_eq!(resolved, models_dir(&app_dir).join(DEFAULT_MODEL_NAME));
     }

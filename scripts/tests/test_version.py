@@ -152,6 +152,19 @@ def test_write_toml_version_preserves_the_files_existing_newline_style(tmp_path)
     assert raw.count(b"\r\n") == raw.count(b"\n"), "every line ending must stay CRLF"
 
 
+def test_artifact_name_is_platform_specific():
+    # The Tauri v2 bundler defaults each release leg relies on: the NSIS
+    # setup .exe on Windows, the Apple Silicon .dmg on macOS. Explicit
+    # `target` values so both names stay pinned regardless of the platform
+    # the tests run on.
+    assert sync_version.artifact_name("1.2.3", target="win32") == "Transcriber_1.2.3_x64-setup.exe"
+    assert sync_version.artifact_name("1.2.3", target="darwin") == "Transcriber_1.2.3_aarch64.dmg"
+    # No target -> the running platform, which is what each CI leg wants.
+    assert sync_version.artifact_name("1.2.3") == sync_version.artifact_name(
+        "1.2.3", target=sys.platform
+    )
+
+
 def test_print_artifact_name_embeds_the_version():
     version_txt = REPO_ROOT / "version.txt"
     # Cargo.lock is restored too: `--set` now writes the workspace members'

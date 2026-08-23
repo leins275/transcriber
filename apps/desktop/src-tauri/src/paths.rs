@@ -112,9 +112,10 @@ struct LexicalPath {
 }
 
 /// Resolves `path` into a [`LexicalPath`] purely lexically. Returns `None`
-/// for a path with no drive/UNC/device prefix (i.e. not the kind of
-/// absolute path a canonicalized root or a real dropped file ever is), so
-/// such a path is never treated as contained by anything.
+/// for a non-absolute path (on Windows: no drive/UNC/device prefix; on
+/// Unix: no leading `/` — a canonicalized root or a real dropped file is
+/// always absolute), so such a path is never treated as contained by
+/// anything.
 fn lexical_normalize(path: &Path) -> Option<LexicalPath> {
     let mut key = String::new();
     let mut components = Vec::new();
@@ -122,7 +123,15 @@ fn lexical_normalize(path: &Path) -> Option<LexicalPath> {
     for component in path.components() {
         match component {
             Component::Prefix(prefix) => key = prefix_key(prefix.kind()),
-            Component::RootDir | Component::CurDir => {}
+            // On Unix a leading `/` *is* the whole "drive identity" — there
+            // is no Prefix component at all. On Windows a bare RootDir
+            // without a prefix is a drive-relative path (`\foo`), which
+            // must stay non-absolute, so this arm is Unix-only.
+            #[cfg(unix)]
+            Component::RootDir => key = "root:/".to_string(),
+            #[cfg(not(unix))]
+            Component::RootDir => {}
+            Component::CurDir => {}
             Component::ParentDir => {
                 components.pop();
             }
@@ -384,6 +393,7 @@ mod tests {
         fs::remove_dir_all(&sibling_root).ok();
     }
 
+    #[cfg(windows)]
     #[test]
     fn verbatim_prefix_is_stripped_for_display_and_normalized_for_comparison() {
         let root = tempdir().expect("tempdir");
@@ -512,6 +522,7 @@ mod tests {
     /// `mklink /J` rather than `std::os::windows::fs::symlink_dir`: a
     /// junction needs no privilege, while a directory *symlink* needs either
     /// admin or Developer Mode, which a CI runner may not have.
+    #[cfg(windows)]
     fn make_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
         std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
@@ -522,6 +533,7 @@ mod tests {
             .unwrap_or(false)
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_root_whose_spelling_is_not_canonical_still_contains_its_own_children() {
         // The bug this pins: a configured root can be spelled differently
@@ -556,6 +568,7 @@ mod tests {
             .expect("a child built from the root's own spelling is inside it");
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_non_canonical_root_still_refuses_a_sibling_outside_it() {
         // The other half of the same change: accepting either spelling must

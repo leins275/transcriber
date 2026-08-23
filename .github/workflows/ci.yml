@@ -8,16 +8,22 @@
 #
 # Where each job runs is a real constraint, not a preference:
 #
-#   rust      windows-only. `commands.rs` imports
-#             `std::os::windows::process::CommandExt` and shells out to
-#             explorer.exe — this code does not compile on Linux at all.
-#   python    windows-only. `runtime_dlls` and `cuda_runtime` are about
-#             Windows DLL loading, and their tests assert on it.
-#   scripts   windows-only. The build-system tests know about NSIS, the
-#             baked pyenv and Windows paths.
-#   frontend  Linux. React and vitest care about none of the above, and a
-#             Linux runner is both quicker to start and billed at 1x
-#             rather than the 2x Windows costs on a private repository.
+#   rust        windows. The primary platform: the full fmt/clippy/test
+#               gate runs here. (The Windows-only code — CommandExt,
+#               explorer.exe, taskkill — is `#[cfg(windows)]`-gated since
+#               the macOS target landed, so the crate compiles elsewhere
+#               too, but this job stays the authoritative one.)
+#   rust-macos  macOS (Apple Silicon). A `cargo check` only — the cheapest
+#               guard that a Windows-focused PR cannot silently break the
+#               macOS release build's compile. The full macOS test suite
+#               runs on the release leg and on developers' Macs.
+#   python      windows-only. `runtime_dlls` and `cuda_runtime` are about
+#               Windows DLL loading, and their tests assert on it.
+#   scripts     windows-only. The build-system tests know about NSIS, the
+#               baked pyenv and Windows paths.
+#   frontend    Linux. React and vitest care about none of the above, and a
+#               Linux runner is both quicker to start and billed at 1x
+#               rather than the 2x Windows costs on a private repository.
 #
 # `make` is not installed on GitHub's Windows runners. The Makefile documents
 # a direct one-command-per-line equivalent for exactly this reason (see its
@@ -91,6 +97,25 @@ jobs:
             git status --porcelain
             exit 1
           fi
+
+  rust-macos:
+    name: Rust (macOS check)
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      # Compile-only on purpose: `--all-targets` includes the test targets,
+      # so cfg-gate mistakes in tests surface too, without paying for a
+      # second full test run per PR.
+      - name: cargo check
+        run: cargo check --workspace --all-targets
 
   frontend:
     name: Frontend

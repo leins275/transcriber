@@ -83,6 +83,12 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     // one place `config.json` itself is read from/written to, per the
     // Configuration contract's "one config.json in %APPDATA%" split.
     let app_dir = app_paths::app_dir();
+    // On Windows the NSIS post-install hook creates the app folder's
+    // `models\`/`logs\`/`data\` skeleton; on macOS nothing does (the app
+    // folder is `~/Library/Application Support/Transcriber`, never touched
+    // by the .dmg), so make sure the folder itself exists. Best-effort and
+    // idempotent on both platforms.
+    let _ = std::fs::create_dir_all(&app_dir);
     // E3 / NFR-6: a malformed or unreadable `config.json` must never keep
     // the window from opening -- fall back to first-run defaults and carry
     // the error forward so `get_settings` can render it as an actionable

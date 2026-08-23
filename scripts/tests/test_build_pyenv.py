@@ -53,7 +53,7 @@ def _site_packages_names(baked_tree: Path) -> set[str]:
 
 
 def test_tree_contains_bundled_python_executable(baked_tree: Path) -> None:
-    assert (baked_tree / "python" / "python.exe").is_file()
+    assert build_pyenv.baked_python_exe_path(baked_tree / "python").is_file()
 
 
 def test_site_packages_holds_the_core_transcription_dependencies(baked_tree: Path) -> None:
@@ -89,7 +89,7 @@ def test_relocated_tree_runs_help_from_an_arbitrary_path(
     shutil.copytree(baked_tree, relocated)
 
     proc = subprocess.run(
-        [str(relocated / "python" / "python.exe"), "-m", "transcription", "--help"],
+        [str(build_pyenv.baked_python_exe_path(relocated / "python")), "-m", "transcription", "--help"],
         capture_output=True,
         text=True,
     )
@@ -163,4 +163,4 @@ def test_bake_is_idempotent(tmp_path_factory: pytest.TempPathFactory) -> None:
     manifest_1 = build_pyenv.bake(out_dir)
     manifest_2 = build_pyenv.bake(out_dir)
     assert manifest_1["packages"] == manifest_2["packages"]
-    assert (out_dir / "python" / "python.exe").is_file()
+    assert build_pyenv.baked_python_exe_path(out_dir / "python").is_file()

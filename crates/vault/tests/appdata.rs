@@ -3,6 +3,7 @@
 //! variable, so they serialize on `ENV_LOCK` to stay safe under the
 //! default parallel test runner.
 
+#[cfg(windows)]
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -41,6 +42,9 @@ impl Drop for EnvGuard {
     }
 }
 
+// The `C:\...` fixture only parses as a drive-rooted path on Windows —
+// `app_data_dir` itself is a LOCALAPPDATA (Windows) helper.
+#[cfg(windows)]
 #[test]
 fn returns_localappdata_joined_with_app_name() {
     let _lock = ENV_LOCK.lock().unwrap();
