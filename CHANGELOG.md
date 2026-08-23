@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.7.0 — 2026-08-23
+
+### Features
+
+- MacOS Apple Silicon build target — two-installer release pipeline
+
 ## 0.6.1 — 2026-08-23
 
 ### Bug fixes
