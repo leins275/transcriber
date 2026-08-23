@@ -3,6 +3,16 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.5.0 — 2026-08-23
+
+### Build & CI
+
+- Stop cutting releases for commits that are not bump-worthy
+
+### Features
+
+- Speaker diarization with pyannote, surfaced as pre-filled speaker labels
+
 ## 0.4.1 — 2026-08-23
 
 ### Build & CI
