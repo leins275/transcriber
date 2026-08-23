@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.6.0 — 2026-08-23
+
+### Features
+
+- Local-LLM jobs — summaries, action items, facts, reports and PDF exports
+
 ## 0.5.1 — 2026-08-23
 
 ### Bug fixes
