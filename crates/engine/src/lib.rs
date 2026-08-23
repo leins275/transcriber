@@ -18,6 +18,7 @@
 pub mod backends;
 pub mod config;
 pub mod diarize;
+pub mod downloads;
 pub mod fakes;
 pub mod gpu;
 pub mod jobs;

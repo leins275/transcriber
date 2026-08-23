@@ -16,22 +16,50 @@
 //!   [`JobStatus::from_wire`], because the seam's vocabulary is unchanged.
 
 use async_trait::async_trait;
+use engine::downloads::Slot;
 use engine::jobs::{EngineError, EngineHandle, JobKind, JobRequest};
 use engine::models;
 
 use super::{
-    JobStatus, LedgerJob, LlmJobKind, LlmSubmitRequest, ServiceError, ServiceHealth, SubmitRequest,
-    TranscriptionService,
+    JobStatus, LedgerJob, LlmJobKind, LlmSubmitRequest, ModelDownloadStatus, ServiceError,
+    ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Runs jobs on the engine owned by this process.
 pub struct LocalTranscriptionService {
     engine: EngineHandle,
+    downloads: engine::downloads::Downloads,
 }
 
 impl LocalTranscriptionService {
     pub fn new(engine: EngineHandle) -> Self {
-        LocalTranscriptionService { engine }
+        let downloads = engine::downloads::Downloads::new(engine.config().clone());
+        LocalTranscriptionService { engine, downloads }
+    }
+}
+
+/// Map the downloader's status onto the seam's, which the UI already renders.
+fn download_status(status: fetcher::Status) -> ModelDownloadStatus {
+    use crate::service::ModelDownloadState as To;
+    use engine::downloads::DownloadState as From;
+
+    ModelDownloadStatus {
+        state: match status.state {
+            From::Idle => To::Idle,
+            From::Downloading => To::Downloading,
+            From::Verifying => To::Verifying,
+            From::Complete => To::Complete,
+            From::Cancelled => To::Cancelled,
+            From::Error => To::Error,
+        },
+        downloaded_bytes: status.downloaded_bytes,
+        total_bytes: status.total_bytes,
+        percent: status.percent,
+        error_kind: status.error_kind.map(|kind| kind.as_str().to_string()),
+        error_message: status.error_message,
+        // The GPU payload has no downloader yet, so there is no warning it
+        // could carry; `None` is the honest answer rather than an empty one.
+        cuda_warning: None,
     }
 }
 
@@ -75,6 +103,30 @@ impl TranscriptionService for LocalTranscriptionService {
             llm_model_present: Some(models::is_installed(&models::llm_model_file(config))),
             llm_gpu_build_present: None,
         })
+    }
+
+    async fn model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.status(Slot::Speech)))
+    }
+
+    async fn start_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.start(Slot::Speech)))
+    }
+
+    async fn cancel_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.cancel(Slot::Speech)))
+    }
+
+    async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.status(Slot::Assistant)))
+    }
+
+    async fn start_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.start(Slot::Assistant)))
+    }
+
+    async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Ok(download_status(self.downloads.cancel(Slot::Assistant)))
     }
 
     async fn submit(&self, req: SubmitRequest) -> Result<String, ServiceError> {

@@ -1,9 +1,9 @@
-[package]
+﻿[package]
 name = "transcriber-desktop"
 version = "0.9.0"
 edition = "2021"
 rust-version = "1.98"
-description = "Transcriber desktop app — drag-and-drop meeting ingest and transcription status"
+description = "Transcriber desktop app â€” drag-and-drop meeting ingest and transcription status"
 authors = ["Transcriber"]
 
 [lib]
@@ -28,6 +28,9 @@ vault = { path = "../../../crates/vault" }
 # about Tauri; this is the only direction the dependency runs.
 engine = { path = "../../../crates/engine" }
 wire = { path = "../../../crates/wire" }
+# Only for the download-status types the engine surfaces; the desktop crate
+# itself still makes no outbound requests.
+fetcher = { path = "../../../crates/fetcher" }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Screenshot bytes cross the IPC boundary as data URLs (the webview has no

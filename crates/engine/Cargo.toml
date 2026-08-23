@@ -6,6 +6,9 @@ description = "In-process transcription, diarization and LLM engine: the whole o
 
 [dependencies]
 wire = { path = "../wire" }
+# Model and runtime downloads. Separate crate on purpose: it is the only
+# place outbound TLS lives.
+fetcher = { path = "../fetcher" }
 vault = { path = "../vault" }
 serde = { version = "1", features = ["derive"] }
 # Same reason as in the wire crate: exact float round-tripping is what keeps a
