@@ -211,11 +211,12 @@ h3 {
   white-space: nowrap;
 }
 
-/* App shell: a two-pane layout -- a fixed sidebar and a flexible main pane.
-   Below ~800px the sidebar compresses to a slim top strip instead of a
-   264px column, so the window stays usable down to the 700x500 floor. */
+/* App shell (redesign turn 6): a slim header over a flexible main pane --
+   no sidebar. The header carries brand + live status; everything the old
+   264px column explained lives on the Settings page now. */
 .app-shell {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--bg);
   color: var(--text);
@@ -238,10 +239,4 @@ h3 {
   color: var(--danger);
   font-size: var(--text-sm);
   margin: 0;
-}
-
-@media (max-width: 800px) {
-  .app-shell {
-    flex-direction: column;
-  }
 }

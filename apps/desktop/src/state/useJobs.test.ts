@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import { useJobs } from "./useJobs";
+import { CANCELLED_JOB_LINGER_MS, useJobs } from "./useJobs";
 import type { JobSnapshot } from "../types";
 
 function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
@@ -30,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearMocks();
+  vi.useRealTimers();
 });
 
 describe("useJobs", () => {
@@ -70,6 +71,55 @@ describe("useJobs", () => {
     });
     await waitFor(() => expect(result.current.jobs).toHaveLength(2));
     expect(result.current.jobs.map((j) => j.id)).toEqual(["job-1", "job-2"]);
+  });
+
+  it("drops a cancelled job from the list after the linger, leaving other jobs alone", async () => {
+    // A cancelled job arrives on the wire as `failed` with the literal
+    // message "cancelled" (service/mod.rs's collapse of F2's five states).
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useJobs());
+
+    await act(async () => {
+      await emit("jobs://updated", buildJob({ id: "job-1", state: "running" }));
+      await emit(
+        "jobs://updated",
+        buildJob({ id: "job-2", file_name: "other.mp4", state: "running" }),
+      );
+    });
+    expect(result.current.jobs).toHaveLength(2);
+
+    await act(async () => {
+      await emit(
+        "jobs://updated",
+        buildJob({ id: "job-1", state: "failed", message: "cancelled" }),
+      );
+    });
+    // Immediately after cancelling, the row is still there: the operator's
+    // click gets acknowledged before the row disappears.
+    expect(result.current.jobs).toHaveLength(2);
+
+    act(() => {
+      vi.advanceTimersByTime(CANCELLED_JOB_LINGER_MS);
+    });
+    expect(result.current.jobs.map((job) => job.id)).toEqual(["job-2"]);
+  });
+
+  it("keeps a genuinely failed job on screen -- only cancellation self-clears", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useJobs());
+
+    await act(async () => {
+      await emit(
+        "jobs://updated",
+        buildJob({ state: "failed", message: "transcription service crashed" }),
+      );
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(CANCELLED_JOB_LINGER_MS * 10);
+    });
+    expect(result.current.jobs).toHaveLength(1);
+    expect(result.current.jobs[0].state).toBe("failed");
   });
 
   it("does not revert an already-advanced job to pending when enqueue's own response arrives late (E9)", async () => {

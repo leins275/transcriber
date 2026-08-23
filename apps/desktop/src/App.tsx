@@ -6,16 +6,18 @@
  * the numbered setup card and refuses drops (FR-18).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AppHeader } from "./components/AppHeader";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
 import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
-import { Sidebar } from "./components/Sidebar";
+import { SettingsPage } from "./components/SettingsPage";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { VaultPanel } from "./components/VaultPanel";
 import {
   api,
+  appVersion,
   chooseFile,
   chooseMeetingsFolder,
   onDragDrop,
@@ -34,6 +36,13 @@ const INITIAL_SERVICE_STATUS: ServiceStatusView = {
   base_url: null,
   detail: null,
 };
+
+/** How long the bottom-of-pane error notice stays up before dismissing
+ * itself. Errors here are per-action ("that drop was rejected", "reveal
+ * failed") -- said once, they are stale the moment the operator moves on,
+ * so they must not accumulate at the bottom of the pane for the rest of
+ * the session. */
+export const ERROR_DISMISS_MS = 6000;
 
 function App() {
   const [settings, setSettings] = useState<SettingsView | null>(null);
@@ -62,16 +71,39 @@ function App() {
     loadServiceLog,
   } = useVault();
   // Which recording is open, or `null` for the library. A single piece of
-  // state rather than a router: this app has exactly two places to be, and
+  // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+  // The Settings page (redesign turn 6): the old sidebar's vault/model/
+  // service content, behind the header's gear. Rendered over whatever else
+  // is open; closing it returns there untouched.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // The installed build's own version, for the sidebar. `null` until (or
+  // unless) the app plugin answers -- the sidebar simply omits the line
+  // rather than showing a placeholder.
+  const [version, setVersion] = useState<string | null>(null);
 
   useEffect(() => {
     api
       .getSettings()
       .then(setSettings)
       .catch((error: AppError) => setLastError(error));
+    appVersion()
+      .then(setVersion)
+      .catch(() => {
+        // Cosmetic only: a failed lookup must never surface as an error.
+      });
   }, []);
+
+  // Transient notification: each error replaces the last and dismisses
+  // itself. Re-armed per error object, so a new failure arriving mid-count
+  // gets its own full stretch on screen.
+  useEffect(() => {
+    if (!lastError) return;
+    const handle = setTimeout(() => setLastError(null), ERROR_DISMISS_MS);
+    return () => clearTimeout(handle);
+  }, [lastError]);
 
   useEffect(() => {
     api
@@ -302,15 +334,12 @@ function App() {
 
   return (
     <div className="app-shell">
-      {settings && (
-        <Sidebar
-          variant={inSetup ? "setup" : "full"}
-          settings={settings}
-          serviceStatus={serviceStatus}
-          modelStatus={modelStatus}
-          onChangeRoot={handleChooseFolder}
-        />
-      )}
+      <AppHeader
+        serviceStatus={serviceStatus}
+        modelStatus={modelStatus}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((open) => !open)}
+      />
       <main className="main-pane">
         {/* Above the config error and everything else: it is the one notice
             that is about the app itself rather than about the operator's
@@ -334,7 +363,16 @@ function App() {
         )}
 
         {settings &&
-          (inSetup ? (
+          (settingsOpen ? (
+            <SettingsPage
+              settings={settings}
+              serviceStatus={serviceStatus}
+              modelStatus={modelStatus}
+              appVersion={version}
+              onBack={() => setSettingsOpen(false)}
+              onChangeRoot={handleChooseFolder}
+            />
+          ) : inSetup ? (
             <FirstRun
               meetingsRoot={meetingsRoot}
               onChooseFolder={handleChooseFolder}
