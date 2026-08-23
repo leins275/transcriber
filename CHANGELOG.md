@@ -3,6 +3,20 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.4.0 — 2026-08-23
+
+### Bug fixes
+
+- **updater**: Stop the bundled Python sidecar before the installer overwrites pyenv
+
+### Documentation
+
+- Move README content to docs/overview.md
+
+### Features
+
+- **desktop**: No-sidebar redesign with settings page, transient notices, cancelled-job cleanup
+
 ## 0.3.0 — 2026-08-22
 
 ### Features
