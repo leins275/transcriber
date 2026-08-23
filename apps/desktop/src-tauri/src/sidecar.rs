@@ -47,6 +47,7 @@ use crate::config::Settings;
 /// field report caught. GUI-subsystem children (none spawned by this
 /// module) never need this flag — it only suppresses console
 /// *allocation*, which GUI apps never trigger in the first place.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// How long the supervisor waits for F2's ready line before giving up
@@ -181,6 +182,7 @@ impl SidecarSpawnConfig {
         // windows-subsystem app, Windows allocates them a brand-new,
         // visible console window (see the CREATE_NO_WINDOW doc comment
         // above).
+        #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
         command
     }
@@ -483,6 +485,7 @@ impl Drop for Sidecar {
 /// Job Object dependency. Errors (the pid already gone, `taskkill` itself
 /// missing, ...) are swallowed: this is exit-time best-effort cleanup, never
 /// something a caller should have to handle.
+#[cfg(windows)]
 async fn kill_process_tree_by_pid(pid: u32) {
     let result = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
@@ -499,6 +502,25 @@ async fn kill_process_tree_by_pid(pid: u32) {
     }
 }
 
+/// Unix counterpart of the Windows tree kill above. In production on macOS
+/// the recorded pid *is* the bundled-python service itself (no `uv` wrapper
+/// in between) and F2 spawns no children of its own, so a plain SIGKILL to
+/// that one pid is sufficient. Same best-effort contract: every failure
+/// (pid already gone, `kill` missing) is swallowed.
+#[cfg(unix)]
+async fn kill_process_tree_by_pid(pid: u32) {
+    let result = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    if let Err(err) = result {
+        eprintln!("[sidecar] failed to run kill for pid {pid}: {err}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +530,7 @@ mod tests {
 
     // -- CREATE_NO_WINDOW (field report: a console window flashed on launch) --
 
+    #[cfg(windows)]
     #[test]
     fn create_no_window_is_the_documented_win32_flag_value() {
         // winbase.h's CREATE_NO_WINDOW -- a typo'd magic number here would
@@ -516,6 +539,7 @@ mod tests {
         assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
     }
 
+    #[cfg(windows)]
     #[test]
     fn every_console_subsystem_child_this_module_spawns_uses_create_no_window() {
         // Source-contract regression test (this crate is Windows-only, so
@@ -714,15 +738,17 @@ mod tests {
 
     // -- SidecarSpawnConfig::production (T9) ------------------------------
 
-    /// Creates `<app_dir>\pyenv\python\python.exe` (an empty stand-in file
-    /// -- `production` only checks for its existence, it never executes it
-    /// in these tests) so `production`/`plan_sidecar` can be exercised as if
-    /// a real installed app folder were present.
+    /// Creates the platform's bundled-interpreter path under `app_dir` (an
+    /// empty stand-in file -- `production` only checks for its existence, it
+    /// never executes it in these tests) so `production`/`plan_sidecar` can
+    /// be exercised as if a real installed app folder were present.
     fn write_fake_bundled_python(app_dir: &Path) {
-        let python_dir = app_dir.join("pyenv").join("python");
-        std::fs::create_dir_all(&python_dir).expect("create fake pyenv/python dir");
-        std::fs::write(python_dir.join("python.exe"), b"not a real interpreter")
-            .expect("write fake python.exe");
+        let python_exe = app_paths::bundled_python_exe(app_dir);
+        let python_dir = python_exe
+            .parent()
+            .expect("bundled python has a parent dir");
+        std::fs::create_dir_all(python_dir).expect("create fake pyenv python dir");
+        std::fs::write(&python_exe, b"not a real interpreter").expect("write fake bundled python");
     }
 
     #[test]
@@ -743,11 +769,7 @@ mod tests {
 
         assert_eq!(
             config.program,
-            app_dir
-                .path()
-                .join("pyenv")
-                .join("python")
-                .join("python.exe")
+            app_paths::bundled_python_exe(app_dir.path())
                 .display()
                 .to_string()
         );
@@ -827,11 +849,7 @@ mod tests {
 
         match err {
             SidecarError::MissingRuntime { path } => {
-                let expected = app_dir
-                    .path()
-                    .join("pyenv")
-                    .join("python")
-                    .join("python.exe")
+                let expected = app_paths::bundled_python_exe(app_dir.path())
                     .display()
                     .to_string();
                 assert_eq!(path, expected);
@@ -854,11 +872,7 @@ mod tests {
             SidecarPlan::Spawn(config) => {
                 assert_eq!(
                     config.program,
-                    app_dir
-                        .path()
-                        .join("pyenv")
-                        .join("python")
-                        .join("python.exe")
+                    app_paths::bundled_python_exe(app_dir.path())
                         .display()
                         .to_string()
                 );
@@ -903,6 +917,7 @@ mod tests {
 
     // -- Sidecar::restart --------------------------------------------------
 
+    #[cfg(windows)]
     #[test]
     fn restart_terminates_the_previous_child_before_spawning() {
         block_on(async {
@@ -942,6 +957,48 @@ mod tests {
         });
     }
 
+    /// Unix twin of the windows restart test above, with `/bin/sleep` and
+    /// `sh -c` standing in for `ping -n` and `cmd /C`.
+    #[cfg(unix)]
+    #[test]
+    fn restart_terminates_the_previous_child_before_spawning() {
+        block_on(async {
+            let mut sidecar = Sidecar::new();
+
+            // A long-running "previous" process: if restart() merely waited
+            // for it to exit naturally instead of killing it, this test
+            // would take a long time (or hit the outer timeout below).
+            let old_config = SidecarSpawnConfig {
+                program: "/bin/sleep".to_string(),
+                args: vec!["120".to_string()],
+                envs: vec![],
+            };
+            sidecar
+                .spawn(&old_config)
+                .expect("spawning the long-running placeholder must succeed");
+
+            let new_config = SidecarSpawnConfig {
+                program: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "exit 0".to_string()],
+                envs: vec![],
+            };
+
+            let start = Instant::now();
+            let restart_result =
+                tokio::time::timeout(Duration::from_secs(10), sidecar.restart(&new_config)).await;
+            let elapsed = start.elapsed();
+
+            restart_result
+                .expect("restart must not hang waiting for the old child")
+                .expect("restart must succeed");
+
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "restart took {elapsed:?}; the old (120s) child was not killed before spawning"
+            );
+        });
+    }
+
     // -- terminate() kills the recorded service pid too (E6) --------------
 
     /// Whether a process with `pid` currently exists, per `tasklist` --
@@ -949,6 +1006,7 @@ mod tests {
     /// own (the whole point here is that `terminate()` reaches a pid that
     /// was never a *direct* child of this `Sidecar`, exactly like F2's real
     /// pid inside `uv`'s process tree).
+    #[cfg(windows)]
     async fn process_exists(pid: u32) -> bool {
         let output = Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}")])
@@ -959,6 +1017,7 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
     }
 
+    #[cfg(windows)]
     #[test]
     fn terminate_kills_the_recorded_service_pid_not_just_the_spawned_child() {
         // E6: the real F2 process is a *grandchild* of the `uv` process
@@ -1008,6 +1067,57 @@ mod tests {
             // failed and the process is somehow still alive.
             let _ = grandchild_stand_in.kill();
             let _ = grandchild_stand_in.wait();
+        });
+    }
+
+    /// Unix twin of the windows terminate test above. The stand-in is a
+    /// direct child of the *test* process (never of `Sidecar`), so instead
+    /// of `tasklist` its exit is observed via `try_wait` and the SIGKILL
+    /// `terminate()` delivers is asserted on the exit status itself.
+    #[cfg(unix)]
+    #[test]
+    fn terminate_kills_the_recorded_service_pid_not_just_the_spawned_child() {
+        use std::os::unix::process::ExitStatusExt;
+
+        block_on(async {
+            let mut sidecar = Sidecar::new();
+
+            let uv_stub = SidecarSpawnConfig {
+                program: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "exit 0".to_string()],
+                envs: vec![],
+            };
+            sidecar
+                .spawn(&uv_stub)
+                .expect("spawning the uv-stand-in must succeed");
+
+            let mut service_stand_in = std::process::Command::new("/bin/sleep")
+                .arg("120")
+                .spawn()
+                .expect("spawn the service stand-in");
+            sidecar.record_service_pid(service_stand_in.id());
+
+            let terminate_result =
+                tokio::time::timeout(Duration::from_secs(10), sidecar.terminate()).await;
+            terminate_result.expect("terminate() must not hang");
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let status = loop {
+                if let Some(status) = service_stand_in.try_wait().expect("try_wait") {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = service_stand_in.kill();
+                    let _ = service_stand_in.wait();
+                    panic!("terminate() must kill the recorded service pid");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            };
+            assert_eq!(
+                status.signal(),
+                Some(9),
+                "the recorded service pid must have been SIGKILLed by terminate()"
+            );
         });
     }
 }

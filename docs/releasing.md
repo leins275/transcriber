@@ -10,8 +10,9 @@ How a change gets from a commit to an installer someone can download.
 3. If anything since the last tag is bump-worthy, CI writes the new version
    everywhere, regenerates `CHANGELOG.md`, commits `chore(release): X.Y.Z`
    to `main` and tags it `vX.Y.Z`.
-4. The tag triggers the release build: the Windows installer is built and a
-   GitHub Release published with it attached.
+4. The tag triggers the release build: the Windows installer (NSIS `.exe`)
+   and the macOS Apple Silicon installer (`.dmg`) are built in parallel and
+   one GitHub Release is published with both attached.
 
 There is no release PR and no separate "ship it" step: **merging to `main`
 is the ship decision.** A merge that contains only `docs:`/`chore:`-class
@@ -63,28 +64,41 @@ files fails CI rather than surfacing later as a confusing lockfile error.
 |---|---|---|
 | `.github/workflows/ci.yml` | every PR; called by `tag.yml` for direct pushes | format / lint / type / test across Rust, TypeScript and Python, in four parallel jobs |
 | `.github/workflows/tag.yml` | push to `main` | runs the CI gate first if the push was direct (a PR merge is already gated); then computes the next version; if there is one, commits the bump + changelog to `main` and pushes the `vX.Y.Z` tag |
-| `.github/workflows/release.yml` | `v*` tag | builds the installer, publishes the GitHub Release with it attached |
+| `.github/workflows/release.yml` | `v*` tag | builds both installers in parallel (`windows-latest` + `macos-14`), then a fan-in `publish` job creates the GitHub Release once with everything attached |
 
 One hand-off in there is explicit rather than implicit: refs pushed with the
 built-in `GITHUB_TOKEN` never trigger other workflows, so `tag.yml` ends by
 dispatching `release.yml` at the tag itself. A `v*` tag pushed by hand (with
 your own credentials) triggers `release.yml` the ordinary way.
 
-CI runs on Windows only, and that is not caution: the Rust side imports
-`std::os::windows::process::CommandExt` and shells out to `explorer.exe`, so
-it does not compile on Linux at all.
+CI runs mostly on Windows — the primary platform, whose code paths
+(`runtime_dlls`, NSIS, the Windows process plumbing) the other runners
+cannot exercise. Since the macOS target landed, the Windows-only Rust is
+`#[cfg(windows)]`-gated and a small `rust-macos` job runs
+`cargo check --workspace --all-targets` on an Apple Silicon runner, so a
+Windows-focused PR cannot silently break the macOS release build's compile.
 
-### The installer is the release
+### The installers are the release
 
-`release.yml` will not publish a release without the installer attached, and
-checks that twice. Before publishing, it resolves the artifact name from
-`sync_version.artifact_name` — the same function `build_installer.py` names
-the file with, so the workflow cannot drift from the builder — and fails if
-the `.exe`, its `.sha256` or `build-manifest.json` is missing, empty, or
-implausibly small for an NSIS build that exited 0. After publishing, it reads
-the release back from the API and confirms the installer is actually
-attached, because `gh release create` can create the release object and
-still have an upload rejected.
+`release.yml` builds the two platforms as a matrix (`windows-latest` →
+`Transcriber_<v>_x64-setup.exe`, `macos-14` → `Transcriber_<v>_aarch64.dmg`
+plus the `Transcriber.app.tar.gz` updater archive) and will not publish a
+release without both attached, checking that twice. Each leg resolves its
+artifact name from `sync_version.artifact_name` — the same function
+`build_installer.py` names the file with, so the workflow cannot drift from
+the builder — and fails if the installer, its `.sha256` or
+`build-manifest.json` is missing, empty, or implausibly small for a build
+that exited 0. The release object is created exactly once, by a fan-in
+`publish` job that runs only after both legs succeed — a failed leg leaves
+no partial release. After publishing, it reads the release back from the API
+and confirms the installers are actually attached, because
+`gh release create` can create the release object and still have an upload
+rejected.
+
+The macOS app is not Apple-signed or notarized yet (no Developer ID), so
+Gatekeeper blocks a plain double-click on first launch: right-click the app
+→ Open → Open. The workflow marks where the Apple signing secrets slot in
+once a certificate exists.
 
 The tag now exists *before* the build, which is the price of the simple
 tag-driven flow: an installer build that fails leaves a `vX.Y.Z` tag with no
@@ -131,17 +145,17 @@ How it fits together:
 | Piece | Where |
 |---|---|
 | Signing keypair | private key in the `TAURI_SIGNING_PRIVATE_KEY` repo secret; public key in `tauri.conf.json` |
-| Signed installer + `.sig` | `createUpdaterArtifacts` signs the NSIS `-setup.exe` itself during the normal build (Tauri v2 layout — there is no separate update archive) |
-| `latest.json` | assembled by `release.yml` and attached to the Release |
+| Signed update artifacts + `.sig` | `createUpdaterArtifacts`, per platform: on Windows it signs the NSIS `-setup.exe` itself (Tauri v2 layout — no separate archive); on macOS it produces `Transcriber.app.tar.gz` + `.sig` (the `.dmg` is first-install media only) |
+| `latest.json` | assembled by `release.yml`'s `publish` job with both platform entries (`windows-x86_64`, `darwin-aarch64`) and attached to the Release |
 | The check | `state/useUpdate.ts` at launch, rendered by `UpdateNotice` |
 
-`latest.json` is built in the release job rather than by the bundler,
+`latest.json` is built in the publish job rather than by the bundler,
 because only that job knows the URL the assets will end up at. It is written
-from the signature file the build actually produced, so a manifest can never
-claim a signature that was not made for those bytes, and it is assembled in
-Python rather than shell — `notes` is arbitrary prose from CHANGELOG.md, and
-a manifest a client cannot parse reads as "no update available" and fails
-silently forever.
+from the signature files the builds actually produced, so a manifest can
+never claim a signature that was not made for those bytes, and it is
+assembled in Python rather than shell — `notes` is arbitrary prose from
+CHANGELOG.md, and a manifest a client cannot parse reads as "no update
+available" and fails silently forever.
 
 Two things this deliberately does not do:
 
@@ -166,6 +180,7 @@ repo secret.
 make next-version     # what would the next release be called?
 make release-prep     # write that version everywhere + regenerate CHANGELOG.md
 make installer        # build dist/Transcriber_<version>_x64-setup.exe
+                      # (on a Mac: dist/Transcriber_<version>_aarch64.dmg)
 ```
 
 `make next-version` exits `3` when there is nothing to release. That is a

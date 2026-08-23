@@ -72,6 +72,25 @@ DEFAULT_OUT = REPO_ROOT / "build" / "pyenv"
 PYTHON_VERSION = "3.12"
 MANIFEST_NAME = "pyenv-manifest.json"
 
+IS_WINDOWS = sys.platform == "win32"
+
+
+def python_install_root(python_exe: Path) -> Path:
+    """The python-build-standalone install root for a managed interpreter.
+
+    On Windows `python.exe` sits at the install root itself; on macOS/Linux
+    `uv python find` returns `<root>/bin/python3`, so the root is two levels
+    up.
+    """
+    return python_exe.parent if IS_WINDOWS else python_exe.parent.parent
+
+
+def baked_python_exe_path(python_dir: Path) -> Path:
+    """Where the interpreter lives inside the baked `<out>/python/` copy."""
+    if IS_WINDOWS:
+        return python_dir / "python.exe"
+    return python_dir / "bin" / "python3"
+
 # Directories/files never worth copying into the baked service tree: dev-only
 # caches and a from-scratch venv, none of which the runtime needs.
 _SERVICE_EXCLUDE = {
@@ -173,22 +192,33 @@ def install_dependencies(
 ) -> None:
     """`uv pip install --target`, never `uv sync` -- no venv is created here."""
     target_dir.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            uv_exe,
-            "pip",
-            "install",
-            "--python",
-            str(python_exe),
-            "--target",
-            str(target_dir),
-            "--no-deps",
-            "--extra-index-url",
-            LLAMA_CPP_CPU_INDEX,
-            "-r",
-            str(requirements_file),
-        ]
-    )
+    cmd = [
+        uv_exe,
+        "pip",
+        "install",
+        "--python",
+        str(python_exe),
+        "--target",
+        str(target_dir),
+        "--no-deps",
+    ]
+    if IS_WINDOWS:
+        cmd += ["--extra-index-url", LLAMA_CPP_CPU_INDEX]
+    else:
+        # No abetlen index on macOS, deliberately: its macOS arm64 wheels are
+        # malformed zips (bad member sizes / trailing bytes after the
+        # end-of-central-directory record — verified against both the
+        # /whl/cpu and /whl/metal 0.3.34+0.3.35 assets), which uv's strict
+        # archive parser refuses — and uv's first-match index strategy would
+        # never fall past that index to PyPI. Build the pinned version from
+        # PyPI's sdist instead (needs cmake + clang, both present on the
+        # macOS runners; ~1 min on an M4). llama.cpp enables Metal by default
+        # on Apple Silicon, so this is also what gives the M-series GPU path.
+        # `--no-binary` guards the intent even if a (possibly still broken)
+        # macOS wheel ever appears on PyPI.
+        cmd += ["--no-binary", "llama-cpp-python"]
+    cmd += ["-r", str(requirements_file)]
+    _run(cmd)
     strip_console_script_launchers(target_dir)
 
 
@@ -223,7 +253,13 @@ def write_relocatable_pth(python_dir: Path, site_packages_dir: Path, service_src
     """Point the baked interpreter at the external site-packages and service
     source directories using paths relative to the .pth file's own location,
     so the whole tree keeps working after being copied anywhere else."""
-    pth_dir = python_dir / "Lib" / "site-packages"
+    if IS_WINDOWS:
+        pth_dir = python_dir / "Lib" / "site-packages"
+    else:
+        # python-build-standalone's Unix layout: `lib/python3.X/site-packages`.
+        # Globbed rather than derived from PYTHON_VERSION so the resolved
+        # minor version can never drift from the directory actually copied.
+        pth_dir = next((python_dir / "lib").glob("python3.*")) / "site-packages"
     pth_dir.mkdir(parents=True, exist_ok=True)
     pth_file = pth_dir / "_transcriber_pyenv.pth"
     lines = [
@@ -296,8 +332,8 @@ def bake(
 
     managed_python_exe = locate_managed_python(uv, python_version)
     python_dir = out_dir / "python"
-    shutil.copytree(managed_python_exe.parent, python_dir)
-    baked_python_exe = python_dir / "python.exe"
+    shutil.copytree(python_install_root(managed_python_exe), python_dir)
+    baked_python_exe = baked_python_exe_path(python_dir)
 
     # requirements.txt is a build-time intermediate only: uv's own export
     # header comment embeds the absolute path it was written to (`-o ...`),

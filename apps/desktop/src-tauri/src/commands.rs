@@ -16,6 +16,7 @@
 //! visible Explorer window).
 
 use std::collections::HashMap;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -279,6 +280,7 @@ impl SidecarController for RealSidecarController {
 
 /// The actual program `reveal_job` launches (never a caller-supplied
 /// string — see [`Revealer`]).
+#[cfg(windows)]
 pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 
 /// Builds the raw `/select,"<path>"` command-line tail Explorer expects, as
@@ -294,6 +296,7 @@ pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 /// here, so this is unit-testable directly. `path` is already
 /// canonicalized and containment-checked by the caller, and NTFS forbids
 /// `"` in a filename, so there is no injection surface beyond that.
+#[cfg(windows)]
 pub fn reveal_command_line(path: &Path) -> String {
     format!("/select,\"{}\"", path.display())
 }
@@ -305,6 +308,7 @@ pub fn reveal_command_line(path: &Path) -> String {
 /// carries no meaning to this app — it simply hands the request off to an
 /// already-running shell process — so any exit status is tolerated; only a
 /// failure to spawn at all is reported.
+#[cfg(windows)]
 pub fn run_reveal_command(program: &str, raw_tail: &str) -> Result<(), AppError> {
     std::process::Command::new(program)
         .raw_arg(raw_tail)
@@ -320,12 +324,31 @@ pub trait Revealer: Send + Sync {
     fn reveal(&self, path: &Path) -> Result<(), AppError>;
 }
 
-/// Launches the real `explorer.exe /select,<path>`.
+/// Launches the platform's real reveal-in-file-manager command:
+/// `explorer.exe /select,<path>` on Windows, Finder's `open -R <path>` on
+/// macOS.
 pub struct ExplorerRevealer;
 
+#[cfg(windows)]
 impl Revealer for ExplorerRevealer {
     fn reveal(&self, path: &Path) -> Result<(), AppError> {
         run_reveal_command(EXPLORER_PROGRAM, &reveal_command_line(path))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Revealer for ExplorerRevealer {
+    fn reveal(&self, path: &Path) -> Result<(), AppError> {
+        // Unlike Explorer's `/select,` (see `reveal_command_line`), `open`
+        // takes the path as an ordinary argument -- no raw command-line
+        // assembly needed. Its exit code is tolerated the same way
+        // Explorer's is; only a failure to spawn at all is reported.
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status()
+            .map(|_status| ())
+            .map_err(|err| AppError::io(format!("failed to launch open -R: {err}")))
     }
 }
 
@@ -1712,6 +1735,7 @@ mod tests {
 
     // -- reveal_command_line / run_reveal_command -------------------------
 
+    #[cfg(windows)]
     #[test]
     fn reveal_command_line_quotes_the_path_but_leaves_the_select_switch_bare() {
         let path = PathBuf::from(r"C:\Meetings\ELS\260812 - Security issue\transcript.json");
@@ -1722,6 +1746,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn run_reveal_command_tolerates_a_nonzero_exit_code() {
         // A harmless stand-in process (never explorer.exe, so this never
@@ -1732,6 +1757,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[cfg(windows)]
     #[test]
     fn run_reveal_command_appends_the_tail_raw_so_the_select_switch_is_not_quoted_with_the_path_e1_regression(
     ) {

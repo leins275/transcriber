@@ -10,9 +10,12 @@ deterministic path. Per the pipeline documented in plan.md:
     2. lock check      scripts/verify_locks.py --check       (FR-4)
     3. pyenv bake       scripts/build_pyenv.py               (FR-8, NFR-1)
     4. tauri build      npm --prefix apps/desktop run tauri -- build -- --locked   (frozen, E5)
-    5. collect          dist/Transcriber_<version>_x64-setup.exe
-                        dist/Transcriber_<version>_x64-setup.exe.sha256
-                        dist/build-manifest.json               (FR-15)
+                        (on macOS: `build --bundles app,dmg`, since
+                        tauri.conf.json's committed `targets` list is the
+                        Windows NSIS contract)
+    5. collect          dist/Transcriber_<version>_x64-setup.exe (Windows)
+                        or dist/Transcriber_<version>_aarch64.dmg (macOS)
+                        + its .sha256 and dist/build-manifest.json (FR-15)
     6. gate             installer size <= 1.5 GB                (NFR-1, R4)
 
 No `--extra cuda` by default (Defect 1, `docs/verification-installer.md`
@@ -55,12 +58,27 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 APP_DIR = REPO_ROOT / "apps" / "desktop"
-# `Cargo.toml` at the repo root is a workspace (`members = ["crates/vault",
-# "apps/desktop/src-tauri"]`), so Cargo places one shared `target/` at the
-# *workspace root* -- never a separate `apps/desktop/src-tauri/target/` --
-# confirmed empirically against the real `tauri build` output. Found on the
-# first real end-to-end build that got far enough to reach this stage.
-NSIS_BUNDLE_DIR = REPO_ROOT / "target" / "release" / "bundle" / "nsis"
+# The Tauri bundle kind (and the installer extension it produces) per
+# platform: the NSIS `.exe` on Windows, the `.dmg` on macOS. tauri.conf.json
+# only lists `nsis` (a committed contract `test_bundle_config.py` pins), so
+# the macOS build passes its bundle kinds on the CLI instead -- see
+# `stage_tauri_build`.
+BUNDLE_KIND = "nsis" if sys.platform == "win32" else "dmg"
+INSTALLER_GLOB = "*.exe" if sys.platform == "win32" else "*.dmg"
+
+
+def bundle_dir(repo_root: Path = REPO_ROOT) -> Path:
+    """Where `tauri build` leaves this platform's installer.
+
+    `Cargo.toml` at the repo root is a workspace (`members = ["crates/vault",
+    "apps/desktop/src-tauri"]`), so Cargo places one shared `target/` at the
+    *workspace root* -- never a separate `apps/desktop/src-tauri/target/` --
+    confirmed empirically against the real `tauri build` output. Found on the
+    first real end-to-end build that got far enough to reach this stage.
+    """
+    return repo_root / "target" / "release" / "bundle" / BUNDLE_KIND
+
+
 DEFAULT_DIST_DIR = REPO_ROOT / "dist"
 
 # tauri.conf.json's `bundle.resources` maps
@@ -241,7 +259,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def find_built_installer(repo_root: Path = REPO_ROOT, version: str | None = None) -> Path:
-    """Locate the `.exe` the Tauri NSIS bundle stage just produced.
+    """Locate the installer the Tauri bundle stage just produced.
 
     Matched by its exact expected name -- `sync_version.artifact_name`, the
     same function `collect` names the released file with -- rather than by
@@ -261,19 +279,15 @@ def find_built_installer(repo_root: Path = REPO_ROOT, version: str | None = None
     build that did not produce what it was asked for must fail, not fall
     back to something that happens to be lying nearby.
     """
-    bundle_dir = (
-        NSIS_BUNDLE_DIR
-        if repo_root == REPO_ROOT
-        else repo_root / NSIS_BUNDLE_DIR.relative_to(REPO_ROOT)
-    )
+    search_dir = bundle_dir(repo_root)
     expected = sync_version.artifact_name(version)
-    candidate = bundle_dir / expected
+    candidate = search_dir / expected
     if candidate.is_file():
         return candidate
 
-    present = sorted(path.name for path in bundle_dir.glob("*.exe"))
+    present = sorted(path.name for path in search_dir.glob(INSTALLER_GLOB))
     found = f" (found: {', '.join(present)})" if present else ""
-    raise BuildInstallerError(f"no {expected} under {bundle_dir}{found}")
+    raise BuildInstallerError(f"no {expected} under {search_dir}{found}")
 
 
 def gate_artifact_size(path: Path, limit_bytes: int = SIZE_LIMIT_BYTES) -> int:
@@ -397,6 +411,21 @@ def _restore_gitkeep(pyenv_out: Path) -> None:
         gitkeep.write_text(GITKEEP_CONTENTS, encoding="utf-8", newline="\n")
 
 
+def _tauri_build_args() -> list[str]:
+    """The `tauri <args>` this platform's bundle build needs.
+
+    tauri.conf.json commits to `targets: ["nsis"]` (a Windows-only list
+    `test_bundle_config.py` pins), so on macOS the bundle kinds come from
+    the CLI instead: `app` (which `createUpdaterArtifacts` turns into the
+    updater's `Transcriber.app.tar.gz` + `.sig`) and `dmg` (first-install
+    media).
+    """
+    args = ["build"]
+    if sys.platform == "darwin":
+        args += ["--bundles", "app,dmg"]
+    return args
+
+
 def stage_tauri_build(ctx: BuildContext) -> None:
     _run(["npm", "--prefix", str(APP_DIR), "ci"])
     # E5/FR-4: `--locked` must reach `cargo build` itself, not just `npm
@@ -413,7 +442,7 @@ def stage_tauri_build(ctx: BuildContext) -> None:
     # default)". Without both, `--locked` never leaves the `npm`/`tauri`
     # layer.
     _run(
-        ["npm", "--prefix", str(APP_DIR), "run", "tauri", "--", "build", "--", "--locked"]
+        ["npm", "--prefix", str(APP_DIR), "run", "tauri", "--", *_tauri_build_args(), "--", "--locked"]
     )
     ctx.installer_src = find_built_installer(ctx.repo_root)
 
@@ -467,8 +496,8 @@ def describe_plan(ctx: BuildContext) -> list[str]:
         f"uv run {SCRIPTS_DIR / 'build_pyenv.py'} --out {ctx.pyenv_out}"
         + (f" {extras_flags}" if extras_flags else ""),
         f"npm --prefix {APP_DIR} ci",
-        f"npm --prefix {APP_DIR} run tauri -- build -- --locked",
-        f"collect -> {ctx.dist_dir}/Transcriber_<version>_x64-setup.exe (+ .sha256, build-manifest.json)",
+        f"npm --prefix {APP_DIR} run tauri -- {' '.join(_tauri_build_args())} -- --locked",
+        f"collect -> {ctx.dist_dir}/{sync_version.artifact_name('<version>')} (+ .sha256, build-manifest.json)",
         f"gate: installer size <= {SIZE_LIMIT_BYTES} bytes (1.5 GB, NFR-1)",
     ]
 

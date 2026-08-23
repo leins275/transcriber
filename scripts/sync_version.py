@@ -267,8 +267,18 @@ def set_version(version: str) -> None:
         set_lock_version(package, version)
 
 
-def artifact_name(version: str | None = None) -> str:
+def artifact_name(version: str | None = None, target: str | None = None) -> str:
+    """The installer filename Tauri's bundler produces for `target`.
+
+    `target` is a `sys.platform` value; it defaults to the running platform,
+    which is what both `build_installer.py` and each CI release leg want.
+    The names mirror Tauri v2's bundler defaults: the NSIS `*_x64-setup.exe`
+    on Windows, the `*_aarch64.dmg` on Apple Silicon macOS.
+    """
     resolved = version if version is not None else read_version()
+    resolved_target = target if target is not None else sys.platform
+    if resolved_target == "darwin":
+        return f"Transcriber_{resolved}_aarch64.dmg"
     return f"Transcriber_{resolved}_x64-setup.exe"
 
 

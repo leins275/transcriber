@@ -28,6 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import build_installer  # noqa: E402
+import sync_version  # noqa: E402
 
 
 # --- stage order and exit codes -----------------------------------------
@@ -127,7 +128,7 @@ def test_dry_run_prints_every_planned_command_and_touches_nothing(
     assert "verify_locks.py --check" in out
     assert "build_pyenv.py" in out
     assert "npm --prefix" in out
-    assert "tauri -- build -- --locked" in out, (
+    assert f"tauri -- {' '.join(build_installer._tauri_build_args())} -- --locked" in out, (
         "E5/FR-4: --locked must reach cargo through the tauri build stage, "
         f"not just npm ci/uv export --frozen, got: {out!r}"
     )
@@ -216,7 +217,7 @@ def test_stage_tauri_build_passes_locked_through_to_the_tauri_cli(
         return ""
 
     monkeypatch.setattr(build_installer, "_run", fake_run)
-    fake_installer = tmp_path / "Transcriber_0.0.0_x64-setup.exe"
+    fake_installer = tmp_path / sync_version.artifact_name("0.0.0")
     fake_installer.write_bytes(b"")
     monkeypatch.setattr(
         build_installer, "find_built_installer", lambda repo_root, version=None: fake_installer
@@ -234,7 +235,7 @@ def test_stage_tauri_build_passes_locked_through_to_the_tauri_cli(
             "run",
             "tauri",
             "--",
-            "build",
+            *build_installer._tauri_build_args(),
             "--",
             "--locked",
         ],
@@ -307,9 +308,9 @@ def test_find_built_installer_looks_under_the_workspace_root_target_dir(tmp_path
     # setup.exe` at the repo root, and `find_built_installer` failed to find
     # it there). Found on the first real end-to-end build this fix pass
     # allowed to reach the NSIS step at all.
-    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir = build_installer.bundle_dir(tmp_path)
     bundle_dir.mkdir(parents=True)
-    installer = bundle_dir / "Transcriber_0.1.0_x64-setup.exe"
+    installer = bundle_dir / sync_version.artifact_name("0.1.0")
     installer.write_bytes(b"fixture-installer-bytes")
 
     found = build_installer.find_built_installer(tmp_path, version="0.1.0")
@@ -324,11 +325,11 @@ def test_find_built_installer_ignores_a_previous_versions_leftover(tmp_path: Pat
     # artifact, which `collect` then copied out under the *new* version's
     # name. Two releases with different version numbers and identical bytes
     # is how this was found.
-    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir = build_installer.bundle_dir(tmp_path)
     bundle_dir.mkdir(parents=True)
-    stale = bundle_dir / "Transcriber_0.1.0_x64-setup.exe"
+    stale = bundle_dir / sync_version.artifact_name("0.1.0")
     stale.write_bytes(b"last release's bytes")
-    fresh = bundle_dir / "Transcriber_0.2.0_x64-setup.exe"
+    fresh = bundle_dir / sync_version.artifact_name("0.2.0")
     fresh.write_bytes(b"this release's bytes")
 
     found = build_installer.find_built_installer(tmp_path, version="0.2.0")
@@ -340,21 +341,21 @@ def test_find_built_installer_ignores_a_previous_versions_leftover(tmp_path: Pat
 def test_find_built_installer_refuses_to_substitute_another_version(tmp_path: Path) -> None:
     # A build that did not produce what it was asked for must fail, not fall
     # back to whatever is lying nearby.
-    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir = build_installer.bundle_dir(tmp_path)
     bundle_dir.mkdir(parents=True)
-    (bundle_dir / "Transcriber_0.1.0_x64-setup.exe").write_bytes(b"stale")
+    (bundle_dir / sync_version.artifact_name("0.1.0")).write_bytes(b"stale")
 
     with pytest.raises(build_installer.BuildInstallerError) as excinfo:
         build_installer.find_built_installer(tmp_path, version="0.2.0")
 
     message = str(excinfo.value)
-    assert "Transcriber_0.2.0_x64-setup.exe" in message
+    assert sync_version.artifact_name("0.2.0") in message
     # Names what it did find, so the failure is diagnosable at a glance.
-    assert "Transcriber_0.1.0_x64-setup.exe" in message
+    assert sync_version.artifact_name("0.1.0") in message
 
 
 def test_find_built_installer_reports_an_empty_bundle_directory(tmp_path: Path) -> None:
-    bundle_dir = tmp_path / "target" / "release" / "bundle" / "nsis"
+    bundle_dir = build_installer.bundle_dir(tmp_path)
     bundle_dir.mkdir(parents=True)
 
     with pytest.raises(build_installer.BuildInstallerError):
@@ -388,12 +389,12 @@ def test_collect_writes_installer_checksum_and_manifest(tmp_path: Path) -> None:
         dist_dir=dist_dir,
     )
 
-    expected_installer = dist_dir / "Transcriber_1.2.3_x64-setup.exe"
+    expected_installer = dist_dir / sync_version.artifact_name("1.2.3")
     assert result.installer_path == expected_installer
     assert expected_installer.is_file()
     assert expected_installer.read_bytes() == installer_src.read_bytes()
 
-    checksum_path = dist_dir / "Transcriber_1.2.3_x64-setup.exe.sha256"
+    checksum_path = dist_dir / f"{sync_version.artifact_name('1.2.3')}.sha256"
     assert result.checksum_path == checksum_path
     assert checksum_path.is_file()
     assert build_installer.verify_checksum_file(expected_installer, checksum_path)
@@ -409,7 +410,7 @@ def test_collect_writes_installer_checksum_and_manifest(tmp_path: Path) -> None:
     assert manifest["git_commit"] == "deadbeef"
     assert manifest["payload_versions"] == {"rust": "1.2.3", "node": "1.2.3", "python": "1.2.3"}
     assert manifest["artifact"]["sha256"] == actual_digest
-    assert manifest["artifact"]["name"] == "Transcriber_1.2.3_x64-setup.exe"
+    assert manifest["artifact"]["name"] == sync_version.artifact_name("1.2.3")
 
 
 def test_collect_checksum_fails_verification_if_file_is_tampered(tmp_path: Path) -> None:
