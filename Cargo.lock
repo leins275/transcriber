@@ -4196,7 +4196,7 @@ dependencies = [
 
 [[package]]
 name = "transcriber-desktop"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4384,7 +4384,7 @@ dependencies = [
 
 [[package]]
 name = "vault"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "tempfile",
