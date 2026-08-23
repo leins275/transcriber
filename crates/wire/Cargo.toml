@@ -6,7 +6,16 @@ description = "On-disk document formats shared by the engine and the desktop app
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# Shortest float digits, with the same half-to-even tie-breaking Python uses.
+# Rust's own formatter breaks those ties the other way; see `python_json`.
+ryu = "1"
+# `float_roundtrip` is not optional here. Without it serde_json parses floats
+# with a faster algorithm that can land one ULP away from the value the text
+# names -- which turns reading and rewriting a transcript into a file that
+# differs from the one on disk. Caught against a real vault: a
+# `compression_ratio` of 2.0482456140350878 came back as 2.048245614035088,
+# a genuinely different double.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 # The vault crate already owns the path budget, the illegal-character set and
 # the reserved directory names. Artifact writing obeys exactly those rules, so
 # it depends on them rather than restating them -- a second copy of a contract

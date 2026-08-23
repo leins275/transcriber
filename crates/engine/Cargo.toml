@@ -8,7 +8,9 @@ description = "In-process transcription, diarization and LLM engine: the whole o
 wire = { path = "../wire" }
 vault = { path = "../vault" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# Same reason as in the wire crate: exact float round-tripping is what keeps a
+# rewritten document identical to the one on disk.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 thiserror = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # `bundled` compiles SQLite from source rather than trusting whatever the host

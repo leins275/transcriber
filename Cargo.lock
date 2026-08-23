@@ -5460,6 +5460,7 @@ dependencies = [
 name = "wire"
 version = "0.9.0"
 dependencies = [
+ "ryu",
  "serde",
  "serde_json",
  "tempfile",
