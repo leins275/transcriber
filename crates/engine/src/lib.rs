@@ -1,4 +1,4 @@
-//! The in-process engine: everything the Python service used to do.
+﻿//! The in-process engine: everything the Python service used to do.
 //!
 //! This crate deliberately has **no dependency on Tauri or the desktop app**.
 //! Its request and result types are plain serde-derived data, and the whole
@@ -19,6 +19,7 @@ pub mod backends;
 pub mod config;
 pub mod diarize;
 pub mod fakes;
+pub mod gpu;
 pub mod jobs;
 pub mod ledger;
 pub mod llm;

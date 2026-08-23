@@ -7,5 +7,7 @@
 //! that shapes the transcript stays testable without one.
 
 pub mod align;
+pub mod pyannote;
 
 pub use align::{label_segments, SpeakerTurn};
+pub use pyannote::{DiarizeError, Diarizer, PyannoteDiarizer};

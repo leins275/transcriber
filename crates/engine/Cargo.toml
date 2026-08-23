@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 version = "0.9.0"
 name = "engine"
 edition = "2021"
@@ -29,6 +29,28 @@ llama-cpp-2 = { version = "0.1.154", default-features = false, features = [
 # `compression_ratio` is a deflate ratio -- faster-whisper reported it, and
 # whisper.cpp does not, so it is computed here with the same definition.
 flate2 = "1"
+# Free-VRAM measurement for the GPU layer auto-fit. Loads the driver's own
+# nvml.dll at runtime, so it links on a machine that has never had CUDA.
+nvml-wrapper = "0.12"
+# Incremental UTF-8 decoding of generated tokens. A token boundary can split a
+# character, which for Cyrillic is the common case; llama-cpp-2's own API takes
+# this decoder for exactly that reason.
+encoding_rs = "0.8"
+# Speaker diarization. `load-dynamic` keeps ONNX Runtime out of the build: the
+# library is loaded from a DLL the installer ships, by absolute path, so the
+# build never downloads a binary and a stray onnxruntime.dll earlier on PATH
+# cannot shadow ours.
+pyannote-rs = { version = "0.3.4", default-features = false, features = [
+  "load-dynamic",
+] }
+# Pinned exactly, and not because we call it: pyannote-rs asks for
+# `^2.0.0-rc.10`, but ort's release candidates change their tensor API between
+# themselves, and rc.13 does not compile pyannote-rs at all. Naming the version
+# here is what holds the resolver to one that does. Revisit when either
+# reaches a stable release.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = [
+  "load-dynamic",
+] }
 
 [dev-dependencies]
 tempfile = "3"

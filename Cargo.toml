@@ -4,6 +4,7 @@ members = [
   "crates/vault",
   "crates/wire",
   "crates/whisper-sys",
+  "crates/fetcher",
   "crates/engine",
   "apps/desktop/src-tauri",
 ]

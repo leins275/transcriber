@@ -1,4 +1,4 @@
-//! Engine configuration: defaults < `config.json` < `TRANSCRIBER_*` env.
+﻿//! Engine configuration: defaults < `config.json` < `TRANSCRIBER_*` env.
 //!
 //! Port of `services/transcription/src/transcription/config.py`, minus
 //! everything that only existed to reach a network:
@@ -72,6 +72,10 @@ pub struct Config {
     pub diarization_model: String,
     /// Empty means the models bundled under `<app_dir>/models/diarization`.
     pub diarization_model_path: PathBuf,
+    /// Upper bound on distinct speakers. The embedding matcher needs one: a
+    /// voice that drifts would otherwise keep creating new speakers until the
+    /// transcript is unreadable.
+    pub diarization_max_speakers: u32,
 
     // --- local LLM ---
     pub llm_model: String,
@@ -120,6 +124,7 @@ impl Default for Config {
             diarize: false,
             diarization_model: "pyannote/segmentation-3.0".to_string(),
             diarization_model_path: PathBuf::new(),
+            diarization_max_speakers: 10,
             llm_model: "qwen3.6-35b-a3b".to_string(),
             llm_model_path: PathBuf::new(),
             llm_model_repo: "ggml-org/Qwen3.6-35B-A3B-GGUF".to_string(),
@@ -234,6 +239,10 @@ impl Config {
         set_path(
             &mut self.diarization_model_path,
             file.get("diarization_model_path"),
+        );
+        set_u32(
+            &mut self.diarization_max_speakers,
+            file.get("diarization_max_speakers"),
         );
 
         set_string(&mut self.llm_model, file.get("llm_model"));

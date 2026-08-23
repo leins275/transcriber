@@ -12,12 +12,17 @@
 //! ids are assigned last, by the filter pass, so they number the transcript
 //! that was actually written.
 
+pub mod llm_jobs;
+
 use std::path::{Path, PathBuf};
 
-use wire::transcript::{ProviderInfo, Source, Stats, TranscriptDoc, SCHEMA_VERSION};
+use wire::transcript::{
+    DiarizationInfo, DiarizationStatus, ProviderInfo, Source, Stats, TranscriptDoc, SCHEMA_VERSION,
+};
 use wire::ErrorKind;
 
 use crate::config::Config;
+use crate::diarize::{self, DiarizeError, Diarizer, PyannoteDiarizer};
 use crate::jobs::{JobContext, JobFailure, JobKind, JobOutcome, JobRequest, JobRunner};
 use crate::media::{ffmpeg::FfmpegDecoder, MediaDecoder};
 use crate::models;
@@ -30,6 +35,9 @@ pub struct EngineRunner {
     /// Loaded lazily: a session that never transcribes never pays for the
     /// model, and the app starts long before the first job.
     whisper: Option<WhisperEngine>,
+    /// Also lazy, and for a stronger reason: the GGUF is the largest thing
+    /// this process ever loads.
+    llm: Option<crate::llm::LlamaEngine>,
 }
 
 impl EngineRunner {
@@ -39,6 +47,7 @@ impl EngineRunner {
             config,
             decoder,
             whisper: None,
+            llm: None,
         }
     }
 
@@ -104,6 +113,12 @@ impl EngineRunner {
         let segments = segmentation::resegment(transcription.segments, resegment_gap);
         let (segments, filtered) = filters::apply_filters(segments, filter_enabled);
 
+        // Diarization runs last, on the segments a reader will actually see,
+        // and it degrades rather than failing: a transcript without speakers
+        // is still the transcript. The `diarization` block is where a failure
+        // is attributed, so it never degrades silently.
+        let (segments, diarization) = self.diarize(segments, &pcm, ctx);
+
         let elapsed_sec = started.elapsed().as_secs_f64();
         let doc = TranscriptDoc {
             schema_version: SCHEMA_VERSION,
@@ -141,7 +156,7 @@ impl EngineRunner {
                 cost_usd: None,
                 currency: None,
             },
-            diarization: None,
+            diarization,
         };
 
         let segment_count = doc.segments.len() as i64;
@@ -155,6 +170,65 @@ impl EngineRunner {
             result_json: None,
             warnings: Vec::new(),
         })
+    }
+}
+
+impl EngineRunner {
+    /// Attribute speakers, if asked to and if it works.
+    ///
+    /// Returns the segments either way, plus the block the transcript records
+    /// about the attempt. Every failure path here is a `status: "failed"`
+    /// block rather than an error, because the caller has a complete
+    /// transcript in hand and throwing it away over missing speaker labels
+    /// would be the worse outcome.
+    fn diarize(
+        &mut self,
+        segments: Vec<wire::transcript::Segment>,
+        pcm: &crate::media::Pcm,
+        ctx: &JobContext,
+    ) -> (Vec<wire::transcript::Segment>, Option<DiarizationInfo>) {
+        if !self.config.diarize {
+            return (segments, None);
+        }
+
+        let mut diarizer = match PyannoteDiarizer::new(&self.config) {
+            Ok(diarizer) => diarizer,
+            Err(err) => return (segments, Some(failed_diarization(&self.config, err))),
+        };
+
+        match diarizer.turns(pcm, ctx) {
+            Ok(turns) => {
+                let (segments, speaker_count) = diarize::label_segments(segments, &turns);
+                (
+                    segments,
+                    Some(DiarizationInfo {
+                        status: DiarizationStatus::Succeeded,
+                        model: diarizer.model_name(),
+                        device: Some("cpu".to_string()),
+                        speaker_count: Some(speaker_count as i64),
+                        error_kind: None,
+                        error_message: None,
+                    }),
+                )
+            }
+            Err(err) => (segments, Some(failed_diarization(&self.config, err))),
+        }
+    }
+}
+
+fn failed_diarization(config: &Config, error: DiarizeError) -> DiarizationInfo {
+    let kind = match error {
+        DiarizeError::ModelsMissing(_) | DiarizeError::RuntimeLoad { .. } => ErrorKind::ModelLoad,
+        DiarizeError::Cancelled => ErrorKind::Cancelled,
+        DiarizeError::Failed(_) => ErrorKind::Internal,
+    };
+    DiarizationInfo {
+        status: DiarizationStatus::Failed,
+        model: config.diarization_model.clone(),
+        device: None,
+        speaker_count: None,
+        error_kind: Some(kind),
+        error_message: Some(error.to_string()),
     }
 }
 
@@ -175,18 +249,92 @@ fn write_transcript(doc: &TranscriptDoc, output_dir: &Path) -> Result<(), JobFai
     )
 }
 
+impl EngineRunner {
+    fn run_llm_job(
+        &mut self,
+        job: &JobRequest,
+        ctx: &JobContext,
+    ) -> Result<JobOutcome, JobFailure> {
+        let input = PathBuf::from(&job.input_path);
+        let output = PathBuf::from(&job.output_dir);
+        let kind = job.kind;
+
+        // Destructured so the engine and the decoder are borrowed as separate
+        // fields rather than through `self` twice.
+        let EngineRunner {
+            config,
+            decoder,
+            whisper,
+            llm,
+        } = self;
+
+        let options = crate::llm::CompleteOptions {
+            grammar: None,
+            max_tokens: config.llm_max_output_tokens,
+            temperature: config.llm_temperature,
+        };
+        let ctx_tokens = config.llm_ctx;
+        let keep_loaded = config.llm_keep_loaded;
+
+        if llm.is_none() {
+            // The two models must never be resident together: whisper is a few
+            // gigabytes and the GGUF is tens, and a machine that can hold
+            // either can rarely hold both. Dropping whisper here is what makes
+            // the queue's one-job-at-a-time rule actually bound memory.
+            *whisper = None;
+            *llm = Some(crate::llm::LlamaEngine::load(config)?);
+        }
+
+        let mut inputs = llm_jobs::JobInputs {
+            llm: llm.as_mut().expect("just loaded"),
+            decoder: &**decoder,
+            options,
+            ctx_tokens,
+        };
+
+        let outcome = match kind {
+            JobKind::Summarize => llm_jobs::summarize_meeting(&mut inputs, &input, &output, ctx),
+            JobKind::ActionItems => llm_jobs::extract_items(
+                &mut inputs,
+                llm_jobs::ExtractionKind::ActionItems,
+                &input,
+                &output,
+                ctx,
+            ),
+            JobKind::Facts => llm_jobs::extract_items(
+                &mut inputs,
+                llm_jobs::ExtractionKind::Facts,
+                &input,
+                &output,
+                ctx,
+            ),
+            JobKind::Report => llm_jobs::write_report(&mut inputs, &input, &output, ctx),
+            JobKind::Transcribe | JobKind::Export => unreachable!("handled by the caller"),
+        };
+
+        // Releasing the model between jobs is the default: its working set is
+        // the largest thing this process holds, and reloading is mmap-fast.
+        if !keep_loaded {
+            self.llm = None;
+        }
+        outcome
+    }
+}
+
 impl JobRunner for EngineRunner {
     fn run(&mut self, job: &JobRequest, ctx: &JobContext) -> Result<JobOutcome, JobFailure> {
         match job.kind {
             JobKind::Transcribe => self.transcribe(job, ctx),
-            // Filled in by the LLM phase. Failing by name is deliberate: a job
-            // that appeared to succeed while writing nothing would be worse.
-            other => Err(JobFailure::new(
+            JobKind::Summarize | JobKind::ActionItems | JobKind::Facts | JobKind::Report => {
+                self.run_llm_job(job, ctx)
+            }
+            // Deterministic assembly with no model behind it; the PDF half is
+            // what it is still waiting for. Failing by name is deliberate: a
+            // job that appeared to succeed while writing nothing would be
+            // worse than one that says it cannot run yet.
+            JobKind::Export => Err(JobFailure::new(
                 ErrorKind::Internal,
-                format!(
-                    "the local engine cannot run a {} job yet",
-                    other.wire_name()
-                ),
+                "the local engine cannot run an export job yet".to_string(),
             )),
         }
     }

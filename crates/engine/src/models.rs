@@ -40,6 +40,39 @@ pub fn whisper_vad_model_file(config: &Config) -> PathBuf {
         .join("ggml-silero-v5.1.2.bin")
 }
 
+/// The pyannote segmentation model: when someone is speaking.
+///
+/// Bundled by the installer rather than downloaded. Together the two
+/// diarization models are small enough that a download flow -- and the gated
+/// Hugging Face token the torch models needed -- would cost more than they
+/// save.
+pub fn diarization_segmentation_model(config: &Config) -> PathBuf {
+    config.diarization_model_path.join("segmentation-3.0.onnx")
+}
+
+/// The speaker embedding model: who is speaking.
+pub fn diarization_embedding_model(config: &Config) -> PathBuf {
+    config
+        .diarization_model_path
+        .join("wespeaker_en_voxceleb_CAM++.onnx")
+}
+
+/// The ONNX Runtime shared library, addressed by absolute path so another
+/// application's copy on `PATH` cannot be loaded instead.
+pub fn onnx_runtime_library(config: &Config) -> PathBuf {
+    config
+        .app_dir
+        .join("runtime")
+        .join("onnx")
+        .join(if cfg!(windows) {
+            "onnxruntime.dll"
+        } else if cfg!(target_os = "macos") {
+            "libonnxruntime.dylib"
+        } else {
+            "libonnxruntime.so"
+        })
+}
+
 /// `<llm_model_path>/<llm_model_file>` -- the GGUF the local LLM loads.
 pub fn llm_model_file(config: &Config) -> PathBuf {
     config.llm_model_path.join(&config.llm_model_file)

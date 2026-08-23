@@ -183,6 +183,20 @@ pub struct JobContext {
 }
 
 impl JobContext {
+    /// A context attached to no job table: progress is recorded and never
+    /// read, and only the cancel token is live.
+    ///
+    /// This is what lets one pipeline step be driven directly -- by a test, or
+    /// by anything reproducing a single step -- without a queue, a ledger and
+    /// a worker thread behind it. The worker builds its own contexts; this is
+    /// not a way to start work outside it.
+    pub fn detached(cancel: CancelToken) -> Self {
+        JobContext {
+            progress: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            cancel,
+        }
+    }
+
     /// Report progress, clamped to 0.0..=1.0.
     pub fn set_progress(&self, value: f64) {
         let clamped = value.clamp(0.0, 1.0);

@@ -1,0 +1,31 @@
+[package]
+version = "0.9.0"
+name = "fetcher"
+edition = "2021"
+description = "Model and runtime downloader: the only crate in this workspace that reaches the public internet"
+
+[dependencies]
+# The one TLS-capable HTTP client in the workspace. `rustls-tls` carries its
+# own certificate roots, so verification does not depend on what the host's
+# certificate store happens to contain; the blocking API is deliberate (see
+# `transport`), and no other feature is enabled because no other protocol,
+# body type or codec is used.
+reqwest = { version = "0.12", default-features = false, features = [
+  "blocking",
+  "rustls-tls",
+] }
+# Digest verification. A payload counts only when its SHA-256 matches the
+# pinned one, so this is load-bearing rather than incidental.
+sha2 = "0.10"
+# Runtime payloads arrive as zip archives (a Python wheel is one too), and only
+# a configured prefix of each is extracted. Only the two compression methods a
+# real payload uses are enabled: stored, and deflate.
+zip = { version = "4", default-features = false, features = ["deflate"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+# The `.ready` marker records what was verified and when, so a support session
+# can tell which pin a machine actually has on disk.
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

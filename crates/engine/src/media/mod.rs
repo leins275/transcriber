@@ -17,6 +17,7 @@
 //! path honours that.
 
 pub mod ffmpeg;
+pub mod frames;
 
 use std::path::Path;
 
