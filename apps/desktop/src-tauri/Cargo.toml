@@ -24,6 +24,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "io-u
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 async-trait = "0.1"
 vault = { path = "../../../crates/vault" }
+# The in-process engine that replaces the Python sidecar. It knows nothing
+# about Tauri; this is the only direction the dependency runs.
+engine = { path = "../../../crates/engine" }
+wire = { path = "../../../crates/wire" }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Screenshot bytes cross the IPC boundary as data URLs (the webview has no

@@ -116,8 +116,24 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         &std::env::args().collect::<Vec<_>>(),
     );
 
+    // The rewrite's migration switch: `TRANSCRIBER_SERVICE=local` runs the
+    // real engine inside this process instead of spawning the Python sidecar.
+    // It defaults off while the engine is still being filled in, and
+    // disappears with the sidecar once it is.
+    let local_requested = !fake_requested
+        && std::env::var("TRANSCRIBER_SERVICE")
+            .map(|v| v.eq_ignore_ascii_case("local"))
+            .unwrap_or(false);
+
+    let local_engine = local_requested
+        .then(|| start_local_engine(&app_dir, &config::config_path(&config_dir)))
+        .flatten();
+    let in_process = fake_requested || local_engine.is_some();
+
     let initial_service: Arc<dyn TranscriptionService> = if fake_requested {
         Arc::new(FakeService::new())
+    } else if let Some(engine) = local_engine.clone() {
+        Arc::new(service::local::LocalTranscriptionService::new(engine))
     } else {
         Arc::new(commands::UnavailableTranscriptionService::new(
             "service starting".to_string(),
@@ -139,7 +155,7 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
             root,
             initial_service,
             None,
-            !fake_requested,
+            !in_process,
             sink,
             status_sink,
         )
@@ -149,16 +165,16 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     if let Some(message) = config_load_error {
         state.config_error = tokio::sync::RwLock::new(Some(message));
     }
-    // E20: record whether this session was started in fake-service mode so
-    // `commands::resolve_and_apply_meetings_root_service` can keep it that
-    // way across a later `set_meetings_root` instead of silently spawning
-    // a real sidecar the first time the operator changes the setting.
-    state.fake_mode = fake_requested;
+    // E20: record whether this session's service already lives in this
+    // process so `commands::resolve_and_apply_meetings_root_service` keeps it
+    // across a later `set_meetings_root` instead of spawning a sidecar the
+    // first time the operator changes the setting.
+    state.in_process_mode = in_process;
     app.manage(state);
 
-    // A configured `--fake-service`/`TRANSCRIBER_FAKE_SERVICE` dev switch
-    // already resolved above -- nothing more to start in the background.
-    if !fake_requested {
+    // An in-process service -- the fake, or the local engine -- already
+    // resolved above; there is nothing to start in the background.
+    if !in_process {
         tauri::async_runtime::spawn(async move {
             let state = handle.state::<commands::AppState>();
             let settings_snapshot = state.settings.read().await.clone();
@@ -187,6 +203,63 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     }
 
     Ok(())
+}
+
+/// Starts the in-process engine for `TRANSCRIBER_SERVICE=local`.
+///
+/// Returns `None` if the engine cannot be started -- a config that will not
+/// load, a ledger that will not open. Startup then continues with the
+/// "service starting" placeholder rather than failing: the transcription seam
+/// being down has never been allowed to stop the window from opening (FR-13),
+/// and that holds whether the seam is a sidecar or a thread.
+///
+/// The engine is currently built with [`UnimplementedRunner`], so every job it
+/// accepts fails saying so. That is deliberate: the switch exists to exercise
+/// submission, the ledger, polling and cancellation against the real engine
+/// while the inference paths are still being ported, and a job that silently
+/// *appeared* to succeed while writing nothing would be worse than one that
+/// says it cannot run yet.
+fn start_local_engine(
+    app_dir: &std::path::Path,
+    config_path: &std::path::Path,
+) -> Option<engine::EngineHandle> {
+    let mut env = engine::config::process_env();
+    // The desktop app has already resolved both of these; the engine must not
+    // re-derive them from its own executable path and disagree.
+    env.insert(
+        "TRANSCRIBER_APP_DIR".to_string(),
+        app_dir.display().to_string(),
+    );
+
+    let config = match engine::Config::load(Some(config_path), &env) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("[transcriber] local engine: cannot load config: {err}");
+            return None;
+        }
+    };
+    let ledger = match engine::Ledger::open(&config.db_path) {
+        Ok(ledger) => ledger,
+        Err(err) => {
+            eprintln!("[transcriber] local engine: cannot open the job ledger: {err}");
+            return None;
+        }
+    };
+
+    match engine::EngineHandle::start(
+        config,
+        ledger,
+        Box::new(|| Box::new(engine::jobs::UnimplementedRunner) as Box<dyn engine::JobRunner>),
+    ) {
+        Ok(handle) => {
+            eprintln!("[transcriber] local engine started (TRANSCRIBER_SERVICE=local)");
+            Some(handle)
+        }
+        Err(err) => {
+            eprintln!("[transcriber] local engine: cannot start: {err}");
+            None
+        }
+    }
 }
 
 /// Builds and runs the Tauri application: registers the dialog plugin,

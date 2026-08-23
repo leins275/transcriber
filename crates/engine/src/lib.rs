@@ -16,7 +16,14 @@
 //!   Python service's own database file.
 
 pub mod config;
+pub mod fakes;
+pub mod jobs;
 pub mod ledger;
+pub mod models;
 
 pub use config::{Config, ConfigError};
+pub use jobs::{
+    CancelToken, EngineError, EngineHandle, JobContext, JobFailure, JobKind, JobOutcome,
+    JobRequest, JobRunner, JobSnapshot, JobState,
+};
 pub use ledger::{Ledger, LedgerError, LedgerRow, NewJob, Success};

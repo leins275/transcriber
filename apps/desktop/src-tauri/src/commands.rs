@@ -1,9 +1,9 @@
-//! `#[tauri::command]` handlers — the only IPC surface (T11).
+﻿//! `#[tauri::command]` handlers â€” the only IPC surface (T11).
 //!
 //! Every handler validates its arguments first and returns
 //! `Result<T, AppError>` (NFR-6). Each `#[tauri::command]`-annotated
 //! function here is a thin wrapper around a plain `*_handler` function that
-//! takes `&AppState` directly — that's what lets these be unit tested below
+//! takes `&AppState` directly â€” that's what lets these be unit tested below
 //! without a Tauri runtime (`tauri::State` has no public constructor).
 //!
 //! `AppState` owns the pieces `lib.rs` wires up at startup: settings, the
@@ -55,14 +55,14 @@ pub mod meetings;
 pub mod llm;
 
 /// A defensive upper bound on a single dropped-path argument's length
-/// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
+/// (Windows' own extended-length path limit is 32767 UTF-16 code units) â€”
 /// guards `enqueue_paths` against a pathological string without ever
 /// touching the filesystem for it (NFR-6).
 const MAX_PATH_ARG_LEN: usize = 32_768;
 
 /// The full IPC-contract `SettingsView` (plan.md's frozen IPC contract):
 /// `config.rs`'s own `SettingsView` deliberately omits
-/// `supported_extensions` (it comes from `paths.rs`, not `config.rs`) —
+/// `supported_extensions` (it comes from `paths.rs`, not `config.rs`) â€”
 /// this is where the two are combined.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SettingsResponse {
@@ -151,7 +151,7 @@ pub struct ServiceStatusView {
     pub detail: Option<String>,
 }
 
-/// Where a `service://status` transition is pushed — the production
+/// Where a `service://status` transition is pushed â€” the production
 /// implementation (`lib.rs`) wraps a Tauri `AppHandle`; tests use a
 /// recording fake, mirroring `jobs::EventSink`'s own design.
 pub trait ServiceStatusSink: Send + Sync {
@@ -185,7 +185,7 @@ impl jobs::ServiceUnavailableSink for RegistryStatusSinkAdapter {
 /// A `TranscriptionService` that always reports unavailable, carrying a
 /// fixed detail message. Used as the placeholder while the sidecar is
 /// starting, and as the fallback when a spawn/ready-line wait fails or a
-/// configured `service.base_url` turns out to be invalid — in every case
+/// configured `service.base_url` turns out to be invalid â€” in every case
 /// ingest keeps working (FR-13); only the transcription seam is down.
 pub struct UnavailableTranscriptionService {
     detail: String,
@@ -222,7 +222,7 @@ impl TranscriptionService for UnavailableTranscriptionService {
 
 /// Abstracts "spawn F2 and wait for its ready line" and "terminate the
 /// running child" behind a trait so nothing in this file (or its tests)
-/// ever needs to spawn the real F2 process — QA's expectation (plan.md)
+/// ever needs to spawn the real F2 process â€” QA's expectation (plan.md)
 /// that no test spawns the real sidecar or requires a whisper model.
 #[async_trait]
 pub trait SidecarController: Send + Sync {
@@ -235,7 +235,7 @@ pub trait SidecarController: Send + Sync {
     async fn terminate(&self);
 }
 
-/// Wraps a real `sidecar::Sidecar` — used in production.
+/// Wraps a real `sidecar::Sidecar` â€” used in production.
 pub struct RealSidecarController {
     sidecar: TokioMutex<Sidecar>,
 }
@@ -279,7 +279,7 @@ impl SidecarController for RealSidecarController {
 }
 
 /// The actual program `reveal_job` launches (never a caller-supplied
-/// string — see [`Revealer`]).
+/// string â€” see [`Revealer`]).
 #[cfg(windows)]
 pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 
@@ -287,7 +287,7 @@ pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 /// a single **raw** string rather than a `Vec<String>` fed through
 /// `Command::args`. `Command::args` quotes any argument containing a space
 /// as one token, and every F1 meeting folder name is `<date> - <Title>`, so
-/// that route would turn `/select,<path>` into `"/select,<path>"` — the
+/// that route would turn `/select,<path>` into `"/select,<path>"` â€” the
 /// switch quoted together with the path. Explorer parses that as an
 /// unrecognized argument and opens the user's Documents folder instead of
 /// the target (E1, verified empirically against a real folder with spaces
@@ -302,11 +302,11 @@ pub fn reveal_command_line(path: &Path) -> String {
 }
 
 /// Spawns `program` with `raw_tail` appended verbatim to the command line
-/// via [`CommandExt::raw_arg`] — never `std::process::Command::args`, whose
+/// via [`CommandExt::raw_arg`] â€” never `std::process::Command::args`, whose
 /// own quoting is exactly the E1 defect [`reveal_command_line`]'s doc
-/// comment describes — and waits for it to exit. Explorer's own exit code
-/// carries no meaning to this app — it simply hands the request off to an
-/// already-running shell process — so any exit status is tolerated; only a
+/// comment describes â€” and waits for it to exit. Explorer's own exit code
+/// carries no meaning to this app â€” it simply hands the request off to an
+/// already-running shell process â€” so any exit status is tolerated; only a
 /// failure to spawn at all is reported.
 #[cfg(windows)]
 pub fn run_reveal_command(program: &str, raw_tail: &str) -> Result<(), AppError> {
@@ -317,7 +317,7 @@ pub fn run_reveal_command(program: &str, raw_tail: &str) -> Result<(), AppError>
         .map_err(|err| AppError::io(format!("failed to launch {program}: {err}")))
 }
 
-/// Executes a validated reveal target — implemented by actually launching
+/// Executes a validated reveal target â€” implemented by actually launching
 /// Explorer in production; a recording fake in tests, so a unit test never
 /// opens a visible window.
 pub trait Revealer: Send + Sync {
@@ -373,17 +373,20 @@ pub struct AppState {
     pub status_sink: Arc<dyn ServiceStatusSink>,
     pub sidecar: Arc<dyn SidecarController>,
     pub revealer: Arc<dyn Revealer>,
-    /// Set by `lib.rs` when the `--fake-service`/`TRANSCRIBER_FAKE_SERVICE`
-    /// dev switch was given at startup (E20). Defaults to `false` here and
-    /// is patched directly after construction (the same pattern `lib.rs`
-    /// already uses for `config_error`) rather than threaded through the
-    /// constructors below, since it is a startup-only decision, not one of
-    /// the collaborators tests substitute per call.
-    /// [`resolve_and_apply_meetings_root_service`] checks this and skips
-    /// resolving a real sidecar/service when set, so changing the
-    /// meetings-root mid-session does not silently discard the operator's
-    /// `FakeService` and spawn a real `uv` sidecar in its place.
-    pub fake_mode: bool,
+    /// Set by `lib.rs` when the installed service lives *in this process*:
+    /// either the `--fake-service`/`TRANSCRIBER_FAKE_SERVICE` dev switch
+    /// (E20), or `TRANSCRIBER_SERVICE=local`, which runs the real engine
+    /// in-process instead of spawning a sidecar.
+    ///
+    /// Defaults to `false` here and is patched directly after construction
+    /// (the same pattern `lib.rs` already uses for `config_error`) rather
+    /// than threaded through the constructors below, since it is a
+    /// startup-only decision, not one of the collaborators tests substitute
+    /// per call. [`resolve_and_apply_meetings_root_service`] checks this and
+    /// skips resolving a sidecar when set, so changing the meetings-root
+    /// mid-session does not discard the running engine and spawn a sidecar in
+    /// its place.
+    pub in_process_mode: bool,
     /// The id-keyed lookup [`list_vault_handler`] populates wholesale on
     /// every call (replacing whatever was there before) and
     /// [`reveal_vault_entry_handler`] reads from -- the same "look the
@@ -395,7 +398,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Full constructor — every collaborator injected, used by tests (and
+    /// Full constructor â€” every collaborator injected, used by tests (and
     /// internally by [`AppState::new`]).
     #[allow(clippy::too_many_arguments)]
     pub fn new_with(
@@ -430,7 +433,7 @@ impl AppState {
             status_sink,
             sidecar,
             revealer,
-            fake_mode: false,
+            in_process_mode: false,
             vault_index: RwLock::new(HashMap::new()),
         }
     }
@@ -475,7 +478,7 @@ pub fn fake_service_requested(env_var: Option<String>, args: &[String]) -> bool 
 /// directly for `UseExisting`, or spawns and waits for F2's ready line
 /// (bounded by `timeout`) through `controller` for `Spawn`, falling back to
 /// [`UnavailableTranscriptionService`] if the spawn/ready-line wait fails or
-/// the resulting base URL is somehow invalid — the transcription seam
+/// the resulting base URL is somehow invalid â€” the transcription seam
 /// being down never fails app startup or a settings change (FR-13).
 pub async fn resolve_service(
     controller: &dyn SidecarController,
@@ -562,15 +565,15 @@ pub async fn apply_resolved_service(
 }
 
 /// The `service://status` detail while the app is shutting the sidecar
-/// down for an update install — one constant so the handler and its tests
+/// down for an update install â€” one constant so the handler and its tests
 /// cannot drift on the exact wording.
 pub const UPDATE_STOP_DETAIL: &str = "stopped for update";
 
-/// `prepare_update` — stops the bundled Python sidecar so the updater's
+/// `prepare_update` â€” stops the bundled Python sidecar so the updater's
 /// installer can run.
 ///
 /// The NSIS installer overwrites `pyenv\` in place, and a running
-/// `python.exe` from that tree holds locks on its own DLLs — installing
+/// `python.exe` from that tree holds locks on its own DLLs â€” installing
 /// over it fails with "Error opening file for writing: ...\pyenv\...".
 /// The updater plugin exits *this* process via `std::process::exit` when
 /// it launches the installer, which never runs `lib.rs`'s `RunEvent::Exit`
@@ -579,7 +582,7 @@ pub const UPDATE_STOP_DETAIL: &str = "stopped for update";
 ///
 /// The service is swapped for an [`UnavailableTranscriptionService`] first
 /// (registry included, so an in-flight poll loop sees it too), then the
-/// sidecar process tree is terminated and awaited — by the time this
+/// sidecar process tree is terminated and awaited â€” by the time this
 /// returns, nothing of ours holds a file under `pyenv\` open.
 pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
     let service: Arc<dyn TranscriptionService> =
@@ -614,7 +617,7 @@ pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
 
 // -- Handler bodies (testable without a Tauri runtime) ---------------------
 
-/// `get_settings` — never fails; wrapped in `Result` to match the IPC
+/// `get_settings` â€” never fails; wrapped in `Result` to match the IPC
 /// contract's uniform `Result<T, AppError>` shape.
 pub async fn get_settings_handler(state: &AppState) -> Result<SettingsResponse, AppError> {
     let settings = state.settings.read().await;
@@ -622,7 +625,7 @@ pub async fn get_settings_handler(state: &AppState) -> Result<SettingsResponse, 
     Ok(build_settings_response(&settings, config_error))
 }
 
-/// `set_meetings_root` — validates and persists the new root (FR-16) and
+/// `set_meetings_root` â€” validates and persists the new root (FR-16) and
 /// returns the resulting settings view immediately (E17). Resolving and
 /// (re)starting the sidecar (or reconnecting to a configured URL) so F2's
 /// own allowed-roots list stays in sync is *not* done here: for the `Spawn`
@@ -690,13 +693,13 @@ pub async fn resolve_and_apply_meetings_root_service(
     settings: &Settings,
     root: PathBuf,
 ) -> ServiceStatusView {
-    if state.fake_mode {
-        // E20: a `--fake-service`/`TRANSCRIBER_FAKE_SERVICE` dev session
-        // must stay in fake mode across a meetings-root change. Only the
-        // registry's root needs to move to the new root; the installed
-        // `FakeService` instance must not be discarded in favor of a real
-        // sidecar spawn (or `UnavailableTranscriptionService`) the way an
-        // unconditional `plan_sidecar` + `resolve_service` would.
+    if state.in_process_mode {
+        // E20: a session whose service already lives in this process -- the
+        // fake, or the real in-process engine -- must keep it across a
+        // meetings-root change. Only the registry's root needs to move; the
+        // installed service must not be discarded in favor of a sidecar spawn
+        // (or `UnavailableTranscriptionService`) the way an unconditional
+        // `plan_sidecar` + `resolve_service` would.
         let service = state.service.read().await.clone();
         let base_url = state.service_base_url.read().await.clone();
         return apply_resolved_service(state, service, base_url, root).await;
@@ -711,7 +714,7 @@ pub async fn resolve_and_apply_meetings_root_service(
     apply_resolved_service(state, service, base_url, root).await
 }
 
-/// `enqueue_paths` — validates every argument before any IO (NFR-1, NFR-6)
+/// `enqueue_paths` â€” validates every argument before any IO (NFR-1, NFR-6)
 /// and hands well-formed absolute paths straight to the job registry, which
 /// returns their initial `Pending` snapshots immediately.
 pub async fn enqueue_paths_handler(
@@ -754,7 +757,7 @@ pub async fn list_jobs_handler(state: &AppState) -> Result<Vec<JobSnapshot>, App
     Ok(state.registry.read().await.list().await)
 }
 
-/// `service_status` — while the sidecar is still starting this reports
+/// `service_status` â€” while the sidecar is still starting this reports
 /// `starting` without probing health; afterwards it reflects a live
 /// `health()` call, so a down service is reported `unavailable` naming
 /// whatever base URL is on record (FR-13).
@@ -788,7 +791,7 @@ pub async fn service_status_handler(state: &AppState) -> Result<ServiceStatusVie
     })
 }
 
-/// `list_vault` — scans the configured meetings root read-only (F1's
+/// `list_vault` â€” scans the configured meetings root read-only (F1's
 /// `vault::list_meetings`, off the UI thread via `spawn_blocking`, the same
 /// pattern `ingest.rs` already uses for F1's blocking calls) and returns
 /// every meeting found, newest first (F1's own ordering).
@@ -847,7 +850,7 @@ pub async fn list_vault_handler(state: &AppState) -> Result<Vec<VaultMeetingView
     Ok(views)
 }
 
-/// `reveal_vault_entry` — looks the entry up **by id** (never trusting a
+/// `reveal_vault_entry` â€” looks the entry up **by id** (never trusting a
 /// caller-supplied path, exactly like [`reveal_job_handler`]), re-validates
 /// containment under the *current* configured meetings-root, and only then
 /// launches Explorer on the meeting folder itself.
@@ -876,12 +879,12 @@ pub async fn reveal_vault_entry_handler(state: &AppState, entry_id: &str) -> Res
         .map_err(|join_err| AppError::internal(format!("reveal task panicked: {join_err}")))?
 }
 
-/// `reveal_job` — looks the job up **by id** (never trusting a caller-
+/// `reveal_job` â€” looks the job up **by id** (never trusting a caller-
 /// supplied path), picks its most specific known path (transcript, then the
 /// filed recording, then the meeting folder), re-validates containment
 /// under the *current* configured meetings-root, and only then launches
 /// Explorer (FR-15). Refuses a job whose recorded path no longer resolves
-/// inside that root — this is what makes the containment check a Rust-side
+/// inside that root â€” this is what makes the containment check a Rust-side
 /// guarantee rather than something the frontend could be trusted to do.
 pub async fn reveal_job_handler(state: &AppState, job_id: &str) -> Result<(), AppError> {
     let snapshot = state
@@ -1137,7 +1140,7 @@ mod tests {
         }
     }
 
-    /// A `SidecarController` that never spawns a real process — QA's
+    /// A `SidecarController` that never spawns a real process â€” QA's
     /// expectation is that no test spawns the real F2 sidecar. Records the
     /// configs it was asked to launch and returns pre-scripted results.
     #[derive(Default)]
@@ -2031,7 +2034,7 @@ mod tests {
                 sidecar.clone(),
                 Arc::new(RecordingRevealer::default()),
             );
-            state.fake_mode = true;
+            state.in_process_mode = true;
 
             set_meetings_root_handler(&state, new_root.path().to_str().expect("valid utf8"))
                 .await
@@ -2538,7 +2541,7 @@ mod tests {
     // id is only ever issued by a listing -- that is the contract these
     // commands are built on.
 
-    const TRANSCRIPT_FIXTURE: &str = r#"{"language":"ru","text":"Да, ребят","segments":[{"id":0,"start":0.0,"end":2.5,"text":" Да, ребят"}],"provider":{"model":"large-v3","device":"cuda"},"source":{"duration_sec":3625.8}}"#;
+    const TRANSCRIPT_FIXTURE: &str = r#"{"language":"ru","text":"Ð”Ð°, Ñ€ÐµÐ±ÑÑ‚","segments":[{"id":0,"start":0.0,"end":2.5,"text":" Ð”Ð°, Ñ€ÐµÐ±ÑÑ‚"}],"provider":{"model":"large-v3","device":"cuda"},"source":{"duration_sec":3625.8}}"#;
 
     fn seed_meeting(root: &std::path::Path, parent: &str, name: &str, transcript: Option<&str>) {
         let dir = root.join(parent).join(name);
@@ -2573,7 +2576,7 @@ mod tests {
             assert_eq!(view.entry_id, views[0].id);
             assert_eq!(view.meeting_name, "260822 - source");
             assert_eq!(view.language.as_deref(), Some("ru"));
-            assert_eq!(view.text, "Да, ребят");
+            assert_eq!(view.text, "Ð”Ð°, Ñ€ÐµÐ±ÑÑ‚");
             assert_eq!(view.segments.len(), 1);
         });
     }
