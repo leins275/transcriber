@@ -186,6 +186,13 @@ def export_requirements(
 # index again or it would fall back to PyPI's sdist and try to compile.
 LLAMA_CPP_CPU_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 
+# Extras every bake includes on top of whatever the caller asks for: the
+# installer always ships the CPU llama.cpp runtime (the `llm-cuda` variant
+# is a dev-machine convenience the NSIS compiler could not swallow anyway --
+# the same reason the CUDA STT runtime is fetched at first run instead of
+# baked).
+BASE_EXTRAS: tuple[str, ...] = ("llm-cpu",)
+
 
 def install_dependencies(
     uv_exe: str, python_exe: Path, requirements_file: Path, target_dir: Path
@@ -325,6 +332,9 @@ def bake(
     """
     uv = find_uv(uv_exe)
     check_lock_fresh(service_dir, uv)
+
+    # The always-baked extras lead; caller extras follow, deduplicated.
+    extras = tuple(BASE_EXTRAS) + tuple(e for e in extras if e not in BASE_EXTRAS)
 
     if out_dir.exists():
         shutil.rmtree(out_dir)

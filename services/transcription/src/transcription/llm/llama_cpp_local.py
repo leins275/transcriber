@@ -21,9 +21,32 @@ from typing import Any
 from transcription.config import Config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.llm.base import LlmCompletion, LlmInfo, Message, ModelState
+from transcription.llm.gguf_meta import fit_gpu_layers, read_block_count
 from transcription.providers.base import CancelToken
 
 logger = logging.getLogger(__name__)
+
+
+def _free_vram_bytes() -> int | None:
+    """Free memory on the best NVIDIA GPU, via NVML (pure ctypes, no
+    subprocess). ``None`` on machines with no NVIDIA driver -- the auto
+    offload path degrades to CPU."""
+    try:
+        import pynvml  # noqa: PLC0415 - deliberate lazy import (NFR-1)
+
+        pynvml.nvmlInit()
+        try:
+            best = 0
+            for index in range(pynvml.nvmlDeviceGetCount()):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                best = max(best, int(info.free))
+            return best or None
+        finally:
+            pynvml.nvmlShutdown()
+    except Exception:  # noqa: BLE001 - "no NVML" is an answer, not an error
+        return None
+
 
 # How often the streaming loop checks the cancel token, in decoded chunks.
 # llama.cpp yields one chunk per token, so this is "every token" -- cheap,
@@ -40,17 +63,69 @@ class LlamaCppProvider:
         self.config = config
         self._llama: Any | None = None
         self._state: ModelState = "unloaded"
+        # The offload actually applied by the last load; `None` until then.
+        self._resolved_gpu_layers: int | None = None
         # complete() runs on the JobManager's single worker thread, but
         # unload() can be called from elsewhere; keep the handle swap safe.
         self._lock = threading.Lock()
 
     def describe(self) -> LlmInfo:
+        resolved = self._resolved_gpu_layers
+        if resolved is not None:
+            device = "cuda" if resolved != 0 else "cpu"
+        elif self.config.llm_gpu_layers == 0:
+            device = "cpu"
+        else:
+            # Auto (-1) or a pinned positive count, not resolved yet.
+            device = "auto"
         return LlmInfo(
             name=self.name,
             model=self.config.llm_model,
-            device="cuda" if self.config.llm_gpu_layers > 0 else "cpu",
+            device=device,
             model_state=self._state,
         )
+
+    def _resolve_gpu_layers(self, model_file: Path, llama_cpp: Any) -> int:
+        """The `n_gpu_layers` this load actually uses.
+
+        A non-negative configured value is pinned verbatim; the `-1` auto
+        default fits as many whole layers as the free VRAM holds (measured
+        via NVML, layer count from the GGUF header), degrading to 0 --
+        never an error -- whenever any signal is missing: a CPU-only
+        llama.cpp build, no NVIDIA driver, an unreadable header.
+        """
+        configured = self.config.llm_gpu_layers
+        if configured >= 0:
+            return configured
+
+        try:
+            if not llama_cpp.llama_supports_gpu_offload():
+                logger.info("llm offload: llama.cpp build has no GPU support; running on CPU")
+                return 0
+        except Exception:  # noqa: BLE001 - probe failure degrades to CPU
+            return 0
+
+        free_vram = _free_vram_bytes()
+        if free_vram is None:
+            logger.info("llm offload: no NVIDIA GPU visible via NVML; running on CPU")
+            return 0
+        block_count = read_block_count(model_file)
+        if block_count is None:
+            logger.warning(
+                "llm offload: could not read the layer count from %s; running on CPU",
+                model_file.name,
+            )
+            return 0
+
+        layers = fit_gpu_layers(free_vram, model_file.stat().st_size, block_count)
+        logger.info(
+            "llm offload: %s of %d layers on GPU (%.1f GB VRAM free, %.1f GB model)",
+            "all" if layers == -1 else layers,
+            block_count,
+            free_vram / 1e9,
+            model_file.stat().st_size / 1e9,
+        )
+        return layers
 
     def model_file(self) -> Path:
         """The GGUF file this provider will load (may not exist yet)."""
@@ -73,15 +148,17 @@ class LlamaCppProvider:
             try:
                 import llama_cpp  # noqa: PLC0415 - deliberate lazy import (NFR-1)
 
+                gpu_layers = self._resolve_gpu_layers(model_file, llama_cpp)
                 kwargs: dict[str, Any] = {
                     "model_path": str(model_file),
                     "n_ctx": self.config.llm_ctx,
-                    "n_gpu_layers": self.config.llm_gpu_layers,
+                    "n_gpu_layers": gpu_layers,
                     "verbose": False,
                 }
                 if self.config.llm_threads is not None:
                     kwargs["n_threads"] = self.config.llm_threads
                 self._llama = llama_cpp.Llama(**kwargs)
+                self._resolved_gpu_layers = gpu_layers
             except ServiceError:
                 self._state = "unloaded"
                 raise

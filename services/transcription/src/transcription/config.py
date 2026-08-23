@@ -124,10 +124,12 @@ class Config:
     llm_model_file: str = "Qwen3.6-35B-A3B-Q4_K_M.gguf"
     # Context window the chunker budgets against and llama.cpp allocates.
     llm_ctx: int = 16384
-    # 0 = pure CPU (the shipped wheel is CPU-only; the A3B MoE default is
-    # chosen precisely because CPU inference is viable). A future
-    # GPU-accelerated runtime plugs in through this same knob.
-    llm_gpu_layers: int = 0
+    # -1 = auto-fit: put as many whole layers on the GPU as the free VRAM
+    # holds (measured via NVML, layer count read from the GGUF header) and
+    # leave the rest on CPU. 0 disables offload; a positive number pins the
+    # layer count. On a CPU-only llama.cpp build the knob is inert either
+    # way, so the auto default is safe everywhere.
+    llm_gpu_layers: int = -1
     # None lets llama.cpp pick (physical cores).
     llm_threads: int | None = None
     llm_temperature: float = 0.3

@@ -56,6 +56,16 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// "service unavailable".
 pub const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Best-effort "is there an NVIDIA GPU here" probe: `nvidia-smi` on PATH,
+/// the same signal F2's `model_routes._nvidia_gpu_present` reads. A PATH
+/// scan only — nothing is spawned.
+fn nvidia_gpu_present() -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join("nvidia-smi.exe").is_file())
+}
+
 /// One spawn decision: the program, its argument vector, and the
 /// environment variables to set — nothing else decides how F2 is launched.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +80,26 @@ impl SidecarSpawnConfig {
     /// --directory services/transcription transcription-service serve
     /// --port 0`, with F2's real `TRANSCRIBER_*` environment variables
     /// derived from `settings`, `config_path` and `app_dir`.
+    ///
+    /// Probes for an NVIDIA GPU (the same `nvidia-smi`-on-PATH signal F2's
+    /// own `_nvidia_gpu_present` uses) to pick which llama.cpp variant `uv
+    /// run` syncs -- see [`SidecarSpawnConfig::dev_with_gpu`].
     pub fn dev(settings: &Settings, config_path: &Path, app_dir: &Path) -> Self {
+        Self::dev_with_gpu(settings, config_path, app_dir, nvidia_gpu_present())
+    }
+
+    /// The deterministic half of [`SidecarSpawnConfig::dev`], with the GPU
+    /// probe injected: `--extra llm-cuda` (the CUDA llama.cpp wheel) on a
+    /// machine with an NVIDIA GPU, `--extra llm-cpu` otherwise. One of the
+    /// two must always be passed -- they are uv "conflicting extras", and a
+    /// bare `uv run` would sync a venv with no llama.cpp at all, making
+    /// every LLM job fail with `model_load`.
+    pub fn dev_with_gpu(
+        settings: &Settings,
+        config_path: &Path,
+        app_dir: &Path,
+        gpu_present: bool,
+    ) -> Self {
         let mut envs = vec![
             (
                 "TRANSCRIBER_CONFIG_PATH".to_string(),
@@ -91,12 +120,15 @@ impl SidecarSpawnConfig {
             envs.push(("TRANSCRIBER_MODEL".to_string(), id.clone()));
         }
 
+        let llm_extra = if gpu_present { "llm-cuda" } else { "llm-cpu" };
         SidecarSpawnConfig {
             program: "uv".to_string(),
             args: vec![
                 "run".to_string(),
                 "--directory".to_string(),
                 "services/transcription".to_string(),
+                "--extra".to_string(),
+                llm_extra.to_string(),
                 "transcription-service".to_string(),
                 "serve".to_string(),
                 "--port".to_string(),
@@ -687,6 +719,49 @@ mod tests {
     }
 
     #[test]
+    fn dev_command_selects_the_llm_extra_by_gpu_presence() {
+        // One of the two conflicting extras must ALWAYS be passed: a bare
+        // `uv run` would sync a venv holding no llama.cpp at all.
+        let settings = settings_with(Some("D:\\Meetings"), None);
+        let config_path = PathBuf::from("C:\\cfg\\config.json");
+        let app_dir = PathBuf::from("C:\\cfg");
+
+        let with_gpu =
+            SidecarSpawnConfig::dev_with_gpu(&settings, &config_path, &app_dir, true).args;
+        let without_gpu =
+            SidecarSpawnConfig::dev_with_gpu(&settings, &config_path, &app_dir, false).args;
+
+        assert_eq!(
+            with_gpu,
+            vec![
+                "run",
+                "--directory",
+                "services/transcription",
+                "--extra",
+                "llm-cuda",
+                "transcription-service",
+                "serve",
+                "--port",
+                "0",
+            ]
+        );
+        assert_eq!(
+            without_gpu,
+            vec![
+                "run",
+                "--directory",
+                "services/transcription",
+                "--extra",
+                "llm-cpu",
+                "transcription-service",
+                "serve",
+                "--port",
+                "0",
+            ]
+        );
+    }
+
+    #[test]
     fn plan_sidecar_renders_the_documented_dev_command_with_env_from_settings() {
         let settings = settings_with(Some("D:\\Meetings"), None);
         let config_path = PathBuf::from("C:\\AppData\\com.transcriber.desktop\\config.json");
@@ -700,18 +775,14 @@ mod tests {
         };
 
         assert_eq!(spawn_config.program, "uv");
-        assert_eq!(
-            spawn_config.args,
-            vec![
-                "run",
-                "--directory",
-                "services/transcription",
-                "transcription-service",
-                "serve",
-                "--port",
-                "0",
-            ]
-        );
+        // The llm extra depends on this machine's GPU probe; the exact
+        // per-variant argument vectors are pinned in
+        // `dev_command_selects_the_llm_extra_by_gpu_presence` below.
+        let args: Vec<&str> = spawn_config.args.iter().map(String::as_str).collect();
+        assert_eq!(args[..3], ["run", "--directory", "services/transcription"]);
+        assert_eq!(args[3], "--extra");
+        assert!(args[4] == "llm-cpu" || args[4] == "llm-cuda");
+        assert_eq!(args[5..], ["transcription-service", "serve", "--port", "0"]);
 
         let env: std::collections::HashMap<_, _> = spawn_config.envs.into_iter().collect();
         assert_eq!(
