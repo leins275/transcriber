@@ -93,6 +93,7 @@ def test_write_changelog_raises_on_failure():
 
 def test_print_next_prints_only_the_version(monkeypatch, capsys):
     monkeypatch.setattr(prepare_release, "next_version", lambda: "0.2.0")
+    monkeypatch.setattr(prepare_release, "has_bump_worthy_commit", lambda: True)
 
     assert prepare_release.main(["--print-next"]) == 0
     assert capsys.readouterr().out.strip() == "0.2.0"
@@ -106,6 +107,7 @@ def test_nothing_to_release_exits_with_its_own_documented_code(monkeypatch):
 
 def test_dry_run_writes_nothing(monkeypatch, capsys):
     monkeypatch.setattr(prepare_release, "next_version", lambda: "0.2.0")
+    monkeypatch.setattr(prepare_release, "has_bump_worthy_commit", lambda: True)
     monkeypatch.setattr(
         prepare_release,
         "write_changelog",
@@ -123,6 +125,62 @@ def test_a_git_cliff_failure_exits_with_its_own_documented_code(monkeypatch):
     monkeypatch.setattr(prepare_release, "next_version", boom)
 
     assert prepare_release.main([]) == prepare_release.EXIT_GIT_CLIFF_FAILED
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "feat: add a settings page",
+        "feat(desktop): add a settings page",
+        "fix(updater): stop the sidecar before installing",
+        "perf: batch the inference pipeline",
+        "revert: feat: add a settings page",
+        'Revert "feat: add a settings page"',
+        "refactor!: rename the vault manifest keys",
+        "chore(deps)!: drop the legacy updater layout",
+    ],
+)
+def test_bump_worthy_subjects_release(subject):
+    assert prepare_release.has_bump_worthy_commit([subject])
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        "ci: gate direct pushes to main",
+        "test(vault): steady the timing test",
+        "docs: move README content to docs/overview.md",
+        "chore(release): 0.4.0",
+        "refactor(desktop): split the settings page",
+        "build: pin git-cliff",
+        "wip(vault): spike the parser",
+        "Merge pull request #13 from leins275/feat/settings-page-updater-fix",
+        # A bump-worthy *word* inside the description must not count -- only
+        # the type prefix does.
+        "docs: describe the fix: prefix convention",
+    ],
+)
+def test_everything_else_is_not_a_release(subject):
+    assert not prepare_release.has_bump_worthy_commit([subject])
+
+
+def test_a_breaking_change_footer_releases_whatever_the_type():
+    message = "chore: swap the update manifest format\n\nBREAKING CHANGE: old clients cannot parse it"
+
+    assert prepare_release.has_bump_worthy_commit([message])
+
+
+def test_no_commits_at_all_is_not_a_release():
+    assert not prepare_release.has_bump_worthy_commit([])
+
+
+def test_a_version_without_a_bump_worthy_commit_exits_nothing_to_release(monkeypatch):
+    # The exact incident this guards: git-cliff happily bumps a patch for a
+    # ci:-only main, and the policy layer must overrule it.
+    monkeypatch.setattr(prepare_release, "next_version", lambda: "0.4.1")
+    monkeypatch.setattr(prepare_release, "has_bump_worthy_commit", lambda: False)
+
+    assert prepare_release.main(["--print-next"]) == prepare_release.EXIT_NOTHING_TO_RELEASE
 
 
 def test_git_cliff_is_pinned_to_an_exact_version():

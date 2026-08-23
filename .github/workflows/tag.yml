@@ -24,7 +24,7 @@
 # workflow cannot re-trigger itself with its own bump commit.
 #
 # There is no human gate in this flow: every merge to `main` that contains a
-# bump-worthy commit (feat/fix/perf/breaking) releases. Batching still
+# bump-worthy commit (feat/fix/perf/revert/breaking) releases. Batching still
 # works -- it just moves to the PR: stack the work in one branch and merge
 # once, and the whole branch becomes one release.
 

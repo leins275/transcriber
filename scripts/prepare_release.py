@@ -15,6 +15,14 @@ Neither knows about the other, and this script is the only thing that does.
 That split is why a version bump cannot drift: nothing but `sync_version.py`
 ever writes a manifest, and nothing but git-cliff ever picks a number.
 
+git-cliff alone is not the whole answer to "is a release due": its
+`--bumped-version` treats *any* non-skipped commit as at least a patch, so a
+main branch that gained only `ci:` / `test:` / `docs:` commits would release
+a version whose changelog names nothing a user can see. This script
+therefore adds the policy the pipeline documents: a release needs at least
+one bump-worthy commit -- feat, fix, perf, revert, or anything marked
+breaking -- since the last tag. Everything else exits 3, quietly.
+
 Exit codes (distinct, so CI can branch on them without parsing stderr):
 
     0   a release is due; the next version was printed / written
@@ -31,6 +39,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -96,6 +105,61 @@ def next_version(runner=_default_runner) -> str | None:
     return bumped[-1].strip().lstrip("v")
 
 
+# The commit types that justify a release. `revert` is here even though the
+# usual shorthand is "feat/fix/perf/breaking": a revert worth pushing to main
+# is undoing something already released, and holding it back until the next
+# feature would leave the bad release as the latest one.
+# `Revert "..."` is `git revert`'s own default subject, kept alongside the
+# conventional `revert:` spelling.
+_BUMP_WORTHY_SUBJECT = re.compile(r"^(feat|fix|perf|revert)(\([^)]*\))?!?:|^Revert \"")
+# Any type at all becomes bump-worthy when marked breaking, `refactor!:`
+# included -- a compatibility promise broken is a release however it is
+# spelled.
+_BREAKING_SUBJECT = re.compile(r"^\w+(\([^)]*\))?!:")
+
+
+def _commit_messages_since_last_tag() -> list[str]:
+    """Full messages of every commit after the most recent `v*` tag."""
+    describe = subprocess.run(
+        ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # No tag at all (a fresh fork, say): every commit is in range, which
+    # matches how git-cliff reads the same history.
+    rev_range = f"{describe.stdout.strip()}..HEAD" if describe.returncode == 0 else "HEAD"
+    log = subprocess.run(
+        ["git", "log", "--format=%B%x00", rev_range],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [message.strip() for message in log.stdout.split("\0") if message.strip()]
+
+
+def has_bump_worthy_commit(messages: list[str] | None = None) -> bool:
+    """Is any commit since the last tag reason enough to cut a release?
+
+    git-cliff cannot answer this: its bump treats every non-skipped commit
+    as at least a patch. The policy lives here instead, on the raw commit
+    messages, so a `ci:`- or `docs:`-only main stays unreleased.
+    """
+    if messages is None:
+        messages = _commit_messages_since_last_tag()
+    for message in messages:
+        subject = message.splitlines()[0]
+        if _BUMP_WORTHY_SUBJECT.match(subject) or _BREAKING_SUBJECT.match(subject):
+            return True
+        # The footer spelling of a breaking change, per the conventional
+        # commits spec.
+        if "BREAKING CHANGE:" in message or "BREAKING-CHANGE:" in message:
+            return True
+    return False
+
+
 def write_changelog(runner=_default_runner) -> None:
     """Regenerate CHANGELOG.md with the bumped version as its newest heading."""
     result = runner(["--bump", "-o", str(CHANGELOG)])
@@ -126,9 +190,14 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_GIT_CLIFF_FAILED
 
+    # git-cliff said a number, but a number is not yet a reason: see
+    # `has_bump_worthy_commit`.
+    if version is not None and not has_bump_worthy_commit():
+        version = None
+
     if version is None:
         print(
-            "nothing to release: no feat/fix/breaking commit since the last tag",
+            "nothing to release: no feat/fix/perf/revert/breaking commit since the last tag",
             file=sys.stderr,
         )
         return EXIT_NOTHING_TO_RELEASE
