@@ -63,15 +63,51 @@ def test_preinstall_stops_only_processes_running_from_instdir_pyenv() -> None:
     $INSTDIR\\pyenv before file copy -- and must stay filtered to that path,
     never a machine-wide kill of every python.exe."""
     body = _macro_body(_read_hooks(), "NSIS_HOOK_PREINSTALL")
+    _assert_pyenv_kill_shape(body, "NSIS_HOOK_PREINSTALL")
+
+
+def test_preuninstall_also_stops_processes_running_from_instdir_pyenv() -> None:
+    """The uninstaller runs both for real uninstalls and as the old
+    version's automatic "replace" step during an upgrade; in both cases a
+    still-running bundled python.exe leaves locked pyenv\\ files behind for
+    the file-removal step to trip on, so the same path-filtered kill must
+    run there too."""
+    body = _macro_body(_read_hooks(), "NSIS_HOOK_PREUNINSTALL")
+    _assert_pyenv_kill_shape(body, "NSIS_HOOK_PREUNINSTALL")
+
+
+def _assert_pyenv_kill_shape(body: str, macro: str) -> None:
     kill_lines = [line for line in body.splitlines() if "Stop-Process" in line]
     assert kill_lines, (
-        "expected NSIS_HOOK_PREINSTALL to Stop-Process the orphaned sidecar "
-        "before files are copied into $INSTDIR"
+        f"expected {macro} to Stop-Process the orphaned sidecar before "
+        "touching files under $INSTDIR"
     )
     for line in kill_lines:
         assert "$INSTDIR\\pyenv" in line, (
             "the kill must be filtered to processes running from the bundled "
             f"interpreter's own tree, never machine-wide: {line!r}"
+        )
+        # Field report (the v0.5.0 update still failed with "Error opening
+        # file for writing"): NSIS is a 32-bit process, so its
+        # `powershell.exe` resolves through WOW64 to the 32-bit PowerShell,
+        # where `Get-Process`'s `.Path` is empty for 64-bit processes (it
+        # reads the target's main module directly) -- the filter matched
+        # nothing and the orphaned 64-bit python.exe survived. The
+        # enumeration must go through WMI (`Get-CimInstance Win32_Process`
+        # and its `ExecutablePath`), which a 32-bit client can query about
+        # 64-bit processes.
+        assert "Get-CimInstance Win32_Process" in line, (
+            "process enumeration must use WMI (Get-CimInstance "
+            "Win32_Process), not Get-Process: a 32-bit PowerShell (which is "
+            "what 32-bit NSIS launches through WOW64) cannot read a 64-bit "
+            f"process's .Path, so a Get-Process filter silently no-ops: {line!r}"
+        )
+        assert "ExecutablePath" in line, (
+            f"the path filter must use WMI's ExecutablePath property: {line!r}"
+        )
+        assert "Wait-Process" in line, (
+            "the kill must wait for the exact processes it stopped to "
+            f"actually exit, not hope a fixed sleep is long enough: {line!r}"
         )
     assert "taskkill" not in body.lower(), (
         "no taskkill by image name here -- that would reach python.exe "
@@ -79,7 +115,7 @@ def test_preinstall_stops_only_processes_running_from_instdir_pyenv() -> None:
     )
     assert re.search(r"^\s*Sleep\s+\d+", body, re.MULTILINE), (
         "expected a settle delay after the kill so the OS releases the file "
-        "handles before the installer starts overwriting pyenv\\"
+        "handles before the installer starts touching pyenv\\"
     )
 
 

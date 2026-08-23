@@ -30,9 +30,9 @@ static assertions, which is still the only thing exercised in CI (no
 
 | Macro | Runs | What it does here |
 |---|---|---|
-| `NSIS_HOOK_PREINSTALL` | before files are copied into `$INSTDIR` | stops any process still executing out of `$INSTDIR\pyenv` (the orphaned Python sidecar an auto-update leaves behind) so overwriting `pyenv\` cannot fail with "Error opening file for writing"; filtered to that path, never a machine-wide kill |
+| `NSIS_HOOK_PREINSTALL` | before files are copied into `$INSTDIR` | stops any process still executing out of `$INSTDIR\pyenv` (the orphaned Python sidecar an auto-update leaves behind) so overwriting `pyenv\` cannot fail with "Error opening file for writing"; filtered to that path, never a machine-wide kill. The enumeration goes through WMI (`Get-CimInstance Win32_Process`), not `Get-Process`: NSIS is 32-bit, so it launches the 32-bit PowerShell through WOW64, and there `Get-Process`'s `.Path` is empty for the 64-bit `python.exe` -- a `.Path` filter silently matches nothing (the v0.5.0 field report). `Wait-Process` then confirms the stopped processes actually exited |
 | `NSIS_HOOK_POSTINSTALL` | after files are copied | creates `models\`, `logs\`, `data\` (FR-8); parses `/VAULT=` in silent mode and writes `config.json` (FR-18) |
-| `NSIS_HOOK_PREUNINSTALL` | before the core uninstall Section removes files | decides upgrade-vs-real-uninstall, asks about the model directory, relocates `models\`/`logs\`/`data\` out of `$INSTDIR` |
+| `NSIS_HOOK_PREUNINSTALL` | before the core uninstall Section removes files | runs the same path-filtered pyenv kill as `NSIS_HOOK_PREINSTALL` (the uninstaller also runs as an upgrade's automatic replace step), then decides upgrade-vs-real-uninstall, asks about the model directory, relocates `models\`/`logs\`/`data\` out of `$INSTDIR` |
 | `NSIS_HOOK_POSTUNINSTALL` | after the core uninstall Section has run | restores (or, on explicit opt-in, discards) the relocated folders |
 
 ## The vault-safety invariant (FR-14)
