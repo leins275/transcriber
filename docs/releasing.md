@@ -61,8 +61,8 @@ files fails CI rather than surfacing later as a confusing lockfile error.
 
 | File | Runs on | Does |
 |---|---|---|
-| `.github/workflows/ci.yml` | every PR | format / lint / type / test across Rust, TypeScript and Python, in four parallel jobs |
-| `.github/workflows/tag.yml` | push to `main` | computes the next version; if there is one, commits the bump + changelog to `main` and pushes the `vX.Y.Z` tag |
+| `.github/workflows/ci.yml` | every PR; called by `tag.yml` for direct pushes | format / lint / type / test across Rust, TypeScript and Python, in four parallel jobs |
+| `.github/workflows/tag.yml` | push to `main` | runs the CI gate first if the push was direct (a PR merge is already gated); then computes the next version; if there is one, commits the bump + changelog to `main` and pushes the `vX.Y.Z` tag |
 | `.github/workflows/release.yml` | `v*` tag | builds the installer, publishes the GitHub Release with it attached |
 
 One hand-off in there is explicit rather than implicit: refs pushed with the
@@ -94,25 +94,22 @@ job makes re-runs safe: a version that is already published is a no-op, a
 tag whose tree disagrees with `version.txt` fails loudly, and a manual
 dispatch aimed at a branch instead of a tag is refused.
 
-### Why CI does not run on `main`
+### How `main` is gated without paying twice
 
 A `pull_request` event builds `refs/pull/N/merge` — the branch already
 merged into main. The PR run therefore tests the exact tree that merging
-produces, and running the same gate again on the push to main reaches the
-same answer at the cost of a second set of Windows runners.
+produces, and running the same gate again on the push to main would reach
+the same answer at the cost of a second set of Windows runners.
 
-That leaves one real gap: anything pushed straight to `main`, bypassing a
-pull request, is never gated. **Close it with branch protection**, not by
-paying for every run twice:
-
-```
-gh api -X PUT repos/:owner/:repo/branches/main/protection   -F required_pull_request_reviews.required_approving_review_count=0   -F required_status_checks.strict=true   -F 'required_status_checks.contexts[]=Rust'   -F 'required_status_checks.contexts[]=Frontend'   -F 'required_status_checks.contexts[]=Python service'   -F 'required_status_checks.contexts[]=Build system'   -F enforce_admins=false   -F restrictions=null
-```
-
-`strict=true` is the load-bearing part: it requires a branch to be up to
-date with main before merging, which is what makes "the PR run tested the
-merge result" true rather than merely usually true. Without it, main can
-move after a PR is validated and the merge produces a tree nothing built.
+So `ci.yml` does not trigger on `push: main` itself. Instead `tag.yml`,
+which runs on every push to main, starts with a `gate` job that asks the
+API whether the pushed commit is the merge result of a merged pull request
+(`merge_commit_sha` match — reliable across merge, squash and rebase, where
+a commit-message heuristic is not). A PR merge skips straight to tagging,
+because its tree was already gated on the PR. A **direct push** bypassed
+that, so `tag.yml` first calls `ci.yml` as a reusable workflow and only
+tags if the full gate passes. Either way, no tag is cut from an untested
+tree, and nothing is tested twice.
 
 `tag.yml` also triggers on **state, not on a commit message**: git-cliff
 reads the range since the most recent `v*` tag, so a squashed merge, a

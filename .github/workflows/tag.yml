@@ -1,6 +1,15 @@
 # Turns a merge to `main` into a version tag.
 #
-# On every push to `main`, git-cliff (via `prepare_release.py`) reads the
+# On every push to `main` this workflow first decides whether the push needs
+# gating. A commit that arrived by merging a pull request was already tested
+# by `ci.yml` on the PR's `refs/pull/N/merge` tree -- the exact tree the
+# merge produced -- so re-running the gate would only reach the same answer
+# on a second set of Windows runners. A *direct* push bypassed all of that,
+# so the `checks` job runs the full CI gate (as a reusable workflow call)
+# before anything is tagged. Either way, no tag is cut from an untested
+# tree.
+#
+# After the gate, git-cliff (via `prepare_release.py`) reads the
 # conventional commits since the most recent `v*` tag and decides whether a
 # release is due. If it is, this job writes the new version everywhere
 # (version.txt, the five manifests, both lockfiles' workspace entries),
@@ -28,7 +37,9 @@ on:
 
 # Serialize, never cancel: two quick merges must produce two orderly bumps
 # (the second run sees the first run's tag and computes only what is left),
-# not two runs racing to push to main.
+# not two runs racing to push to main. A direct push holds the group for
+# the length of its CI gate as well -- a later push simply queues behind it,
+# which is the same orderly outcome.
 concurrency:
   group: tag-release
   cancel-in-progress: false
@@ -37,9 +48,64 @@ permissions:
   contents: write
   # `gh workflow run` needs this to dispatch release.yml.
   actions: write
+  # The gate job asks the API which merged PR (if any) produced the pushed
+  # commit.
+  pull-requests: read
 
 jobs:
+  # Was this push produced by merging a pull request, or written to main
+  # directly? The commit message is not a reliable witness (a squash merge
+  # carries whatever title the PR had), so ask the API: list the PRs
+  # associated with the pushed commit and look for a merged one whose
+  # `merge_commit_sha` is exactly this commit. That matches all three merge
+  # methods (merge commit, squash, rebase -- for rebase the last rebased
+  # commit is the merge_commit_sha) and does not match a commit that merely
+  # sat on some PR branch once and is now being pushed again by hand.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      direct: ${{ steps.decide.outputs.direct }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A manual dispatch has no pushed commit to interrogate; it keeps
+          # its historical meaning of "just (re)compute the tag from main".
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "manual dispatch -- tagging without re-running checks"
+            echo "direct=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sha="${{ github.sha }}"
+          merged=$(gh api "repos/${{ github.repository }}/commits/$sha/pulls" \
+            --jq "[.[] | select(.merged_at != null and .merge_commit_sha == \"$sha\")] | length")
+          if [ "$merged" -gt 0 ]; then
+            echo "$sha is the merge result of an already-gated pull request"
+            echo "direct=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$sha was pushed to main directly -- running the CI gate"
+            echo "direct=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The same gate a PR runs, on the same tree -- `ci.yml` invoked as a
+  # reusable workflow rather than a copy that could drift from it.
+  checks:
+    needs: gate
+    if: needs.gate.outputs.direct == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   tag:
+    # `!cancelled()` rather than the default: with the default behavior a
+    # skipped `checks` (the PR-merge path) would skip this job too. Tagging
+    # proceeds when checks either passed or were legitimately skipped, and
+    # never when they failed.
+    needs: [gate, checks]
+    if: ${{ !cancelled() && needs.gate.result == 'success' && (needs.checks.result == 'success' || needs.checks.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

@@ -25,7 +25,7 @@
 
 name: CI
 
-# `pull_request` only, deliberately -- not `push: main` as well.
+# `pull_request` plus `workflow_call`, deliberately -- not `push: main`.
 #
 # GitHub builds `refs/pull/N/merge` for a pull_request event: your branch
 # already merged into main. The PR run therefore tests the exact tree that
@@ -33,14 +33,17 @@ name: CI
 # afterwards builds it a second time to reach the same answer. On a Windows
 # runner that is not a small duplication.
 #
-# What this gives up is a gate on anything reaching main *without* a pull
-# request. That is a real gap, and it is closed by branch protection
-# (require a PR, require these checks, require the branch to be up to date)
-# rather than by paying for every run twice -- see docs/releasing.md.
+# What that alone gives up is a gate on anything reaching main *without* a
+# pull request. `workflow_call` closes that gap: `tag.yml` runs on every
+# push to main, detects whether the pushed commit landed via a merged PR,
+# and calls this workflow as its gate only for direct pushes -- so a direct
+# push is tested exactly like a PR would have been, and a PR merge is not
+# paid for twice. See docs/releasing.md.
 #
 # `workflow_dispatch` stays so main can still be checked on demand.
 on:
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 # A new push to a PR makes the previous run's answer irrelevant; a Windows
