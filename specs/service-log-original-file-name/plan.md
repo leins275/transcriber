@@ -1,7 +1,7 @@
 ---
 slug: service-log-original-file-name
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Service log shows the original file name
@@ -87,7 +87,7 @@ T1/T2 both touch `service/mod.rs` + `service/http.rs`, so they serialize; T3 (we
 
 ## Tasks
 
-### [ ] T1: Record the original file name at submit time (write path)  [deps: —]
+### [x] T1: Record the original file name at submit time (write path)  [deps: —]
 
 - **Files**: `apps/desktop/src-tauri/src/service/mod.rs`, `apps/desktop/src-tauri/src/service/http.rs`, `apps/desktop/src-tauri/src/service/fake.rs`, `apps/desktop/src-tauri/src/jobs.rs`
 - **Test first**: `apps/desktop/src-tauri/src/service/http.rs` (`#[cfg(test)] mod tests`) and `apps/desktop/src-tauri/src/jobs.rs` (`#[cfg(test)] mod tests`) — cases:
@@ -99,7 +99,7 @@ T1/T2 both touch `service/mod.rs` + `service/http.rs`, so they serialize; T3 (we
 - **Skills**: —
 - **Done when**: all new/extended cases pass and the existing suite is green: `cargo test --workspace` passes; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all` clean.
 
-### [ ] T2: Surface `meeting_json` through the read path (Rust parse-once)  [deps: T1]
+### [x] T2: Surface `meeting_json` through the read path (Rust parse-once)  [deps: T1]
 
 - **Files**: `apps/desktop/src-tauri/src/service/mod.rs`, `apps/desktop/src-tauri/src/service/http.rs`, `apps/desktop/src-tauri/src/commands/ledger.rs`
 - **Test first**: `apps/desktop/src-tauri/src/service/http.rs` and `apps/desktop/src-tauri/src/commands/ledger.rs` test modules — cases (wiremock `GET /v1/jobs` unless noted):
@@ -111,7 +111,7 @@ T1/T2 both touch `service/mod.rs` + `service/http.rs`, so they serialize; T3 (we
 - **Skills**: —
 - **Done when**: all cases pass; `cargo test --workspace` green; clippy/fmt clean.
 
-### [ ] T3: Render the recorded name with the meeting-folder fallback (webview)  [deps: —]
+### [x] T3: Render the recorded name with the meeting-folder fallback (webview)  [deps: —]
 
 - **Files**: `apps/desktop/src/types.ts`, `apps/desktop/src/components/LedgerPanel.tsx`, `apps/desktop/src/components/LedgerPanel.test.tsx`
 - **Test first**: `apps/desktop/src/components/LedgerPanel.test.tsx` — cases (extend `buildRow`, which must gain `original_file_name: null` as its default so every existing test still models a pre-feature row):
@@ -125,7 +125,7 @@ T1/T2 both touch `service/mod.rs` + `service/http.rs`, so they serialize; T3 (we
 - **Skills**: `frontend-toolkit:internal-ui` (mandatory), `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: all Vitest cases pass: `npm --prefix apps/desktop run test` green; `npm --prefix apps/desktop run lint` and `run type` clean.
 
-### [ ] T4: Integration verification — full QA, zero-Python-diff, app-level check  [deps: T1, T2, T3]
+### [x] T4: Integration verification — full QA, zero-Python-diff, app-level check  [deps: T1, T2, T3]
 
 - **Files**: none (verification-only; the only edit is this plan's own status marker)
 - **Test first**: no new test files — this task executes the verification the `desktop` profile prescribes and the spec's cross-cutting acceptance criteria:

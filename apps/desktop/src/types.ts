@@ -192,6 +192,12 @@ export type LedgerJobView = {
   device: string | null;
   source_path: string | null;
   output_path: string | null;
+  /** The recording's original file name as it was dropped, recorded at
+   * submit time in the ledger's `meeting_json`. `null` for every row that
+   * predates that (and for retranscribes of an already-filed recording,
+   * where only `source.<ext>` exists on disk) -- those fall back to a name
+   * derived from `source_path`. Parsed once on the Rust side. */
+  original_file_name: string | null;
   audio_duration_sec: number | null;
   elapsed_sec: number | null;
   realtime_factor: number | null;
