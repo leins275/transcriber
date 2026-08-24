@@ -2,9 +2,10 @@
 
 A standalone Python microservice that turns a meeting recording file into a
 `transcript.json`, using whisper `large-v3` locally (faster-whisper /
-CTranslate2) with a provider abstraction that makes swapping to a cloud STT
-provider a config change. See `../../specs/transcription-service/spec.md` for
-the full specification.
+CTranslate2) behind a lazily-resolved provider registry that registers
+exactly one provider, `local`. Every model runtime this service ships runs
+on this machine; no audio or transcript text is ever sent anywhere. See
+`../../specs/transcription-service/spec.md` for the full specification.
 
 This package is self-contained: it imports nothing from the rest of the
 repository and builds, lints, type-checks and tests standalone.
@@ -63,15 +64,12 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `model_path` | `TRANSCRIBER_MODEL_PATH` | `<app_dir>/models` |
 | `device` | `TRANSCRIBER_DEVICE` | `auto` (`cuda` if a device is probed, else `cpu`) |
 | `compute_type` | `TRANSCRIBER_COMPUTE_TYPE` | `float16` on cuda / `int8` on cpu |
-| `provider` | `TRANSCRIBER_PROVIDER` | `local` |
-| `cloud_model` | `TRANSCRIBER_CLOUD_MODEL` | none |
-| `provider_api_key` | `TRANSCRIBER_PROVIDER_API_KEY` (else `OPENAI_API_KEY`/`GROQ_API_KEY`) | none -- env only, never the config file or a CLI flag (FR-9) |
+| `provider` | `TRANSCRIBER_PROVIDER` | `local` (the only registered provider) |
 | `db_path` | `TRANSCRIBER_DB_PATH` | `<app_dir>/data/jobs.sqlite3` |
 | `allowed_roots` | `TRANSCRIBER_ALLOWED_ROOTS` (`os.pathsep`-separated) | empty (fail closed) |
 | `token` | `TRANSCRIBER_TOKEN` | auto-generated, >= 32 chars |
 | `language` | `TRANSCRIBER_LANGUAGE` | none (auto-detect) |
 | `filter_hallucinations` | `TRANSCRIBER_FILTER_HALLUCINATIONS` | `true` |
-| `max_cloud_upload_mb` | `TRANSCRIBER_MAX_CLOUD_UPLOAD_MB` | `25` |
 | `job_timeout_sec` | `TRANSCRIBER_JOB_TIMEOUT_SEC` | none |
 | `log_level` | `TRANSCRIBER_LOG_LEVEL` | `INFO` |
 | `diarize` | `TRANSCRIBER_DIARIZE` | `false` |
@@ -79,7 +77,6 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
-| `llm_provider` | `TRANSCRIBER_LLM_PROVIDER` | `llama_cpp` (built-in; `openai_compat` calls an external server) |
 | `llm_model` | `TRANSCRIBER_LLM_MODEL` | `qwen3.6-35b-a3b` |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
 | `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | `ggml-org/Qwen3.6-35B-A3B-GGUF` (pinned revision) / `Qwen3.6-35B-A3B-Q4_K_M.gguf` |
@@ -88,12 +85,10 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
 | `llm_temperature` | `TRANSCRIBER_LLM_TEMPERATURE` | `0.3` |
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
-| `llm_base_url` | `TRANSCRIBER_LLM_BASE_URL` | none (`openai_compat` only, e.g. `http://127.0.0.1:1234/v1` for LM Studio) |
-| `llm_api_key` | `TRANSCRIBER_LLM_API_KEY` | none -- env or config file, never a CLI flag (FR-9) |
 | `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the ~20 GB working set after each LLM job) |
 
 `Config.public()` (what `/health` and log lines may show) never includes
-`token`, `provider_api_key`, `hf_token` or `llm_api_key`.
+`token` or `hf_token`.
 
 ## Derived (LLM) jobs
 
@@ -109,13 +104,13 @@ instead of `audio_path`:
 | `report` | everything in a project directory | `<project>/reports/<YYMMDD>/report.md` + `report.pdf` |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `export.pdf` |
 
-All of them run on the built-in llama.cpp runtime (`llm_provider:
-"llama_cpp"`, a GGUF fetched via `POST /v1/llm-model/download` or
-`download-llm-model`) or an external OpenAI-compatible server
-(`llm_provider: "openai_compat"` + `llm_base_url`). Long transcripts are
-map-reduced against `llm_ctx`; extraction output is grammar-constrained
-JSON with one bounded repair retry (`error_kind: "llm_output"` after
-that). Screenshots come from the recording's video track via PyAV at the
+All of them run on the built-in llama.cpp runtime -- the only LLM engine
+this service ships, with no config selector to point it elsewhere -- against
+a GGUF fetched via `POST /v1/llm-model/download` or `download-llm-model`.
+Long transcripts are map-reduced against `llm_ctx`; extraction output is
+grammar-constrained JSON with one bounded repair retry
+(`error_kind: "llm_output"` after that). Screenshots come from the
+recording's video track via PyAV at the
 timestamps the model cites -- an audio-only recording simply gets none,
 and a failed screenshot pass degrades (items are written without images,
 the job records a warning) rather than failing the job. PDF rendering
@@ -236,10 +231,11 @@ The local `faster-whisper` provider has no per-request cost -- there is no
 metered API call to price. `cost_usd` is stored as SQL `NULL` (and
 serialized as JSON `null`) in that case, never `0.0`, because `0.0` would
 falsely claim "this ran for free" when the real answer is "this question
-does not apply." The cloud (`litellm`) provider always reports a real
-`cost_usd`/`currency` pair when the provider prices the request, and
-`NULL`/a logged warning when even litellm's cost hooks come back empty --
-never a fabricated `0.0`.
+does not apply." Since every shipping runtime is local, `cost_usd` is
+always `NULL` in practice; the column and the JSON field stay because they
+are part of the ledger/API contract the desktop app consumes, and a
+provider that did price its requests would report a real
+`cost_usd`/`currency` pair rather than a fabricated `0.0`.
 
 ## Idle memory footprint (NFR-6)
 

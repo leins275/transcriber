@@ -1,8 +1,8 @@
 """Test doubles for the provider protocol (FR-4).
 
 Owned by T8; imported by T10-T15's tests as the hook that stands in for a
-real model or cloud call, so the default test suite stays model-free,
-GPU-free and network-free (FR-15).
+real model call, so the default test suite stays model-free, GPU-free and
+network-free (FR-15).
 """
 
 from __future__ import annotations

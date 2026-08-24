@@ -1,10 +1,11 @@
-"""Tests for the error taxonomy and provider-fault classifier (FR-8)."""
+"""Tests for the error taxonomy and the secret-redaction seam (FR-8)."""
 
 from __future__ import annotations
 
 import pytest
 
-from transcription.errors import ErrorKind, ServiceError, classify_http_status, redact
+from transcription import errors
+from transcription.errors import ErrorKind, ServiceError, redact
 
 ALL_KINDS = [
     "invalid_request",
@@ -31,25 +32,11 @@ def test_error_kind_has_exactly_the_taxonomy_values() -> None:
     assert {kind.value for kind in ErrorKind} == set(ALL_KINDS)
 
 
-@pytest.mark.parametrize(
-    ("status", "kind", "retryable"),
-    [
-        (402, ErrorKind.PROVIDER_PAYMENT_REQUIRED, False),
-        (401, ErrorKind.PROVIDER_AUTH, False),
-        (403, ErrorKind.PROVIDER_AUTH, False),
-        (429, ErrorKind.PROVIDER_RATE_LIMITED, True),
-        (500, ErrorKind.PROVIDER_UNAVAILABLE, True),
-        (503, ErrorKind.PROVIDER_UNAVAILABLE, True),
-        (400, ErrorKind.INVALID_REQUEST, False),
-        (404, ErrorKind.INVALID_REQUEST, False),
-        (422, ErrorKind.INVALID_REQUEST, False),
-        (200, ErrorKind.INTERNAL, False),
-    ],
-)
-def test_classify_http_status(status: int, kind: ErrorKind, retryable: bool) -> None:
-    err = classify_http_status(status)
-    assert err.kind == kind
-    assert err.retryable is retryable
+def test_no_http_status_classifier_ships() -> None:
+    """The HTTP-status fault ladder only ever served callers that talked to a
+    remote model API; with those gone the module ships the taxonomy, the
+    `ServiceError` carrier and `redact` -- nothing that maps a wire status."""
+    assert not hasattr(errors, "classify_http_status")
 
 
 def test_service_error_carries_fields() -> None:

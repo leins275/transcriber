@@ -26,10 +26,10 @@ JobType = Literal["transcribe", "summarize", "action_items", "facts", "report", 
 class Segment(BaseModel):
     """One transcript segment, in vexa's ``verbose_json`` mapper shape (FR-6).
 
-    The three confidence fields are ``Optional``: the local provider always
-    populates them, but a cloud STT provider legitimately omits them when
-    the upstream API doesn't return them -- they must never be fabricated
-    (FR-6, FR-4 acceptance: cloud and local jobs share one schema).
+    The three confidence fields are ``Optional``: the local provider
+    populates them, but a provider that does not report per-segment
+    confidence legitimately leaves them unset -- they must never be
+    fabricated (FR-6, FR-4 acceptance: every provider shares one schema).
     """
 
     id: int

@@ -9,7 +9,7 @@
 # Adapted from Vexa (Vexa-ai/vexa), Apache-2.0 -- origin:
 # core/meetings/modules/whisper/src/transcription-client.ts:57-88,
 # reinforced by docs/docs/how-to/custom-stt.mdx:114-124
-"""Error taxonomy and provider-fault classifier (FR-8).
+"""Error taxonomy and secret redaction (FR-8).
 
 Every failure in this service -- validation, path allowlist, decode
 failures, provider faults -- is attributed to one of the ``ErrorKind``
@@ -89,61 +89,3 @@ class ServiceError(Exception):
             "error_message": self.message,
             "provider_status": self.status,
         }
-
-
-def classify_http_status(status: int, detail: str | None = None) -> ServiceError:
-    """Reproduce vexa's fault ladder, renamed onto our ``ErrorKind`` values.
-
-    402 -> payment_required; 401/403 -> unauthorized; 429 -> rate_limited
-    (retryable); >=500 -> unavailable (retryable); >=400 -> bad_request;
-    else -> unknown/internal.
-    """
-    sanitized = redact(detail) if detail is not None else None
-
-    if status == 402:
-        return ServiceError(
-            ErrorKind.PROVIDER_PAYMENT_REQUIRED,
-            "provider requires payment",
-            status=status,
-            retryable=False,
-            detail=sanitized,
-        )
-    if status in (401, 403):
-        return ServiceError(
-            ErrorKind.PROVIDER_AUTH,
-            "provider rejected credentials",
-            status=status,
-            retryable=False,
-            detail=sanitized,
-        )
-    if status == 429:
-        return ServiceError(
-            ErrorKind.PROVIDER_RATE_LIMITED,
-            "provider rate limited the request",
-            status=status,
-            retryable=True,
-            detail=sanitized,
-        )
-    if status >= 500:
-        return ServiceError(
-            ErrorKind.PROVIDER_UNAVAILABLE,
-            "provider is unavailable",
-            status=status,
-            retryable=True,
-            detail=sanitized,
-        )
-    if status >= 400:
-        return ServiceError(
-            ErrorKind.INVALID_REQUEST,
-            "provider rejected the request",
-            status=status,
-            retryable=False,
-            detail=sanitized,
-        )
-    return ServiceError(
-        ErrorKind.INTERNAL,
-        "unclassified provider response",
-        status=status,
-        retryable=False,
-        detail=sanitized,
-    )

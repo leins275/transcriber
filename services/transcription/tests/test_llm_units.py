@@ -38,8 +38,7 @@ from transcription.llm.shapes import (
 
 
 def test_importing_the_llm_package_never_imports_an_llm_library() -> None:
-    for name in ("llama_cpp", "litellm"):
-        sys.modules.pop(name, None)
+    sys.modules.pop("llama_cpp", None)
     import importlib
 
     import transcription.llm
@@ -50,11 +49,28 @@ def test_importing_the_llm_package_never_imports_an_llm_library() -> None:
     from transcription.llm import validate_llm_provider_name
 
     validate_llm_provider_name("llama_cpp")
-    validate_llm_provider_name("openai_compat")
     assert "llama_cpp" not in sys.modules
 
     with pytest.raises(ServiceError):
         validate_llm_provider_name("bogus")
+
+
+def test_the_builtin_llama_cpp_engine_is_the_only_registered_engine() -> None:
+    from transcription.llm import BUILTIN_ENGINE, known_llm_provider_names
+
+    assert known_llm_provider_names() == {BUILTIN_ENGINE}
+    assert BUILTIN_ENGINE == "llama_cpp"
+
+
+def test_the_external_openai_compatible_engine_is_rejected() -> None:
+    from transcription.llm import validate_llm_provider_name
+
+    with pytest.raises(ServiceError) as excinfo:
+        validate_llm_provider_name("openai_compat")
+
+    assert excinfo.value.kind.value == "invalid_request"
+    assert "openai_compat" in str(excinfo.value)
+    assert "llama_cpp" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------- chunking

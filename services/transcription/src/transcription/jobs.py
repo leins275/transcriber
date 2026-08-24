@@ -130,7 +130,7 @@ class JobManager:
         self._llm_factory: Callable[[Config], LlmProvider] = (
             llm_factory
             if llm_factory is not None
-            else (lambda config: get_llm_provider(config.llm_provider, config))
+            else (lambda config: get_llm_provider(BUILTIN_ENGINE, config))
         )
         self._frame_extractor: FrameExtractorProtocol | None = None
         self._frame_extractor_factory: Callable[[], FrameExtractorProtocol] = (
@@ -210,19 +210,14 @@ class JobManager:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
 
         Mirrors `provider_info()`: never constructs an engine. `model_present`
-        reports whether the configured GGUF file is on disk (always `True`
-        for the external-server engine, whose model is not this process's
-        concern).
+        reports whether the configured GGUF file is on disk -- the built-in
+        llama.cpp engine is the only one there is, so there is no engine
+        selector to report.
         """
-        if self._config.llm_provider == BUILTIN_ENGINE:
-            model_file = Path(self._config.llm_model_path) / self._config.llm_model_file
-            model_present = model_file.is_file()
-        else:
-            model_present = True
+        model_file = Path(self._config.llm_model_path) / self._config.llm_model_file
         return {
-            "llm_provider": self._config.llm_provider,
             "llm_model": self._config.llm_model,
-            "llm_model_present": model_present,
+            "llm_model_present": model_file.is_file(),
         }
 
     async def submit(
@@ -293,7 +288,10 @@ class JobManager:
             provider_name = "none"
             model_name = "none"
         else:
-            provider_name = provider or self._config.llm_provider
+            # The built-in llama.cpp engine is the only shipping one, so an
+            # unnamed LLM job always lands there; there is no config-file
+            # engine selector to consult (FR-3).
+            provider_name = provider or BUILTIN_ENGINE
             model_name = model or self._config.llm_model
             validate_llm_provider_name(provider_name)
 
