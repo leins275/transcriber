@@ -21,7 +21,7 @@ from fakes import FakeProvider
 from fastapi.testclient import TestClient
 
 import transcription
-from transcription import providers
+from transcription import llm, providers
 from transcription.app import create_app
 from transcription.config import Config
 from transcription.ledger import Ledger
@@ -92,9 +92,9 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         "model_present": False,
         "cuda_runtime_present": None,
         # The LLM engine's counterpart fields (same E15 rule: reported from
-        # config, never by constructing an engine). The default engine is
-        # the built-in one, whose GGUF is absent in a fresh tmp app dir.
-        "llm_provider": "llama_cpp",
+        # config, never by constructing an engine). There is no engine
+        # selector to report any more (FR-3): the built-in llama.cpp engine
+        # is the only one, and its GGUF is absent in a fresh tmp app dir.
         "llm_model": "qwen3.6-35b-a3b",
         "llm_model_present": False,
         # `None` on this GPU-less-probed host, mirroring
@@ -253,6 +253,75 @@ def test_post_job_with_traversal_path_creates_no_ledger_row(
     }
 
     client.post("/v1/jobs", json=body, headers=AUTH)
+
+    ledger = Ledger(config.db_path)
+    try:
+        assert ledger.list_jobs() == []
+    finally:
+        ledger.close()
+
+
+def test_post_job_with_the_removed_cloud_provider_is_rejected_and_creates_no_ledger_row(
+    client: TestClient,
+    config: Config,
+    valid_job_body: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-1: a leftover `provider: "cloud"` is an explicit `invalid_request`
+    naming the known providers, rejected before any ledger row exists.
+
+    The registry is process-global and other test modules register fakes into
+    it, so any stray `"cloud"` entry is dropped for this test's duration --
+    the assertion is about the *shipping* registry, whatever ran before.
+    """
+    monkeypatch.delitem(providers._REGISTRY, "cloud", raising=False)
+    body = {**valid_job_body, "provider": "cloud"}
+
+    response = client.post("/v1/jobs", json=body, headers=AUTH)
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["error_kind"] == "invalid_request"
+    assert "unknown provider 'cloud'" in payload["error_message"]
+    assert "local" in payload["error_message"]
+
+    ledger = Ledger(config.db_path)
+    try:
+        assert ledger.list_jobs() == []
+    finally:
+        ledger.close()
+
+
+def test_llm_job_naming_the_removed_openai_compatible_engine_is_rejected(
+    client: TestClient,
+    config: Config,
+    tmp_app_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-2: `provider="openai_compat"` on a derived job is an
+    `invalid_request` from `validate_llm_provider_name`, and no ledger row is
+    created. Order-independent for the same reason as the cloud case above.
+    """
+    monkeypatch.delitem(llm._REGISTRY, "openai_compat", raising=False)
+    meeting = tmp_app_dir / "vault" / "PRJ" / "260101 - Planning"
+    meeting.mkdir(parents=True)
+    (meeting / "transcript.json").write_text(
+        '{"schema_version": 1, "text": "hi", "segments": []}', encoding="utf-8"
+    )
+    body = {
+        "job_type": "summarize",
+        "input_path": str(meeting),
+        "output_dir": str(meeting),
+        "provider": "openai_compat",
+    }
+
+    response = client.post("/v1/jobs", json=body, headers=AUTH)
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["error_kind"] == "invalid_request"
+    assert "unknown llm provider 'openai_compat'" in payload["error_message"]
+    assert "llama_cpp" in payload["error_message"]
 
     ledger = Ledger(config.db_path)
     try:

@@ -212,13 +212,16 @@ def test_finish_cancelled_records_error_kind_cancelled(tmp_path: Path) -> None:
         ledger.close()
 
 
-def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None:
+def test_reported_cost_is_stored_and_an_unreported_one_stays_null(tmp_path: Path) -> None:
+    """The `cost_usd`/`currency` columns are part of the ledger contract the
+    desktop reads. A job that reports a cost stores it; a job that reports
+    none (every local run) leaves the column NULL -- never 0.0."""
     ledger = Ledger(tmp_path / "jobs.sqlite3")
     try:
-        _insert(ledger, "job-cloud", provider="cloud")
-        ledger.mark_running("job-cloud")
+        _insert(ledger, "job-with-cost", provider="local")
+        ledger.mark_running("job-with-cost")
         ledger.finish_succeeded(
-            "job-cloud",
+            "job-with-cost",
             elapsed_sec=1.0,
             audio_duration_sec=2.0,
             segment_count=1,
@@ -226,10 +229,10 @@ def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None
             currency="USD",
         )
 
-        _insert(ledger, "job-local", provider="local")
-        ledger.mark_running("job-local")
+        _insert(ledger, "job-without-cost", provider="local")
+        ledger.mark_running("job-without-cost")
         ledger.finish_succeeded(
-            "job-local",
+            "job-without-cost",
             elapsed_sec=1.0,
             audio_duration_sec=2.0,
             segment_count=1,
@@ -237,15 +240,15 @@ def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None
 
         raw = sqlite3.connect(ledger.db_path)
         try:
-            cloud_row = raw.execute(
-                "SELECT cost_usd, currency FROM jobs WHERE job_id = ?", ("job-cloud",)
+            costed_row = raw.execute(
+                "SELECT cost_usd, currency FROM jobs WHERE job_id = ?", ("job-with-cost",)
             ).fetchone()
-            assert isinstance(cloud_row[0], float)
-            assert cloud_row[0] == pytest.approx(0.006)
-            assert cloud_row[1] == "USD"
+            assert isinstance(costed_row[0], float)
+            assert costed_row[0] == pytest.approx(0.006)
+            assert costed_row[1] == "USD"
 
             (is_null,) = raw.execute(
-                "SELECT cost_usd IS NULL FROM jobs WHERE job_id = ?", ("job-local",)
+                "SELECT cost_usd IS NULL FROM jobs WHERE job_id = ?", ("job-without-cost",)
             ).fetchone()
             assert is_null == 1
         finally:

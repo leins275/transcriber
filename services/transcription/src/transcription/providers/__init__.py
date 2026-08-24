@@ -1,10 +1,10 @@
 """Provider registry: name -> "module:Class" strings, resolved lazily (FR-4).
 
-This file is written once (T8) and never edited again: `_REGISTRY` holds the
-concrete providers as import-path strings, resolved with `importlib` only
-*inside* `get_provider`, so importing this package alone never pulls in
-`faster_whisper` or `litellm` (NFR-1, NFR-6). T10 and T11 add
-`local_whisper.py` and `litellm_cloud.py` later without touching this module.
+`_REGISTRY` holds the concrete providers as import-path strings, resolved with
+`importlib` only *inside* `get_provider`, so importing this package alone never
+pulls in `faster_whisper` (NFR-1, NFR-6). Transcription is local-only: the
+built-in `local_whisper.py` is the sole shipping provider; the `register()`
+hook adds test doubles without touching this module.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
 _REGISTRY: dict[str, str | type] = {
     "local": "transcription.providers.local_whisper:LocalWhisperProvider",
-    "cloud": "transcription.providers.litellm_cloud:LiteLLMProvider",
 }
 
 
@@ -43,8 +42,8 @@ def validate_provider_name(name: str) -> None:
 
     Checking membership in ``_REGISTRY`` never imports a provider module, so
     a bogus provider name is still rejected before any job/ledger row exists
-    (E1) without paying for a `faster_whisper`/`litellm` import to find that
-    out on the request path (E15).
+    (E1) without paying for a `faster_whisper` import to find that out on the
+    request path (E15).
     """
     if name not in _REGISTRY:
         known = ", ".join(sorted(_REGISTRY))

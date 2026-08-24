@@ -300,15 +300,18 @@ def test_documented_failure_exit_codes_are_pairwise_distinct() -> None:
 def test_provider_override_shows_up_in_stdout_summary(
     tmp_app_dir: Path, audio_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    providers.register("cloud", FakeProvider)
-    output_dir = tmp_app_dir / "out-cloud"
+    """`--provider` selects a registered provider by name and the summary
+    reports it -- proven through the `register()` test hook, the only way a
+    name other than the shipping `local` enters the registry."""
+    providers.register("fake_stt", FakeProvider)
+    output_dir = tmp_app_dir / "out-fake-stt"
 
-    code = main(_common_args(tmp_app_dir, audio_file, output_dir, provider="cloud"))
+    code = main(_common_args(tmp_app_dir, audio_file, output_dir, provider="fake_stt"))
 
     assert code == 0
     captured = capsys.readouterr()
     summary = json.loads(captured.out.strip())
-    assert summary["provider"] == "cloud"
+    assert summary["provider"] == "fake_stt"
 
 
 def test_model_path_flag_beats_env_beats_config_file(

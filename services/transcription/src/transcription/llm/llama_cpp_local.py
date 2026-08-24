@@ -1,8 +1,8 @@
-"""Built-in llama.cpp LLM engine (the primary runtime).
+"""Built-in llama.cpp LLM engine (the only LLM runtime).
 
-This module and ``openai_compat.py`` are the only places an LLM-library name
-(``llama_cpp``, ``litellm``) may appear outside ``config.py`` (the FR-4
-isolation rule, enforced by the grep test in ``test_attribution.py``).
+This module is the only place an LLM-library name (``llama_cpp``) may appear
+outside ``config.py`` (the FR-4 isolation rule, enforced by the grep test in
+``test_attribution.py``).
 
 ``llama_cpp`` is imported lazily inside :meth:`LlamaCppProvider._load` (the
 ``diarizer.py`` pattern), so constructing the provider -- and importing this

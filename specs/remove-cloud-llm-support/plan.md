@@ -1,7 +1,7 @@
 ---
 slug: remove-cloud-llm-support
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Remove cloud LLM and cloud STT support (local-only)
@@ -75,7 +75,7 @@ the moment those clear, regardless of T4/T5.)
 
 ## Tasks
 
-### [ ] T1: Remove the openai_compat LLM engine  [deps: —]
+### [x] T1: Remove the openai_compat LLM engine  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/llm/openai_compat.py` (delete),
   `services/transcription/src/transcription/llm/__init__.py`,
@@ -98,7 +98,7 @@ the moment those clear, regardless of T4/T5.)
   full service suite (`uv run --directory services/transcription pytest -q`), `ruff check .`
   and `mypy src` (same directory) stay green.
 
-### [ ] T2: Remove the cloud STT provider  [deps: —]
+### [x] T2: Remove the cloud STT provider  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/providers/litellm_cloud.py` (delete),
   `services/transcription/src/transcription/providers/__init__.py`,
@@ -121,7 +121,7 @@ the moment those clear, regardless of T4/T5.)
   (the `test_cli.py` cloud-name test still passes via the `register()` hook — renamed later
   by T5).
 
-### [ ] T4: jobs.py engine resolution + HTTP-level rejections  [deps: T1, T2]
+### [x] T4: jobs.py engine resolution + HTTP-level rejections  [deps: T1, T2]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`,
   `services/transcription/tests/test_jobs.py`,
@@ -145,7 +145,7 @@ the moment those clear, regardless of T4/T5.)
 - **Done when**: `jobs.py` no longer reads `config.llm_provider`;
   `uv run --directory services/transcription pytest -q`, `ruff check .`, `mypy src` pass.
 
-### [ ] T5: Prune dead seam helpers and cloud remnants in remaining tests  [deps: T1, T2]
+### [x] T5: Prune dead seam helpers and cloud remnants in remaining tests  [deps: T1, T2]
 
 - **Files**: `services/transcription/src/transcription/errors.py`,
   `services/transcription/src/transcription/cli.py`,
@@ -176,7 +176,7 @@ the moment those clear, regardless of T4/T5.)
   `test_provider_libraries_are_confined_to_the_provider_seam` passes;
   `uv run --directory services/transcription pytest -q`, `ruff check .`, `mypy src` pass.
 
-### [ ] T6: Drop the litellm dependency and regenerate uv.lock  [deps: T1, T2]
+### [x] T6: Drop the litellm dependency and regenerate uv.lock  [deps: T1, T2]
 
 - **Files**: `services/transcription/pyproject.toml`, `services/transcription/uv.lock`
 - **Test first**: red/green via the lock gate — after editing `pyproject.toml`,
@@ -195,7 +195,7 @@ the moment those clear, regardless of T4/T5.)
   `uv run --directory services/transcription pytest -q` passes in the re-synced
   environment (proving nothing still imports litellm).
 
-### [ ] T7: Docs and comments follow reality  [deps: —]
+### [x] T7: Docs and comments follow reality  [deps: —]
 
 - **Files**: `services/transcription/README.md`, `docs/config-contract.md`,
   `services/transcription/src/transcription/__init__.py`, `scripts/build_pyenv.py`
@@ -216,7 +216,7 @@ the moment those clear, regardless of T4/T5.)
   acceptance); `uv run --directory services/transcription pytest -q` still passes (the
   `__init__.py` docstring edit is import-safe).
 
-### [ ] T3: Purge the config surface  [deps: T4]
+### [x] T3: Purge the config surface  [deps: T4]
 
 - **Files**: `services/transcription/src/transcription/config.py`,
   `services/transcription/tests/test_config.py`
@@ -244,7 +244,7 @@ the moment those clear, regardless of T4/T5.)
   note); `uv run --directory services/transcription pytest -q`, `ruff check .`,
   `mypy src` pass.
 
-### [ ] T8: Full QA gate and cross-language verification  [deps: T3, T5, T6, T7]
+### [x] T8: Full QA gate and cross-language verification  [deps: T3, T5, T6, T7]
 
 - **Files**: fix-forward only — may touch any file already declared by T1–T7
   (`services/transcription/**`, `docs/config-contract.md`, `scripts/build_pyenv.py`);
