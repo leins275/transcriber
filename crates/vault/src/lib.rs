@@ -38,18 +38,29 @@
 //!   <PROJECT>/
 //!     <date> - <Title>/
 //!       source.<ext>
+//!       action items/<slug>/<slug>.md   (F2's LLM extraction)
+//!       facts/<slug>/<slug>.md          (F2's LLM extraction)
+//!       exports/<YYMMDD>/               (per-recording export)
+//!     reports/<YYMMDD>/                 (project-level, F2's LLM jobs)
 //!   unsorted/
 //!     <YYMMDD of ingest> - <original stem>/
 //!       source.<ext>
 //! ```
 //!
 //! Every ingested recording — sorted or unsorted — gets its own folder, so
-//! that later artifacts (a transcript, a summary, a per-recording export)
-//! can be written next to the source. `source.*`, `transcript.json`,
-//! `summary.md`, `exports` (inside a meeting folder) and `unsorted` are
-//! reserved names owned by the vault contract, as are the project-level
-//! artifact directories `action items`, `facts` and `reports` written by
-//! F2's LLM jobs (never listed as meetings; see [`list`]).
+//! that later artifacts (a transcript, a summary, extracted action items
+//! and facts, a per-recording export) can be written next to the source;
+//! an unsorted meeting folder takes exactly the same contents as a filed
+//! one. `source.*`, `transcript.json`, `summary.md`, `action items`,
+//! `facts`, `exports` (all four inside a meeting folder), `reports`
+//! (project-level) and `unsorted` are reserved names owned by the vault
+//! contract.
+//!
+//! Only the project *level* needs a listing exclusion, since [`list`] never
+//! recurses into a meeting folder: `<PROJECT>/reports/`, plus the legacy
+//! `<PROJECT>/action items/` and `<PROJECT>/facts/` trees an older build
+//! wrote before the per-meeting anchor (kept on disk, no longer read or
+//! written — see [`artifacts`]).
 //!
 //! ## Usage (the call F3's `#[command]` will make)
 //!
@@ -123,7 +134,9 @@ pub mod manage;
 
 /// Read-only enumeration of the project-level artifacts (action items,
 /// facts, reports) written by F2's LLM jobs. Same best-effort contract as
-/// [`list`].
+/// [`list`]. Item enumeration here is legacy-only — extraction writes
+/// action items and facts inside the meeting folder now; see the module
+/// docs.
 pub mod artifacts;
 
 // Curated public API surface (T10) — the fixed shape F3 links against.

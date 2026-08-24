@@ -261,12 +261,7 @@ export function RecordingPage({
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={!entry.project || activeLlmJobs.includes("action_items")}
-                  title={
-                    entry.project
-                      ? undefined
-                      : "File this recording under a project first — action items are stored per project"
-                  }
+                  disabled={activeLlmJobs.includes("action_items")}
                   onClick={() => void runLlm((id) => onExtract(id, "action_items"))}
                 >
                   {activeLlmJobs.includes("action_items") ? "Extracting…" : "Action items"}
@@ -274,12 +269,7 @@ export function RecordingPage({
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={!entry.project || activeLlmJobs.includes("facts")}
-                  title={
-                    entry.project
-                      ? undefined
-                      : "File this recording under a project first — facts are stored per project"
-                  }
+                  disabled={activeLlmJobs.includes("facts")}
                   onClick={() => void runLlm((id) => onExtract(id, "facts"))}
                 >
                   {activeLlmJobs.includes("facts") ? "Extracting…" : "Facts"}

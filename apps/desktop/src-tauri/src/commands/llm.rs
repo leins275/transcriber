@@ -165,27 +165,6 @@ async fn resolve_project_dir(
     Ok((root, paths::strip_verbatim(&canonical)))
 }
 
-/// The meeting's project directory, or an actionable refusal for an
-/// unsorted meeting -- project-level artifacts need a project to live in.
-fn require_project_dir(root: &Path, meeting_dir: &Path) -> Result<PathBuf, AppError> {
-    let refusal = || {
-        AppError::invalid_argument(
-            "this recording is not filed under a project yet; assign it a project first",
-        )
-    };
-    let parent = meeting_dir.parent().ok_or_else(refusal)?;
-    if parent == root {
-        return Err(refusal());
-    }
-    let name = parent
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(refusal)?;
-    // `code::validate` also rejects the reserved `unsorted` word.
-    vault::code::validate(name).map_err(|_| refusal())?;
-    Ok(parent.to_path_buf())
-}
-
 /// A meeting that has no transcript has nothing for an LLM job to read.
 fn require_transcript(meeting_dir: &Path) -> Result<(), AppError> {
     if meeting_dir.join(vault::TRANSCRIPT_FILE_NAME).is_file() {
@@ -232,7 +211,9 @@ pub async fn summarize_vault_entry_handler(
 }
 
 /// `extract_vault_entry` -- extract action items or facts into the
-/// project-level artifact directory.
+/// recording's own artifact directory (`<meeting>/action items/`,
+/// `<meeting>/facts/`). No project is required: an unsorted recording
+/// carries its artifacts in its own folder just like a filed one.
 pub async fn extract_vault_entry_handler(
     state: &AppState,
     entry_id: &str,
@@ -247,10 +228,9 @@ pub async fn extract_vault_entry_handler(
             )))
         }
     };
-    let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
     require_transcript(&meeting_dir)?;
-    let project_dir = require_project_dir(&root, &meeting_dir)?;
-    let output = project_dir.join(artifact_kind.dir_name());
+    let output = meeting_dir.join(artifact_kind.dir_name());
     Ok(enqueue(state, job_kind, &meeting_dir, &output).await)
 }
 
@@ -795,6 +775,22 @@ mod tests {
         entries[0].id.clone()
     }
 
+    /// Polls the fake until the worker has forwarded the submission (the
+    /// enqueue is asynchronous), then returns it.
+    async fn first_llm_submission(fake: &FakeService) -> crate::service::LlmSubmitRequest {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(submission) = fake.llm_submissions().into_iter().next() {
+                return submission;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "submission never arrived"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     #[test]
     fn summarize_requires_a_transcript() {
         run(async {
@@ -853,27 +849,38 @@ mod tests {
     }
 
     #[test]
-    fn extraction_on_an_unsorted_meeting_is_refused_with_an_actionable_message() {
+    fn extraction_on_an_unsorted_meeting_enqueues_into_the_meeting_folder() {
         run(async {
             let root = tempdir().expect("tempdir");
             make_meeting(root.path(), "unsorted", "260101 - dropped", true);
+            let fake = Arc::new(FakeService::new());
             let state = state_with_root(
                 root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
+                fake.clone(),
                 Arc::new(RecordingRevealer::default()),
             );
             let id = only_entry_id(&state).await;
 
-            let err = extract_vault_entry_handler(&state, &id, "action_items")
+            let snapshot = extract_vault_entry_handler(&state, &id, "action_items")
                 .await
-                .expect_err("unsorted must be refused");
-            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
-            assert!(err.message().contains("project"));
+                .expect("an unsorted meeting with a transcript must enqueue");
+            assert_eq!(snapshot.job_type, "action_items");
+
+            let submission = first_llm_submission(&fake).await;
+            let output = PathBuf::from(&submission.output_dir);
+            assert!(
+                output.ends_with(
+                    Path::new("unsorted")
+                        .join("260101 - dropped")
+                        .join("action items")
+                ),
+                "output {output:?} must be the meeting's action-items dir"
+            );
         });
     }
 
     #[test]
-    fn extraction_targets_the_project_level_artifact_directory() {
+    fn extraction_targets_the_meeting_level_artifact_directory() {
         run(async {
             let root = tempdir().expect("tempdir");
             make_meeting(root.path(), "ELS", "260101 - Planning", true);
@@ -890,30 +897,40 @@ mod tests {
                 .expect("extraction must enqueue");
             assert_eq!(snapshot.job_type, "facts");
 
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                let submissions = fake.llm_submissions();
-                if !submissions.is_empty() {
-                    let expected = root.path().join("ELS").join("facts");
-                    assert!(
-                        submissions[0].output_dir.ends_with(
-                            expected
-                                .strip_prefix(root.path())
-                                .unwrap()
-                                .to_string_lossy()
-                                .as_ref()
-                        ),
-                        "output {:?} must be the project facts dir",
-                        submissions[0].output_dir
-                    );
-                    break;
-                }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "submission never arrived"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
+            let submission = first_llm_submission(&fake).await;
+            let output = PathBuf::from(&submission.output_dir);
+            assert!(
+                output.ends_with(Path::new("ELS").join("260101 - Planning").join("facts")),
+                "output {output:?} must be the meeting's facts dir"
+            );
+            assert!(
+                !output.ends_with(Path::new("ELS").join("facts")),
+                "output {output:?} must not be the project-level facts dir"
+            );
+        });
+    }
+
+    #[test]
+    fn extraction_without_a_transcript_is_refused_with_an_actionable_message() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path(), "ELS", "260101 - Planning", false);
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+
+            let err = extract_vault_entry_handler(&state, &id, "action_items")
+                .await
+                .expect_err("a meeting without a transcript must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(
+                err.message().contains("transcribe it first"),
+                "message {:?} must stay actionable",
+                err.message()
+            );
         });
     }
 

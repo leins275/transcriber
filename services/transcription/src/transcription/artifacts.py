@@ -2,16 +2,27 @@
 
 Owns the on-disk conventions for derived knowledge:
 
-- ``<PROJECT>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
-- ``<PROJECT>/facts/<slug>/<slug>.md``       (+ ``screenshot-*.png``)
-- ``<PROJECT>/reports/<YYMMDD>/report.md``   (+ ``report.pdf``)
-- ``<meeting>/exports/<YYMMDD>/export.md``   (+ ``export.pdf``)
+- ``<meeting>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
+- ``<meeting>/facts/<slug>/<slug>.md``        (+ ``screenshot-*.png``)
+- ``<meeting>/exports/<YYMMDD>/export.md``    (+ ``export.pdf``)
+- ``<PROJECT>/reports/<YYMMDD>/report.md``    (+ ``report.pdf``)
+
+Extracted items live *inside the recording's own folder*, alongside its
+``transcript.json``, ``summary.md`` and ``exports/`` -- so they travel with
+the recording when it is filed, renamed or synced, and unfiled (``unsorted/``)
+recordings can be extracted too. Legacy project-level ``<PROJECT>/action
+items/`` and ``<PROJECT>/facts/`` trees from before the move are never read
+and never written here; they stay on disk untouched for external tools.
 
 The directory *names* are a cross-language contract shared with the vault
 crate (``crates/vault/src/paths.rs``); both sides pin the exact strings with
 tests. All text writes are atomic (the ``transcript.write_atomic`` pattern);
 item images are written before the markdown so a crash never leaves an
 ``.md`` referencing missing files.
+
+Item paths are one level deeper than the project-level layout they replace,
+so ``fit_slug`` trims the item slug against the 260-character Windows budget
+using the meeting-level parent it is handed.
 
 Front matter is written as ``key: <json value>`` lines -- JSON is a YAML
 subset, so the block reads as ordinary YAML front matter to humans and
@@ -31,9 +42,11 @@ from typing import Any
 
 from transcription.errors import ErrorKind, ServiceError
 
-# The reserved project-level directory names (mirrored in crates/vault/src/paths.rs).
+# Reserved inside a meeting folder, alongside exports/ (mirrored in
+# crates/vault/src/paths.rs; the exact strings are the cross-language contract).
 ACTION_ITEMS_DIR_NAME = "action items"
 FACTS_DIR_NAME = "facts"
+# Reserved at the project level (multi-meeting reports).
 REPORTS_DIR_NAME = "reports"
 # Reserved inside a meeting folder (per-recording exports).
 EXPORTS_DIR_NAME = "exports"

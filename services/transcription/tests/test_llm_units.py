@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 from transcription.artifacts import (
+    ACTION_ITEMS_DIR_NAME,
+    FACTS_DIR_NAME,
+    MAX_PATH_LEN,
     fit_slug,
     list_items,
     parse_front_matter,
@@ -17,7 +20,7 @@ from transcription.artifacts import (
     unique_item_dir,
     write_item,
 )
-from transcription.errors import ServiceError
+from transcription.errors import ErrorKind, ServiceError
 from transcription.frames import plan_screenshots, screenshot_name
 from transcription.llm.chunking import chunk_lines, estimate_tokens
 from transcription.llm.extraction import merge_items, snap_timestamps
@@ -270,6 +273,14 @@ def test_transcript_lines_carry_timestamps_and_speaker_overrides() -> None:
 # --------------------------------------------------------------- artifacts
 
 
+def test_artifact_dir_names_pin_the_cross_language_contract() -> None:
+    """The exact directory-name strings are shared with the vault crate
+    (``crates/vault/src/paths.rs``). Their anchor moved to the meeting folder;
+    the strings themselves must never drift on either side."""
+    assert ACTION_ITEMS_DIR_NAME == "action items"
+    assert FACTS_DIR_NAME == "facts"
+
+
 def test_slugify_is_windows_safe_and_keeps_non_latin_text() -> None:
     assert slugify('Fix: the "login" <flow>?') == "fix-the-login-flow"
     assert slugify("Починить вход в систему") == "починить-вход-в-систему"
@@ -323,3 +334,35 @@ def test_fit_slug_trims_against_the_260_char_budget() -> None:
     hopeless = Path("C:/v") / ("b" * 270)
     with pytest.raises(ServiceError):
         fit_slug(hopeless, "slug")
+
+
+def test_fit_slug_fits_a_realistically_deep_meeting_level_parent() -> None:
+    """NFR-1: items now anchor one level deeper -- inside the meeting folder --
+    so the budget is checked against a realistic synced vault path."""
+    # ~170-character OneDrive-style sync root, as the operator's vault lives.
+    synced_root = (
+        Path("C:/Users/operator/OneDrive - Example Corporation")
+        / "Documents"
+        / "Meeting Recordings Vault"
+        / "Shared with the Operations Team"
+        / "2026 Recordings Archive"
+        / "Synced from the Studio Laptop 2026"
+    )
+    assert len(str(synced_root)) == 174
+    kind_dir = synced_root / "ELS" / "260101 - a long meeting title" / ACTION_ITEMS_DIR_NAME
+
+    fitted = fit_slug(kind_dir, slugify("Chase the vendor about the signed statement of work"))
+    assert 0 < len(fitted)
+    # unique_item_dir may append a " (n)" collision suffix to the item folder,
+    # and the longest screenshot sibling is "screenshot-hmmss.png" (20 chars).
+    item_dir = kind_dir / f"{fitted} (2)"
+    longest_sibling = screenshot_name(9 * 3600 + 59 * 60 + 59)
+    assert len(longest_sibling) == 20
+    assert len(str(item_dir / f"{fitted}.md")) <= MAX_PATH_LEN
+    assert len(str(item_dir / longest_sibling)) <= MAX_PATH_LEN
+
+    # A meeting folder too deep to hold even a one-character slug is refused.
+    hopeless_meeting = synced_root / "ELS" / ("m" * 60) / ACTION_ITEMS_DIR_NAME
+    with pytest.raises(ServiceError) as excinfo:
+        fit_slug(hopeless_meeting, "slug")
+    assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
