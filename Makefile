@@ -11,7 +11,7 @@
 # exactly FR-2's fail-fast requirement -- so recipes here never use `&&` chains
 # or a `-` prefix to suppress a failure.
 
-.PHONY: format lint type test installer bootstrap release-prep next-version
+.PHONY: format lint type test installer bootstrap release-prep next-version dev dev-setup
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo fmt --all
@@ -52,6 +52,20 @@ test:
 #   uv run scripts/build_installer.py
 installer:
 	uv run scripts/build_installer.py
+
+# Assemble the folder `tauri dev` runs against: `target/debug/` has no
+# models and no bundled runtime, so the engine needs to be pointed at one.
+# Hardlinks what is already on disk -- re-run after stage_engine_payload.py.
+#   uv run scripts/dev_app_dir.py
+dev-setup:
+	uv run scripts/dev_app_dir.py
+
+# Run the dev app against that folder. dev.ps1 assembles it and exports the
+# variables itself -- make cannot export into a child shell -- so this does
+# not depend on dev-setup, which would only assemble it a second time.
+#   powershell -ExecutionPolicy Bypass -File scripts/dev.ps1
+dev:
+	powershell -ExecutionPolicy Bypass -File scripts/dev.ps1
 
 # Direct equivalent (built by a later wave -- this target resolves under
 # `make -n` regardless of whether scripts/bootstrap.ps1 exists yet):

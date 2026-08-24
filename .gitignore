@@ -16,3 +16,7 @@ apps/desktop/src-tauri/resources/engine/*
 !apps/desktop/src-tauri/resources/engine/.gitkeep
 # Where `stage_engine_payload.py` caches those downloads between builds.
 .cache/
+
+# Dev app folder assembled by scripts/dev_app_dir.py (hardlinks to models
+# and the staged payload; never committed).
+.devapp/
