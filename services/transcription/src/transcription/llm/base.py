@@ -38,6 +38,20 @@ class LlmCompletion:
     completion_tokens: int | None = None
     cost_usd: float | None = None
     currency: str | None = None
+    # Why generation stopped: "stop" (natural), "length" (hit max_tokens),
+    # or None when the engine did not say. "length" means ``text`` is an
+    # incomplete prefix -- callers must never treat it as a finished answer.
+    finish_reason: str | None = None
+
+
+class LlmTruncatedError(Exception):
+    """A completion stopped at ``max_tokens`` (``finish_reason == "length"``).
+
+    The text is a valid *prefix* of an answer, not an answer: a truncated
+    summary is cut mid-sentence and truncated grammar-constrained JSON does
+    not parse. Callers recover by splitting the input and retrying, never by
+    using the text as-is.
+    """
 
 
 class LlmProvider(Protocol):
@@ -53,6 +67,14 @@ class LlmProvider(Protocol):
     name: str
 
     def describe(self) -> LlmInfo: ...
+
+    def count_tokens(self, text: str) -> int:
+        """How many tokens ``text`` costs under this engine's tokenizer.
+
+        Used for chunk budgeting; implementations fall back to the character
+        heuristic in ``chunking.py`` when the real tokenizer is unavailable.
+        """
+        ...
 
     def complete(
         self,

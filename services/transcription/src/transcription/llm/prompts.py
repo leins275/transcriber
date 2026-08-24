@@ -12,7 +12,7 @@ falls back to the soft rule asking the model to mirror the transcript.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 Message = dict[str, str]
@@ -218,17 +218,47 @@ def facts_messages(chunk_text: str, *, language: str | None = None) -> list[Mess
     ]
 
 
-def repair_messages(original: list[Message], raw_output: str, error: str) -> list[Message]:
+def _truncate_to_budget(text: str, budget_tokens: int, count_tokens: Callable[[str], int]) -> str:
+    """At most ``budget_tokens`` worth of ``text``, cut from the front."""
+    tokens = count_tokens(text)
+    if tokens <= budget_tokens:
+        return text
+    keep = max(1, len(text) * budget_tokens // tokens)
+    while keep > 1 and count_tokens(text[:keep]) > budget_tokens:
+        keep //= 2
+    return text[:keep]
+
+
+def repair_messages(
+    original: list[Message],
+    raw_output: str,
+    error: str,
+    *,
+    output_budget_tokens: int,
+    count_tokens: Callable[[str], int],
+) -> list[Message]:
     """The one bounded retry after invalid structured output: show the model
-    its own output and the validation error, and ask again."""
+    its own output and the validation error, and ask again.
+
+    Deliberately bounded by construction: only the system message survives
+    from the original call (it carries the extraction rules and the language
+    pin) and the echoed output is capped at ``output_budget_tokens`` --
+    replaying the whole transcript plus an unbounded failed answer could
+    overflow the context window, turning one bad answer into a hard error.
+    The transcript itself is not needed: by the time repair runs the output
+    was syntactically complete JSON that merely broke the schema, so the
+    content to fix is all in the echo.
+    """
+    system = [message for message in original if message.get("role") == "system"][:1]
+    echo = _truncate_to_budget(raw_output, output_budget_tokens, count_tokens)
     return [
-        *original,
-        {"role": "assistant", "content": raw_output},
+        *system,
         {
             "role": "user",
             "content": (
                 "Your previous answer was not valid against the required JSON "
-                f"schema: {error}\nAnswer again with only valid JSON."
+                f"schema: {error}\n\nYour previous answer was:\n{echo}\n\n"
+                "Answer again with only valid JSON matching the schema."
             ),
         },
     ]

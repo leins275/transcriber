@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -25,7 +26,14 @@ from transcription.artifacts import (
 )
 from transcription.errors import ErrorKind, ServiceError
 from transcription.frames import plan_screenshots, screenshot_name
-from transcription.llm.chunking import chunk_lines, estimate_tokens
+from transcription.llm.chunking import (
+    MIN_BUDGET_TOKENS,
+    PROMPT_OVERHEAD_TOKENS,
+    chunk_lines,
+    estimate_tokens,
+    input_budget_tokens,
+    split_oversized,
+)
 from transcription.llm.extraction import merge_items, snap_timestamps
 from transcription.llm.gguf_meta import (
     VRAM_RESERVE_BYTES,
@@ -82,9 +90,9 @@ def test_the_external_openai_compatible_engine_is_rejected() -> None:
 # ---------------------------------------------------------------- chunking
 
 
-def test_chunk_lines_respects_the_budget_and_never_splits_a_line() -> None:
+def test_chunk_lines_respects_the_budget_and_never_splits_a_fitting_line() -> None:
     lines = [f"line {i} " + "x" * 50 for i in range(40)]
-    budget = 100  # tokens ~= 300 chars ~= 5 lines per chunk
+    budget = 100  # tokens ~= 200 chars ~= 3 lines per chunk
     chunks = chunk_lines(lines, budget)
 
     assert len(chunks) > 1
@@ -93,14 +101,48 @@ def test_chunk_lines_respects_the_budget_and_never_splits_a_line() -> None:
         assert estimate_tokens(chunk) <= budget + estimate_tokens(lines[0])
 
 
-def test_a_single_oversized_line_still_becomes_a_chunk() -> None:
+def test_the_fallback_estimate_is_conservative_for_cyrillic() -> None:
+    # Qwen-family BPE splits Russian at ~2-3 chars/token; len // 2 stays at
+    # or above the real count where the old len // 3 undershot it.
+    assert estimate_tokens("а" * 300) == 150
+
+
+def test_chunk_lines_uses_an_injected_token_counter() -> None:
+    lines = ["abcdef"] * 6
+    # Under the heuristic (len // 2 = 3 tokens/line) all six lines fit one
+    # 20-token chunk; a counter that says every char is a token forces more.
+    assert len(chunk_lines(lines, 20)) == 1
+    assert len(chunk_lines(lines, 20, count_tokens=len)) > 1
+
+
+def test_an_oversized_line_is_split_and_nothing_is_dropped() -> None:
+    words = " ".join(f"word{i}" for i in range(200))
+    chunks = chunk_lines([words], 20)
+    assert len(chunks) > 1
+    reassembled = " ".join(" ".join(chunk.splitlines()) for chunk in chunks)
+    assert reassembled == words
+    for chunk in chunks:
+        assert estimate_tokens(chunk) <= 20 + estimate_tokens("word199")
+
+
+def test_a_whitespace_free_monster_string_is_hard_sliced() -> None:
     huge = "y" * 10_000
-    assert chunk_lines([huge], 10) == [huge]
+    pieces = split_oversized(huge, 10)
+    assert len(pieces) > 1
+    assert "".join(pieces) == huge
+    for piece in pieces:
+        assert estimate_tokens(piece) <= 10
 
 
 def test_chunk_lines_rejects_a_nonpositive_budget() -> None:
     with pytest.raises(ValueError):
         chunk_lines(["a"], 0)
+
+
+def test_input_budget_subtracts_output_thinking_and_overhead() -> None:
+    assert input_budget_tokens(16384, 4096, 2048) == 16384 - 4096 - 2048 - PROMPT_OVERHEAD_TOKENS
+    # A pathologically small context still gets the floor, never zero.
+    assert input_budget_tokens(2048, 4096, 2048) == MIN_BUDGET_TOKENS
 
 
 # ------------------------------------------------------------------ shapes
@@ -462,6 +504,184 @@ def test_parse_front_matter_never_raises_on_edited_or_garbled_text() -> None:
     assert parse_front_matter("---\narchived: yes\n---\n")[0]["archived"] == "yes"
     assert parse_front_matter("---\nkey:\n---\nbody")[0]["key"] == ""
     assert parse_front_matter("---\n: novalue\n---\n")[0] == {}
+
+
+# -------------------------------------------------------- summarize reduce
+
+
+def _scripted_complete(script: list[str]) -> tuple[Any, list[list[dict[str, str]]]]:
+    """A summarize-callback recorder: returns scripted texts, records calls."""
+    calls: list[list[dict[str, str]]] = []
+
+    def complete(messages: list[dict[str, str]]) -> str:
+        calls.append(messages)
+        return script[len(calls) - 1] if len(calls) <= len(script) else script[-1]
+
+    return complete, calls
+
+
+def test_reduce_recurses_when_partials_exceed_the_budget() -> None:
+    from transcription.llm.summarize import summarize_chunks
+
+    # Six chunks; a budget that fits only two partials per merge group.
+    chunks = [f"chunk {i}" for i in range(6)]
+    partial_tokens = 50
+    budget = 2 * (partial_tokens + 12) + 5
+
+    def count(text: str) -> int:
+        return partial_tokens
+
+    script = [f"partial {i}" for i in range(6)] + ["merge"] * 10
+    complete, calls = _scripted_complete(script)
+    result = summarize_chunks(chunks, complete, reduce_budget_tokens=budget, count_tokens=count)
+
+    assert result == "merge"
+    merge_calls = [c for c in calls if "merge partial summaries" in c[0]["content"]]
+    # 6 partials -> 3 merges -> (2 merges or direct) -> 1: more than one
+    # round, and every merge prompt held at most 2 partials.
+    assert len(merge_calls) >= 3
+    for call in merge_calls:
+        assert call[1]["content"].count("--- Part") <= 2
+
+
+def test_single_round_reduce_is_unchanged_when_partials_fit() -> None:
+    from transcription.llm.summarize import summarize_chunks
+
+    chunks = ["chunk a", "chunk b"]
+    complete, calls = _scripted_complete(["partial a", "partial b", "merged"])
+    result = summarize_chunks(
+        chunks, complete, reduce_budget_tokens=10_000, count_tokens=estimate_tokens
+    )
+    assert result == "merged"
+    assert len(calls) == 3, "two map calls and exactly one reduce call"
+
+
+def test_a_truncated_map_call_is_split_and_retried() -> None:
+    from transcription.llm.base import LlmTruncatedError
+    from transcription.llm.summarize import summarize_chunks
+
+    calls: list[str] = []
+
+    def complete(messages: list[dict[str, str]]) -> str:
+        calls.append(messages[1]["content"])
+        if len(calls) == 1:
+            raise LlmTruncatedError("cut off")
+        return f"result {len(calls)}"
+
+    def split_chunk(chunk: str, depth: int) -> list[str]:
+        half = len(chunk) // 2
+        return [chunk[:half], chunk[half:]]
+
+    result = summarize_chunks(
+        ["one long chunk"],
+        complete,
+        reduce_budget_tokens=10_000,
+        count_tokens=estimate_tokens,
+        split_chunk=split_chunk,
+    )
+    # The single-chunk call truncated; its halves were map-summarized and
+    # the two partials merged.
+    assert result.startswith("result")
+    assert len(calls) == 4  # 1 truncated + 2 map halves + 1 reduce
+
+
+def test_truncation_without_a_splitter_propagates() -> None:
+    from transcription.llm.base import LlmTruncatedError
+    from transcription.llm.summarize import summarize_chunks
+
+    def complete(messages: list[dict[str, str]]) -> str:
+        raise LlmTruncatedError("cut off")
+
+    with pytest.raises(LlmTruncatedError):
+        summarize_chunks(["chunk"], complete)
+
+
+# ----------------------------------------------------------- repair prompt
+
+
+def test_repair_keeps_the_system_message_and_drops_the_transcript() -> None:
+    from transcription.llm.prompts import action_items_messages, repair_messages
+
+    original = action_items_messages("[0:00] A: the transcript body", language="ru")
+    repair = repair_messages(
+        original,
+        '{"items": [{"bad": true}]}',
+        "does not match the schema",
+        output_budget_tokens=1000,
+        count_tokens=estimate_tokens,
+    )
+
+    assert repair[0] == original[0], "the pinned system message survives verbatim"
+    assert len(repair) == 2
+    assert "the transcript body" not in repair[1]["content"]
+    assert '{"items": [{"bad": true}]}' in repair[1]["content"]
+    assert "does not match the schema" in repair[1]["content"]
+
+
+def test_repair_truncates_a_huge_echoed_output_to_the_budget() -> None:
+    from transcription.llm.prompts import facts_messages, repair_messages
+
+    huge = "x" * 40_000
+    repair = repair_messages(
+        facts_messages("transcript"),
+        huge,
+        "err",
+        output_budget_tokens=100,
+        count_tokens=estimate_tokens,
+    )
+    assert len(repair[1]["content"]) < 1000
+
+
+# ------------------------------------------------- llama.cpp streaming loop
+
+
+def _stream_chunks(text_pieces: list[str], finish_reason: str) -> list[dict[str, Any]]:
+    """Shaped like llama-cpp-python's streaming chat chunks, with the finish
+    reason on a trailing empty-delta chunk."""
+    chunks: list[dict[str, Any]] = [
+        {"choices": [{"delta": {"content": piece}, "finish_reason": None}]} for piece in text_pieces
+    ]
+    chunks.append({"choices": [{"delta": {}, "finish_reason": finish_reason}]})
+    return chunks
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_streaming_complete_reports_the_finish_reason(finish_reason: str) -> None:
+    import threading
+    from types import SimpleNamespace
+
+    from transcription.llm.llama_cpp_local import LlamaCppProvider
+    from transcription.providers.base import CancelToken
+
+    provider = LlamaCppProvider.__new__(LlamaCppProvider)
+    provider._lock = threading.Lock()
+    provider._llama = SimpleNamespace(
+        create_chat_completion=lambda **kwargs: iter(_stream_chunks(["a", "b"], finish_reason))
+    )
+    provider._state = "loaded"
+
+    completion = provider.complete(
+        [{"role": "user", "content": "hi"}],
+        json_schema=None,
+        max_tokens=16,
+        temperature=0.0,
+        on_progress=lambda fraction: None,
+        cancel=CancelToken(),
+    )
+    assert completion.text == "ab"
+    assert completion.finish_reason == finish_reason
+
+
+def test_count_tokens_falls_back_to_the_heuristic_when_loading_fails() -> None:
+    from transcription.llm.llama_cpp_local import LlamaCppProvider
+
+    provider = LlamaCppProvider.__new__(LlamaCppProvider)
+
+    def boom() -> Any:
+        raise RuntimeError("no model on this machine")
+
+    provider._load = boom  # type: ignore[method-assign]
+    assert provider.count_tokens("abcdefgh") == estimate_tokens("abcdefgh")
 
 
 def test_written_front_matter_parses_identically_under_a_real_yaml_parser(

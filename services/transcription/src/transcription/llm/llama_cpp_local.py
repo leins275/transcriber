@@ -24,6 +24,7 @@ from typing import Any
 from transcription.config import Config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.llm.base import LlmCompletion, LlmInfo, Message, ModelState
+from transcription.llm.chunking import estimate_tokens
 from transcription.llm.gguf_meta import fit_gpu_layers, read_block_count
 from transcription.llm.runtime_fetch import llama_cuda_dir
 from transcription.providers.base import CancelToken
@@ -242,16 +243,23 @@ class LlamaCppProvider:
 
         pieces: list[str] = []
         completion_tokens = 0
+        finish_reason: str | None = None
         try:
             for chunk in llama.create_chat_completion(**kwargs):
                 if completion_tokens % _CANCEL_CHECK_EVERY == 0:
                     cancel.raise_if_cancelled()
-                delta = chunk["choices"][0].get("delta", {})
+                choice = chunk["choices"][0]
+                delta = choice.get("delta", {})
                 piece = delta.get("content")
                 if piece:
                     pieces.append(piece)
                     completion_tokens += 1
                     on_progress(min(0.95, completion_tokens / max(1, max_tokens)))
+                # Depending on the llama-cpp-python version the reason rides
+                # on the last content chunk or on a trailing empty-delta
+                # chunk; the last non-None value wins either way.
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
         except ServiceError:
             raise
         except Exception as exc:
@@ -261,7 +269,24 @@ class LlamaCppProvider:
             ) from exc
 
         on_progress(1.0)
-        return LlmCompletion(text="".join(pieces), completion_tokens=completion_tokens)
+        return LlmCompletion(
+            text="".join(pieces),
+            completion_tokens=completion_tokens,
+            finish_reason=finish_reason,
+        )
+
+    def count_tokens(self, text: str) -> int:
+        """Token count under the loaded model's own tokenizer.
+
+        Callers run on the single worker thread, so the lazy ``_load`` here
+        is the same load ``complete`` would pay anyway. Any failure falls
+        back to the character heuristic -- a budget estimate, never an error.
+        """
+        try:
+            llama = self._load()
+            return len(llama.tokenize(text.encode("utf-8"), add_bos=False, special=False))
+        except Exception:  # noqa: BLE001 - budgeting must never fail a job
+            return estimate_tokens(text)
 
     def unload(self) -> None:
         """Drop the loaded model so its (mmap-backed) memory is released."""

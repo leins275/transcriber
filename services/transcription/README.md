@@ -85,6 +85,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
 | `llm_temperature` | `TRANSCRIBER_LLM_TEMPERATURE` | `0.3` |
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
+| `llm_think_headroom_tokens` | `TRANSCRIBER_LLM_THINK_HEADROOM_TOKENS` | `2048` (extra output budget for the reasoning `<think>` block on free-text calls) |
 | `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the ~20 GB working set after each LLM job) |
 
 `Config.public()` (what `/health` and log lines may show) never includes
@@ -106,9 +107,13 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 All of them run on the built-in llama.cpp runtime -- the only LLM engine
 this service ships, with no config selector to point it elsewhere -- against
 a GGUF fetched via `POST /v1/llm-model/download` or `download-llm-model`.
-Long transcripts are map-reduced against `llm_ctx`; extraction output is
-grammar-constrained JSON with one bounded repair retry
-(`error_kind: "llm_output"` after that). Screenshots come from the
+Long transcripts are map-reduced against `llm_ctx`, with the reduce running
+in budget-fitted rounds so any transcript length fits the context window;
+a completion that hits the output-token cap is retried on smaller input
+splits instead of being silently truncated. Extraction output is
+grammar-constrained JSON with one bounded repair retry; a chunk that still
+fails is skipped with a job warning, and the job fails
+(`error_kind: "llm_output"`) only when no chunk produced usable output. Screenshots come from the
 recording's video track via PyAV at the
 timestamps the model cites -- an audio-only recording simply gets none,
 and a failed screenshot pass degrades (items are written without images,

@@ -565,8 +565,11 @@ async def test_the_repair_call_replays_the_pinned_system_message(
         assert len(llm.calls) == 2, "one original call plus one repair call"
 
         original, repair = llm.calls
-        assert repair[: len(original)] == original
+        assert repair[0] == original[0], "the pinned system message survives verbatim"
         assert RUSSIAN_DIRECTIVE in repair[0]["content"]
+        # The repair context is bounded: no transcript replay, just the
+        # echoed bad output and the error.
+        assert all("Transcript:" not in message["content"] for message in repair[1:])
     finally:
         await manager.aclose()
 
@@ -649,6 +652,192 @@ async def test_persistently_invalid_json_fails_with_llm_output(
         assert job.status == "failed"
         assert job.error_kind is ErrorKind.LLM_OUTPUT
         assert not any(items_dir.iterdir()) if items_dir.exists() else True
+    finally:
+        await manager.aclose()
+
+
+# ------------------------------------------------------ truncation recovery
+
+
+async def test_a_truncated_summary_is_split_and_retried(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # ~3000 chars in one (llm_ctx=2048 -> floor 1024-token) chunk: big
+    # enough that the halved budget splits it into two pieces.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=30, repeat_text=3)
+    truncated_thought = "Okay, let me think about this meeting at great len"
+    llm = FakeLlm(
+        responses=[(truncated_thought, "length"), "half one", "half two", "merged summary"]
+    )
+    manager = _manager(_small_ctx(config), ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+        assert len(llm.calls) == 4, "one truncated call, two map retries, one reduce"
+
+        summary = (meeting / "summary.md").read_text(encoding="utf-8")
+        assert summary.strip() == "merged summary"
+        # The cut-off text (raw chain-of-thought whose </think> never came)
+        # must not reach any artifact.
+        assert truncated_thought not in summary
+        reasoning_path = meeting / "summary.reasoning.md"
+        if reasoning_path.exists():
+            assert truncated_thought not in reasoning_path.read_text(encoding="utf-8")
+    finally:
+        await manager.aclose()
+
+
+async def test_a_truncated_extraction_is_split_not_repaired(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=30, repeat_text=3)
+    half_a = _items_json(
+        [{"type": "task", "title": "From half A", "description_md": "d", "timestamps": []}]
+    )
+    half_b = _items_json(
+        [{"type": "task", "title": "From half B", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[('{"items": [{"ti', "length"), half_a, half_b])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "succeeded"
+        assert len(llm.calls) == 3, "one truncated call, two split retries, no repair"
+        # Truncated JSON must never enter the textual repair path.
+        assert all(
+            "previous answer" not in message["content"] for call in llm.calls for message in call
+        )
+        titles = {
+            parse_front_matter(md.read_text(encoding="utf-8"))[0]["title"]
+            for md in items_dir.rglob("*.md")
+        }
+        assert titles == {"From half A", "From half B"}
+    finally:
+        await manager.aclose()
+
+
+async def test_extraction_truncated_at_the_floor_fails_with_an_honest_error(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    # The single scripted response repeats: every attempt truncates, and the
+    # tiny transcript cannot be split further.
+    llm = FakeLlm(responses=[('{"items": [{"ti', "length")])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting_dir / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "failed"
+        assert job.error_kind is ErrorKind.LLM_OUTPUT
+        assert job.error_message is not None
+        assert "token limit" in job.error_message
+        assert "delimiter" not in job.error_message, "no misleading JSON parse error"
+    finally:
+        await manager.aclose()
+
+
+async def test_summarize_truncated_at_the_floor_fails_with_an_honest_error(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    llm = FakeLlm(responses=[("Okay, let me think", "length")])
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting_dir, output_dir=meeting_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "failed"
+        assert job.error_kind is ErrorKind.LLM_OUTPUT
+        assert job.error_message is not None
+        assert "token limit" in job.error_message
+        assert not (meeting_dir / "summary.md").exists()
+    finally:
+        await manager.aclose()
+
+
+# --------------------------------------------------- extraction resilience
+
+
+async def test_one_bad_chunk_degrades_extraction_with_a_warning(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # ~7400 chars -> ~1850 FakeLlm tokens -> two chunks under the 1024 floor.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=200)
+    good = _items_json(
+        [{"type": "task", "title": "From the good chunk", "description_md": "d", "timestamps": []}]
+    )
+    # Chunk 1: invalid, and the repair is invalid too; chunk 2: valid.
+    llm = FakeLlm(responses=["not json", "still not json", good])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "succeeded", "one usable chunk is a degraded success, not a failure"
+        assert any("chunk 1/2" in warning for warning in job.warnings)
+
+        titles = {
+            parse_front_matter(md.read_text(encoding="utf-8"))[0]["title"]
+            for md in items_dir.rglob("*.md")
+        }
+        assert titles == {"From the good chunk"}
+    finally:
+        await manager.aclose()
+
+
+# ------------------------------------------------------- tokenizer-led budgets
+
+
+async def test_chunking_follows_the_provider_tokenizer_not_the_heuristic(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # ~7400 chars: the provider tokenizer (len // 4 -> ~1850 tokens) packs
+    # two chunks; the fallback heuristic (len // 2) would have made four.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=200)
+    llm = FakeLlm(responses=["part summary", "part summary", "merged"])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+        map_calls = [call for call in llm.calls if "summarizing one part" in call[0]["content"]]
+        assert len(map_calls) == 2
+    finally:
+        await manager.aclose()
+
+
+async def test_a_very_long_transcript_reduces_in_budget_fitted_rounds(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # ~22000 chars -> six map chunks; every response is long enough that
+    # only two partials fit one merge group, forcing a multi-round reduce.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=200, repeat_text=3)
+    long_partial = "A thorough part summary. " * 64  # ~1600 chars -> ~412 tokens
+    llm = FakeLlm(responses=[long_partial])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        reduce_calls = [
+            call for call in llm.calls if "merge partial summaries" in call[0]["content"]
+        ]
+        assert len(reduce_calls) >= 2, "expected the reduce to need more than one round"
+        summary = (meeting / "summary.md").read_text(encoding="utf-8")
+        assert summary.strip() == long_partial.strip()
     finally:
         await manager.aclose()
 
