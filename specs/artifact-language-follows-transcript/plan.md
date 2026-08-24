@@ -55,7 +55,7 @@ Strictly linear: T2 and T3 both edit `jobs.py` and `test_llm_jobs.py`, so they c
 
 ## Tasks
 
-### [ ] T1: Language-aware prompt builders in prompts.py  [deps: —]
+### [x] T1: Language-aware prompt builders in prompts.py  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/llm/prompts.py`, `services/transcription/tests/test_llm_prompts.py` (new)
 - **Test first**: `services/transcription/tests/test_llm_prompts.py` — cases:
@@ -70,7 +70,7 @@ Strictly linear: T2 and T3 both edit `jobs.py` and `test_llm_jobs.py`, so they c
 - **Skills**: testing-toolkit:python-testing-patterns
 - **Done when**: new tests pass and the rest of the suite is untouched (`uv run --directory services/transcription pytest -q`); `uv run --directory services/transcription mypy src` and `ruff check .` pass; `llm/report.py`'s positional `chunk_summary_messages` call still typechecks unmodified.
 
-### [ ] T2: Thread language through the extraction jobs  [deps: T1]
+### [x] T2: Thread language through the extraction jobs  [deps: T1]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` — cases (all asserted on `FakeLlm.calls`, no model — NFR-1; add a language-aware variant of the `_transcript_doc()` helper rather than changing its default legacy shape):
@@ -83,7 +83,7 @@ Strictly linear: T2 and T3 both edit `jobs.py` and `test_llm_jobs.py`, so they c
 - **Skills**: testing-toolkit:python-testing-patterns
 - **Done when**: all new and existing tests pass (`uv run --directory services/transcription pytest -q`); `mypy src` and `ruff check .` clean.
 
-### [ ] T3: Thread language through the summarize path  [deps: T1, T2]
+### [x] T3: Thread language through the summarize path  [deps: T1, T2]
 
 - **Files**: `services/transcription/src/transcription/llm/summarize.py`, `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` — cases (on `FakeLlm.calls`):
@@ -94,7 +94,7 @@ Strictly linear: T2 and T3 both edit `jobs.py` and `test_llm_jobs.py`, so they c
 - **Skills**: testing-toolkit:python-testing-patterns
 - **Done when**: all new and existing tests pass (`uv run --directory services/transcription pytest -q`); `mypy src` and `ruff check .` clean.
 
-### [ ] T4: Full-service verification sweep  [deps: T2, T3]
+### [x] T4: Full-service verification sweep  [deps: T2, T3]
 
 - **Files**: fix-ups only, confined to `services/transcription/src/transcription/llm/prompts.py`, `services/transcription/src/transcription/llm/summarize.py`, `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_prompts.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: no new tests — this task executes the full acceptance sweep: `uv run --directory services/transcription pytest -q` (the FR-5 gate, covering every FR-1..FR-4 criterion added in T1–T3) and re-checks the FR-2 grep-level criterion (`prompts.py` has no `transcription.*` imports and no I/O).

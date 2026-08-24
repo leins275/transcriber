@@ -25,6 +25,10 @@ from transcription.ledger import Ledger
 
 MEETING_NAME = "260101 - Planning"
 
+RUSSIAN_DIRECTIVE = "Write your entire answer in Russian."
+ENGLISH_DIRECTIVE = "Write your entire answer in English."
+SOFT_RULE = "same language the transcript is written in"
+
 
 @pytest.fixture
 def config(tmp_app_dir: Path) -> Config:
@@ -71,6 +75,48 @@ def _transcript_doc(segment_count: int = 3) -> dict[str, Any]:
         "segments": segments,
         "source": {"path": "source.mp4", "filename": "source.mp4", "duration_sec": 120.0},
     }
+
+
+def _meeting_with_language(
+    tmp_app_dir: Path,
+    language: Any,
+    *,
+    segment_count: int = 3,
+    repeat_text: int = 1,
+) -> Path:
+    """A meeting whose `transcript.json` carries an explicit `language`.
+
+    A sibling of the `meeting_dir` fixture rather than a change to
+    `_transcript_doc()`: the fixture keeps the legacy, language-less shape
+    every other test asserts against.
+    """
+    meeting = tmp_app_dir / "vault" / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True, exist_ok=True)
+    (meeting / "source.mp4").write_bytes(b"fake-video-bytes")
+    doc = _transcript_doc(segment_count)
+    if repeat_text > 1:
+        for seg in doc["segments"]:
+            seg["text"] = seg["text"] * repeat_text
+    doc["language"] = language
+    (meeting / "transcript.json").write_text(json.dumps(doc), encoding="utf-8")
+    return meeting
+
+
+def _small_ctx(config: Config) -> Config:
+    """The same config with a context small enough to force chunking."""
+    return Config(
+        app_dir=config.app_dir,
+        config_path=config.config_path,
+        provider="fake",
+        allowed_roots=config.allowed_roots,
+        db_path=config.db_path,
+        token="test-token",  # noqa: S106 -- test fixture
+        llm_ctx=2048,
+    )
+
+
+def _system_prompts(llm: FakeLlm) -> list[str]:
+    return [call[0]["content"] for call in llm.calls]
 
 
 async def _wait_until_terminal(manager: JobManager, job_id: str, timeout: float = 60.0) -> None:
@@ -368,6 +414,186 @@ async def test_extraction_repairs_invalid_json_once(
         # The repair prompt carries the model's own bad output back to it.
         repair_messages = llm.calls[1]
         assert any("this is not json" in m["content"] for m in repair_messages)
+    finally:
+        await manager.aclose()
+
+
+# -------------------------------------------------- extraction language pinning
+
+
+async def test_facts_pin_russian_for_every_chunk_of_a_long_transcript(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "ru", segment_count=200, repeat_text=3)
+    response = _items_json(
+        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[response])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    facts_dir = meeting.parent / "facts"
+    try:
+        job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        assert len(prompts) > 1, "expected a multi-chunk transcript"
+        assert all(RUSSIAN_DIRECTIVE in prompt for prompt in prompts)
+        assert not any(SOFT_RULE in prompt for prompt in prompts)
+    finally:
+        await manager.aclose()
+
+
+async def test_action_items_pin_english_when_the_transcript_says_en(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "en")
+    response = _items_json(
+        [{"type": "task", "title": "One item", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[response])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting.parent / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        assert prompts and all(ENGLISH_DIRECTIVE in prompt for prompt in prompts)
+        assert not any(SOFT_RULE in prompt for prompt in prompts)
+    finally:
+        await manager.aclose()
+
+
+async def test_a_transcript_without_a_language_key_keeps_the_soft_rule(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    response = _items_json(
+        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[response])
+    manager = _manager(config, ledger, llm)
+    facts_dir = meeting_dir.parent / "facts"
+    try:
+        job_id = await _run_job(
+            manager, job_type="facts", input_path=meeting_dir, output_dir=facts_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        assert prompts and all(SOFT_RULE in prompt for prompt in prompts)
+        assert not any("Write your entire answer in" in prompt for prompt in prompts)
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.parametrize("language", [None, "de"])
+async def test_a_null_or_unsupported_language_keeps_the_soft_rule(
+    config: Config, ledger: Ledger, tmp_app_dir: Path, language: Any
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, language)
+    response = _items_json(
+        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[response])
+    manager = _manager(config, ledger, llm)
+    facts_dir = meeting.parent / "facts"
+    try:
+        job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
+        assert manager.status(job_id).status == "succeeded", "the language field never fails a job"
+
+        prompts = _system_prompts(llm)
+        assert prompts and all(SOFT_RULE in prompt for prompt in prompts)
+        assert not any("Write your entire answer in" in prompt for prompt in prompts)
+    finally:
+        await manager.aclose()
+
+
+async def test_the_repair_call_replays_the_pinned_system_message(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "ru")
+    good = _items_json(
+        [{"type": "task", "title": "One item", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=["this is not json", good])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting.parent / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+        assert len(llm.calls) == 2, "one original call plus one repair call"
+
+        original, repair = llm.calls
+        assert repair[: len(original)] == original
+        assert RUSSIAN_DIRECTIVE in repair[0]["content"]
+    finally:
+        await manager.aclose()
+
+
+# --------------------------------------------------- summarize language pinning
+
+
+async def test_a_single_chunk_summary_is_pinned_to_the_transcript_language(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "ru")
+    llm = FakeLlm(responses=["## Итоги"])
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        assert len(prompts) == 1, "a short transcript is one single-chunk call"
+        assert RUSSIAN_DIRECTIVE in prompts[0]
+        assert SOFT_RULE not in prompts[0]
+    finally:
+        await manager.aclose()
+
+
+async def test_every_map_call_and_the_reduce_call_are_pinned(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = _meeting_with_language(tmp_app_dir, "ru", segment_count=200, repeat_text=3)
+    llm = FakeLlm(responses=["сводка части", "сводка части", "сводка части", "общая сводка"])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        map_prompts = [p for p in prompts if "summarizing one part" in p]
+        reduce_prompts = [p for p in prompts if "merge partial summaries" in p]
+        assert len(map_prompts) > 1, "expected several map calls"
+        assert len(reduce_prompts) == 1, "expected exactly one reduce call"
+        assert all(RUSSIAN_DIRECTIVE in prompt for prompt in prompts)
+        assert not any(SOFT_RULE in prompt for prompt in prompts)
+    finally:
+        await manager.aclose()
+
+
+async def test_a_summary_of_a_language_less_transcript_keeps_the_soft_rule(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    llm = FakeLlm(responses=["## Summary"])
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting_dir, output_dir=meeting_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        prompts = _system_prompts(llm)
+        assert prompts and all(SOFT_RULE in prompt for prompt in prompts)
+        assert not any("Write your entire answer in" in prompt for prompt in prompts)
     finally:
         await manager.aclose()
 

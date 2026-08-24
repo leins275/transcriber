@@ -771,8 +771,12 @@ class JobManager:
 
     def _summarize_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
-        lines, _ = self._load_transcript_lines(meeting_dir)
+        lines, data = self._load_transcript_lines(meeting_dir)
         chunks = chunk_lines(lines, self._llm_budget_tokens())
+        # The transcript's own language, pinned into the single-chunk call,
+        # every map call and the reduce. Missing, null or unsupported values
+        # are the prompt builder's problem: it falls back to the soft rule.
+        language = data.get("language")
         total_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
         calls_done = 0
         reasoning: list[str] = []
@@ -792,7 +796,7 @@ class JobManager:
             job.progress = min(0.99, calls_done / total_calls)
             return text
 
-        summary = summarize_chunks(chunks, complete)
+        summary = summarize_chunks(chunks, complete, language)
         summary_path = artifacts.write_text_atomic(
             summary + "\n", Path(job.output_path) / "summary.md"
         )
@@ -849,14 +853,20 @@ class JobManager:
         meeting_dir = Path(job.source_path)
         lines, data = self._load_transcript_lines(meeting_dir)
         chunks = chunk_lines(lines, self._llm_budget_tokens())
+        # The transcript's own language, pinned into every chunk's prompt.
+        # Missing, null or unsupported values are the prompt builder's
+        # problem: it falls back to the soft "mirror the transcript" rule.
+        language = data.get("language")
 
         if job.job_type == "action_items":
             wrapper_cls: type[ActionItemsOut] | type[FactsOut] = ActionItemsOut
-            messages_fn: Callable[[str], list[Message]] = action_items_messages
+            messages_fn: Callable[[str], list[Message]] = functools.partial(
+                action_items_messages, language=language
+            )
             type_key = "type"
         else:
             wrapper_cls = FactsOut
-            messages_fn = facts_messages
+            messages_fn = functools.partial(facts_messages, language=language)
             type_key = "kind"
 
         # The LLM owns the first 80% of the progress bar; screenshots and
