@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { assignSpeaker, filterTurns, groupIntoTurns, renameSpeaker, speakerNames } from "./turns";
+import {
+  assignSpeaker,
+  assignSpeakerToSegments,
+  filterTurns,
+  groupIntoTurns,
+  renameSpeaker,
+  speakerNames,
+} from "./turns";
 import type { TranscriptSegmentView } from "../types";
 
 function seg(id: number, start: number, end: number, text: string): TranscriptSegmentView {
@@ -119,6 +126,78 @@ describe("assignSpeaker", () => {
     assignSpeaker(original, turns[0], "Maxim");
 
     expect(original).toEqual({});
+  });
+});
+
+describe("assignSpeakerToSegments", () => {
+  // Five sentence-sized segments, no pause anywhere: one turn until a label
+  // splits it.
+  const fiveSegments = [
+    seg(1, 0, 2, "one"),
+    seg(2, 2, 4, "two"),
+    seg(3, 4, 6, "three"),
+    seg(4, 6, 8, "four"),
+    seg(5, 8, 10, "five"),
+  ];
+  const allMaxim = { "1": "Maxim", "2": "Maxim", "3": "Maxim", "4": "Maxim", "5": "Maxim" };
+
+  it("labels exactly the ids it is given, no more and no fewer", () => {
+    const next = assignSpeakerToSegments({ "1": "Maxim" }, ["2", "3"], "Anna");
+
+    expect(next).toEqual({ "1": "Maxim", "2": "Anna", "3": "Anna" });
+  });
+
+  it("trims the name rather than storing the operator's whitespace", () => {
+    expect(assignSpeakerToSegments({}, ["7"], "  Anna ")).toEqual({ "7": "Anna" });
+  });
+
+  it("clears the attribution of those ids when given null or blank", () => {
+    expect(assignSpeakerToSegments(allMaxim, ["2", "3"], null)).toEqual({
+      "1": "Maxim",
+      "4": "Maxim",
+      "5": "Maxim",
+    });
+    expect(assignSpeakerToSegments(allMaxim, ["2", "3"], "   ")).toEqual({
+      "1": "Maxim",
+      "4": "Maxim",
+      "5": "Maxim",
+    });
+  });
+
+  it("does not mutate the map it is given", () => {
+    const original = { "1": "Maxim" };
+
+    assignSpeakerToSegments(original, ["1", "2"], "Anna");
+
+    expect(original).toEqual({ "1": "Maxim" });
+  });
+
+  it("changes nothing when given no ids", () => {
+    expect(assignSpeakerToSegments(allMaxim, [], "Anna")).toEqual(allMaxim);
+  });
+
+  it("splits a labelled turn in three when the middle segment is reassigned", () => {
+    const next = assignSpeakerToSegments(allMaxim, ["3"], "Anna");
+
+    const turns = groupIntoTurns(fiveSegments, next);
+
+    expect(turns.map((turn) => [turn.speaker, turn.segmentIds])).toEqual([
+      ["Maxim", ["1", "2"]],
+      ["Anna", ["3"]],
+      ["Maxim", ["4", "5"]],
+    ]);
+  });
+
+  it("leaves the flanks of an unattributed turn unattributed", () => {
+    const next = assignSpeakerToSegments({}, ["3"], "Anna");
+
+    const turns = groupIntoTurns(fiveSegments, next);
+
+    expect(turns.map((turn) => [turn.speaker, turn.segmentIds])).toEqual([
+      [null, ["1", "2"]],
+      ["Anna", ["3"]],
+      [null, ["4", "5"]],
+    ]);
   });
 });
 

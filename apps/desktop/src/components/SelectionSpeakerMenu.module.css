@@ -1,0 +1,65 @@
+/* Anchored to the selection's rectangle in viewport coordinates, so it
+   stays put over a scrolling transcript only for as long as the selection
+   does -- the control closes itself on scroll rather than chasing it. */
+.menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  /* Sits just below the selection and centred on it, clear of the
+     highlighted text the operator is still reading. */
+  transform: translate(-50%, var(--space-2));
+  white-space: nowrap;
+}
+
+.name {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.name:hover,
+.name:focus-visible {
+  color: var(--accent-deep);
+  border-color: var(--divider);
+}
+
+.new {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border-left: 1px solid var(--divider);
+  padding-left: var(--space-2);
+}
+
+/* An empty box with no known names to its left is the whole control, so it
+   has to look like an invitation rather than a leftover field. */
+.input {
+  width: 12ch;
+  padding: 0 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: 600 11px/1.6 var(--font-body);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hint {
+  font-size: 10px;
+  color: var(--text-faint);
+}
