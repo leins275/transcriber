@@ -70,6 +70,10 @@ dev = [
   # embeds, what text extracts). Already in the tree as xhtml2pdf's own
   # dependency; declared here because the tests import it directly.
   "pypdf>=3",
+  # Dev-only: the front-matter contract test round-trips a written artifact
+  # through a REAL YAML parser (NFR-1), proving the `key: <json>` block is a
+  # strict YAML subset. Production code stays YAML-dependency-free.
+  "pyyaml>=6",
 ]
 
 [tool.uv]

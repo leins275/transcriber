@@ -38,6 +38,25 @@ requires_arial = pytest.mark.skipif(
     reason=r"needs the stock Arial family in %WINDIR%\Fonts",
 )
 
+# FR-6: the exact front-matter key set `_extract_sync` writes. Drift in either
+# direction (an added or a dropped key) breaks the documented cross-language
+# contract in artifacts.py / crates/vault/src/artifacts.rs, so it fails here.
+ACTION_ITEM_META_KEYS = {
+    "type",
+    "title",
+    "archived",
+    "source_project",
+    "source_meeting",
+    "source_recording",
+    "source_date",
+    "timestamps",
+    "created",
+    "model",
+    "job_id",
+    "screenshots",
+}
+FACT_META_KEYS = (ACTION_ITEM_META_KEYS - {"type"}) | {"kind"}
+
 
 @pytest.fixture
 def config(tmp_app_dir: Path) -> Config:
@@ -386,8 +405,15 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
         assert meta["source_meeting"] == MEETING_NAME
         assert meta["source_project"] == "ELS"
         assert meta["source_recording"] == "source.mp4"
+        assert meta["source_date"] == "2026-01-01"
         assert meta["screenshots"] == "succeeded"
         assert meta["timestamps"] == [10.0, 20.0]
+        # FR-1: written explicitly as a JSON boolean, so property editors
+        # surface a toggle instead of a string.
+        assert "\narchived: false\n" in md_text
+        assert meta["archived"] is False
+        # FR-6: exact key set, no drift.
+        assert set(meta) == ACTION_ITEM_META_KEYS
         assert "# Fix the login flow" in body
         assert "login flow breaks" in body
 
@@ -403,34 +429,6 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
         assert row is not None
         manifest = json.loads(row["result_json"])
         assert manifest["item_count"] == 2
-    finally:
-        await manager.aclose()
-
-
-async def test_extraction_on_an_unsorted_meeting_records_a_null_source_project(
-    config: Config, ledger: Ledger, tmp_app_dir: Path
-) -> None:
-    meeting = tmp_app_dir / "vault" / "unsorted" / MEETING_NAME
-    meeting.mkdir(parents=True)
-    (meeting / "source.mp4").write_bytes(b"fake-video-bytes")
-    (meeting / "transcript.json").write_text(json.dumps(_transcript_doc()), encoding="utf-8")
-
-    response = _items_json(
-        [{"type": "task", "title": "Unfiled task", "description_md": "d", "timestamps": []}]
-    )
-    llm = FakeLlm(responses=[response])
-    manager = _manager(config, ledger, llm)
-    items_dir = meeting / "action items"
-    try:
-        job_id = await _run_job(
-            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
-        )
-        assert manager.status(job_id).status == "succeeded"
-
-        md_text = (items_dir / "unfiled-task" / "unfiled-task.md").read_text(encoding="utf-8")
-        meta, _ = parse_front_matter(md_text)
-        assert meta["source_project"] is None, "unsorted meetings carry a null project"
-        assert meta["source_meeting"] == MEETING_NAME
     finally:
         await manager.aclose()
 
@@ -714,6 +712,76 @@ async def test_facts_use_the_kind_key_and_audio_only_recordings_get_no_screensho
         assert meta["kind"] == "answered_question"
         assert meta["screenshots"] == "none"
         assert not list(item_dirs[0].glob("*.png"))
+        # FR-1: facts share the writer, so they share the `archived` field.
+        assert "\narchived: false\n" in md_text
+        assert meta["archived"] is False
+        # FR-6: the facts key set is the action-item set with `kind` for `type`.
+        assert set(meta) == FACT_META_KEYS
+    finally:
+        await manager.aclose()
+
+
+async def test_unsorted_meetings_get_a_null_source_project_and_no_recording(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """FR-2: the reserved `unsorted/` root is not a project, and a meeting
+    with no stored recording reports `source_recording: null`."""
+    meeting = tmp_app_dir / "vault" / "unsorted" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    (meeting / "transcript.json").write_text(json.dumps(_transcript_doc()), encoding="utf-8")
+
+    response = _items_json(
+        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": [10.0]}]
+    )
+    manager = _manager(config, ledger, FakeLlm(responses=[response]))
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        md_text = (items_dir / "a-task" / "a-task.md").read_text(encoding="utf-8")
+        meta, _ = parse_front_matter(md_text)
+        # JSON null -- never the literal string "unsorted" posing as a project.
+        assert "\nsource_project: null\n" in md_text
+        assert meta["source_project"] is None, "unsorted meetings carry a null project"
+        assert meta["source_meeting"] == MEETING_NAME
+        assert meta["source_recording"] is None
+        # The rest of the contract still holds for an unfiled meeting: the
+        # date comes off the folder name, and `archived` is always written.
+        assert meta["source_date"] == "2026-01-01"
+        assert meta["archived"] is False
+        assert set(meta) == ACTION_ITEM_META_KEYS
+    finally:
+        await manager.aclose()
+
+
+async def test_a_meeting_without_a_date_prefix_still_succeeds_with_a_null_source_date(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """FR-3: an unparseable folder name degrades to null, never fails the job."""
+    meeting = tmp_app_dir / "vault" / "ELS" / "Planning notes"
+    meeting.mkdir(parents=True)
+    (meeting / "source.mp3").write_bytes(b"fake-audio")
+    (meeting / "transcript.json").write_text(json.dumps(_transcript_doc()), encoding="utf-8")
+
+    response = _items_json(
+        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": [10.0]}]
+    )
+    manager = _manager(config, ledger, FakeLlm(responses=[response]))
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        md_text = (items_dir / "a-task" / "a-task.md").read_text(encoding="utf-8")
+        meta, _ = parse_front_matter(md_text)
+        assert "\nsource_date: null\n" in md_text
+        assert meta["source_date"] is None
+        assert meta["source_project"] == "ELS"
     finally:
         await manager.aclose()
 

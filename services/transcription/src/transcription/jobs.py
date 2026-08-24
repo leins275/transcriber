@@ -907,10 +907,16 @@ class JobManager:
             duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
 
         source_file = self._find_source_file(meeting_dir)
-        # Items live inside the meeting folder, so provenance comes from the
-        # meeting's parent: a project code, or null for `unsorted/` meetings.
+        # Items live inside the meeting folder, so provenance is anchored on
+        # that folder (the job's input), not on where the artifacts happen to
+        # land -- the derivation survives layout moves. The parent is a
+        # project code, or null for meetings under the reserved `unsorted/`
+        # root, which is not a project.
         parent_name = meeting_dir.parent.name
-        project_name = None if parent_name.casefold() == "unsorted" else parent_name
+        project_name = (
+            None if parent_name.casefold() == artifacts.UNSORTED_DIR_NAME else parent_name
+        )
+        source_date = artifacts.source_date_from_meeting_name(meeting_dir.name)
         created = datetime.now(UTC).isoformat()
 
         md_paths: list[Path] = []
@@ -949,9 +955,13 @@ class JobManager:
             meta: dict[str, Any] = {
                 type_key: getattr(item, type_key),
                 "title": item.title,
+                # Always written false; only external editors flip it, and a
+                # missing key reads as false (see artifacts.py's contract).
+                "archived": False,
                 "source_project": project_name,
                 "source_meeting": meeting_dir.name,
                 "source_recording": source_file.name if source_file is not None else None,
+                "source_date": source_date,
                 "timestamps": snapped,
                 "created": created,
                 "model": job.model,
