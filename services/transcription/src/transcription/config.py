@@ -132,6 +132,11 @@ class Config:
     llm_threads: int | None = None
     llm_temperature: float = 0.3
     llm_max_output_tokens: int = 4096
+    # Extra output budget for the reasoning model's <think> block on
+    # free-text calls (summaries), on top of llm_max_output_tokens, so the
+    # thinking cannot eat the whole answer budget. Grammar-constrained JSON
+    # calls suppress thinking and keep the plain cap.
+    llm_think_headroom_tokens: int = 2048
     # Keep the GGUF model resident between LLM jobs. Off by default so the
     # ~20 GB working set is released and never sits next to a loaded whisper
     # model; reloading is mmap-fast.
@@ -346,7 +351,12 @@ def load_config(
             values[speakers_key] = int(values[speakers_key])
         elif speakers_key in values:
             values[speakers_key] = None
-    for llm_int_key in ("llm_ctx", "llm_gpu_layers", "llm_max_output_tokens"):
+    for llm_int_key in (
+        "llm_ctx",
+        "llm_gpu_layers",
+        "llm_max_output_tokens",
+        "llm_think_headroom_tokens",
+    ):
         if llm_int_key in values:
             values[llm_int_key] = int(values[llm_int_key])
     if "llm_threads" in values and values["llm_threads"] not in (None, ""):

@@ -121,9 +121,20 @@ def test_language_is_a_keyword_parameter_with_a_default(name: str) -> None:
 
 def test_repair_replays_the_pinned_system_message_verbatim() -> None:
     original = facts_messages("[0:01] A: hello", language="ru")
-    repaired = repair_messages(original, "not json", "invalid JSON")
-    assert repaired[: len(original)] == original
+    repaired = repair_messages(
+        original,
+        "not json",
+        "invalid JSON",
+        output_budget_tokens=1024,
+        count_tokens=lambda text: max(1, len(text) // 2),
+    )
+    assert repaired[0] == original[0]
     assert "Write your entire answer in Russian." in system_content(repaired)
+    # Bounded by construction: the transcript is not replayed, only the
+    # echoed output and the error ride along.
+    assert len(repaired) == 2
+    assert all(TRANSCRIPT not in message["content"] for message in repaired[1:])
+    assert "not json" in repaired[1]["content"]
 
 
 # ------------------------------------------------------------------- FR-2

@@ -172,9 +172,11 @@ class FakeLlm:
 
     Scripted: each `complete()` call pops the next response from
     `responses` (the last one repeats when the script runs dry, so a test
-    need not count map-reduce calls exactly). Records every messages list
-    and json_schema it was handed. Can raise a given kind, or cancel
-    cooperatively partway through a call.
+    need not count map-reduce calls exactly). An entry is a plain string
+    (finish_reason "stop") or a `(text, finish_reason)` tuple -- `("...",
+    "length")` simulates a completion cut off at max_tokens. Records every
+    messages list and json_schema it was handed. Can raise a given kind, or
+    cancel cooperatively partway through a call.
     """
 
     name = "fake-llm"
@@ -183,7 +185,7 @@ class FakeLlm:
         self,
         config: Any = None,
         *,
-        responses: list[str] | None = None,
+        responses: list[str | tuple[str, str]] | None = None,
         raise_kind: ErrorKind | None = None,
         model: str = "fake-llm-model",
     ) -> None:
@@ -223,10 +225,21 @@ class FakeLlm:
             on_progress(fraction)
 
         if len(self.responses) > 1:
-            text = self.responses.pop(0)
+            entry = self.responses.pop(0)
         else:
-            text = self.responses[0]
-        return LlmCompletion(text=text, completion_tokens=len(text) // 3)
+            entry = self.responses[0]
+        if isinstance(entry, tuple):
+            text, finish_reason = entry
+        else:
+            text, finish_reason = entry, "stop"
+        return LlmCompletion(
+            text=text, completion_tokens=len(text) // 3, finish_reason=finish_reason
+        )
+
+    def count_tokens(self, text: str) -> int:
+        # Deliberately distinct from chunking.estimate_tokens (len // 2) so
+        # tests can prove the provider's tokenizer seam is actually used.
+        return max(1, len(text) // 4)
 
     def unload(self) -> None:
         self.unload_calls += 1

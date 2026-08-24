@@ -34,8 +34,8 @@ from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.frame_extractor import FrameExtractorProtocol, PyAvFrameExtractor
 from transcription.ledger import Ledger
 from transcription.llm import BUILTIN_ENGINE, get_llm_provider, validate_llm_provider_name
-from transcription.llm.base import LlmProvider, Message
-from transcription.llm.chunking import chunk_lines
+from transcription.llm.base import LlmProvider, LlmTruncatedError, Message
+from transcription.llm.chunking import chunk_lines, input_budget_tokens
 from transcription.llm.extraction import merge_items, snap_timestamps
 from transcription.llm.prompts import (
     action_items_messages,
@@ -50,7 +50,7 @@ from transcription.llm.shapes import (
     LlmOutputError,
     parse_llm_json,
 )
-from transcription.llm.summarize import summarize_chunks
+from transcription.llm.summarize import MAX_SPLIT_DEPTH, summarize_chunks
 from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
@@ -633,9 +633,14 @@ class JobManager:
     # ------------------------------------------------------------------
 
     def _llm_budget_tokens(self) -> int:
-        """The chunker's token budget: half the context window, leaving the
-        other half for the prompt scaffolding and the answer."""
-        return max(1024, self._config.llm_ctx // 2)
+        """The chunker's token budget: the context window minus everything
+        else that shares it (the answer, the reasoning headroom, prompt
+        scaffolding), so a fitting chunk can never overflow ``n_ctx``."""
+        return input_budget_tokens(
+            self._config.llm_ctx,
+            self._config.llm_max_output_tokens,
+            self._config.llm_think_headroom_tokens,
+        )
 
     async def _resolve_llm(self, job: JobState) -> LlmProvider:
         """Resolve the LLM engine off the event loop; failures are this
@@ -757,15 +762,30 @@ class JobManager:
         `reasoning_sink` when the caller wants to keep it (the summary
         runner writes it to a `*.reasoning.md` sidecar) and is discarded
         otherwise.
+
+        Free-text calls get the think-headroom on top of the output cap so
+        the reasoning block cannot eat the whole answer budget; JSON calls
+        are grammar-constrained (no thinking) and keep the plain cap. A
+        completion that stops at the cap raises `LlmTruncatedError` -- the
+        cut-off text must never pass as an answer (a truncated summary, or
+        chain-of-thought whose `</think>` was never emitted) and truncated
+        JSON cannot be repaired textually; callers split the input and retry.
         """
+        max_tokens = self._config.llm_max_output_tokens
+        if json_schema is None:
+            max_tokens += self._config.llm_think_headroom_tokens
         completion = provider.complete(
             messages,
             json_schema=json_schema,
-            max_tokens=self._config.llm_max_output_tokens,
+            max_tokens=max_tokens,
             temperature=self._config.llm_temperature,
             on_progress=on_progress if on_progress is not None else (lambda fraction: None),
             cancel=job.cancel_token,
         )
+        if completion.finish_reason == "length":
+            raise LlmTruncatedError(
+                f"the completion stopped at the {max_tokens}-token output limit"
+            )
         answer, reasoning = split_reasoning(completion.text)
         if reasoning and reasoning_sink is not None:
             reasoning_sink.append(reasoning)
@@ -774,31 +794,57 @@ class JobManager:
     def _summarize_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
         lines, data = self._load_transcript_lines(meeting_dir)
-        chunks = chunk_lines(lines, self._llm_budget_tokens())
+        budget = self._llm_budget_tokens()
+        chunks = chunk_lines(lines, budget, count_tokens=provider.count_tokens)
         # The transcript's own language, pinned into the single-chunk call,
         # every map call and the reduce. Missing, null or unsupported values
         # are the prompt builder's problem: it falls back to the soft rule.
         language = data.get("language")
-        total_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
+        # Split-retries and reduce rounds can add calls beyond this plan, so
+        # progress is clamped monotone against a denominator that grows with
+        # the actual call count instead of ever running backwards.
+        planned_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
         calls_done = 0
         reasoning: list[str] = []
 
+        def advance(fraction: float) -> None:
+            total = max(planned_calls, calls_done + 1)
+            job.progress = min(0.99, max(job.progress, (calls_done + fraction) / total))
+
         def complete(messages: list[Message]) -> str:
             nonlocal calls_done
+            job.cancel_token.raise_if_cancelled()
             text = self._complete_text(
                 job,
                 provider,
                 messages,
-                on_progress=lambda fraction: setattr(
-                    job, "progress", min(0.99, (calls_done + fraction) / total_calls)
-                ),
+                on_progress=advance,
                 reasoning_sink=reasoning,
             )
             calls_done += 1
-            job.progress = min(0.99, calls_done / total_calls)
+            advance(0.0)
             return text
 
-        summary = summarize_chunks(chunks, complete, language)
+        def split_chunk(chunk: str, depth: int) -> list[str]:
+            piece_budget = max(64, budget >> (depth + 1))
+            return chunk_lines(chunk.splitlines(), piece_budget, count_tokens=provider.count_tokens)
+
+        try:
+            summary = summarize_chunks(
+                chunks,
+                complete,
+                language,
+                reduce_budget_tokens=budget,
+                count_tokens=provider.count_tokens,
+                split_chunk=split_chunk,
+            )
+        except LlmTruncatedError as truncated:
+            raise ServiceError(
+                ErrorKind.LLM_OUTPUT,
+                "the model's summary output hit the token limit even after the "
+                "transcript was split into minimal chunks; raising "
+                "llm_max_output_tokens in the service config may help",
+            ) from truncated
         summary_path = artifacts.write_text_atomic(
             summary + "\n", Path(job.output_path) / "summary.md"
         )
@@ -819,7 +865,13 @@ class JobManager:
         wrapper_cls: type[ActionItemsOut] | type[FactsOut],
         on_progress: Callable[[float], None],
     ) -> list[Any]:
-        """One schema-constrained completion with the one bounded repair retry."""
+        """One schema-constrained completion with the one bounded repair retry.
+
+        Truncation (`LlmTruncatedError`) deliberately propagates instead of
+        entering the repair path: a cut-off JSON prefix cannot be fixed by
+        showing it back to the model -- the caller splits the chunk and
+        retries. Repair is reserved for complete output that broke the schema.
+        """
         schema = wrapper_cls.model_json_schema()
         text = self._complete_text(
             job, provider, messages, json_schema=schema, on_progress=on_progress
@@ -827,7 +879,13 @@ class JobManager:
         try:
             return list(parse_llm_json(text, wrapper_cls).items)
         except LlmOutputError as first_error:
-            repair = repair_messages(messages, first_error.raw, str(first_error))
+            repair = repair_messages(
+                messages,
+                first_error.raw,
+                str(first_error),
+                output_budget_tokens=self._llm_budget_tokens(),
+                count_tokens=provider.count_tokens,
+            )
             text = self._complete_text(
                 job, provider, repair, json_schema=schema, on_progress=on_progress
             )
@@ -851,10 +909,62 @@ class JobManager:
             return None
         return None
 
+    def _extract_chunk_items(
+        self,
+        job: JobState,
+        provider: LlmProvider,
+        chunk: str,
+        messages_fn: Callable[[str], list[Message]],
+        wrapper_cls: type[ActionItemsOut] | type[FactsOut],
+        on_progress: Callable[[float], None],
+        budget_tokens: int,
+        depth: int = 0,
+    ) -> list[Any]:
+        """Extract one chunk, splitting it in half and retrying when the
+        model's JSON output hits the token cap (a rich chunk can need more
+        item text than the output budget holds). Bounded like the summary
+        split; the floor becomes an honest token-limit error instead of the
+        misleading JSON parse error truncation used to surface as."""
+        try:
+            return self._constrained_items(
+                job, provider, messages_fn(chunk), wrapper_cls, on_progress=on_progress
+            )
+        except LlmTruncatedError as truncated:
+            half_budget = max(64, budget_tokens // 2)
+            sub_chunks = (
+                chunk_lines(chunk.splitlines(), half_budget, count_tokens=provider.count_tokens)
+                if depth < MAX_SPLIT_DEPTH
+                else []
+            )
+            if len(sub_chunks) <= 1:
+                raise ServiceError(
+                    ErrorKind.LLM_OUTPUT,
+                    f"the model's {job.job_type} output hit the token limit even "
+                    "for a minimal transcript chunk; raising "
+                    "llm_max_output_tokens in the service config may help",
+                ) from truncated
+            items: list[Any] = []
+            for sub_chunk in sub_chunks:
+                job.cancel_token.raise_if_cancelled()
+                items.extend(
+                    self._extract_chunk_items(
+                        job,
+                        provider,
+                        sub_chunk,
+                        messages_fn,
+                        wrapper_cls,
+                        on_progress,
+                        half_budget,
+                        depth + 1,
+                    )
+                )
+            return items
+
     def _extract_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
         lines, data = self._load_transcript_lines(meeting_dir)
-        chunks = chunk_lines(lines, self._llm_budget_tokens())
+        budget = self._llm_budget_tokens()
+        chunks = chunk_lines(lines, budget, count_tokens=provider.count_tokens)
         # The transcript's own language, pinned into every chunk's prompt.
         # Missing, null or unsupported values are the prompt builder's
         # problem: it falls back to the soft "mirror the transcript" rule.
@@ -881,19 +991,40 @@ class JobManager:
 
             return on_progress
 
+        # One bad chunk degrades to a warning instead of failing the whole
+        # job (the screenshots pattern): every other chunk's items are
+        # independently useful. Only when no chunk yields anything does the
+        # job fail -- and cancellation always wins.
         per_chunk: list[list[Any]] = []
+        chunk_errors: list[ServiceError] = []
         for index, chunk in enumerate(chunks):
             job.cancel_token.raise_if_cancelled()
-            per_chunk.append(
-                self._constrained_items(
-                    job,
-                    provider,
-                    messages_fn(chunk),
-                    wrapper_cls,
-                    on_progress=progress_for(
-                        (index / len(chunks)) * llm_share, llm_share / len(chunks)
-                    ),
+            try:
+                per_chunk.append(
+                    self._extract_chunk_items(
+                        job,
+                        provider,
+                        chunk,
+                        messages_fn,
+                        wrapper_cls,
+                        progress_for((index / len(chunks)) * llm_share, llm_share / len(chunks)),
+                        budget,
+                    )
                 )
+            except ServiceError as exc:
+                if exc.kind is not ErrorKind.LLM_OUTPUT:
+                    raise
+                chunk_errors.append(exc)
+                per_chunk.append([])
+                job.warnings.append(
+                    f"chunk {index + 1}/{len(chunks)} produced no usable "
+                    f"{job.job_type} output ({exc.message}); its items are missing"
+                )
+        if chunk_errors and len(chunk_errors) == len(chunks):
+            raise ServiceError(
+                ErrorKind.LLM_OUTPUT,
+                f"no transcript chunk produced valid {job.job_type} output; "
+                f"last error: {chunk_errors[-1].message}",
             )
         items = merge_items(per_chunk)
 
