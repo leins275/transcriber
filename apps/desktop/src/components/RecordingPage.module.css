@@ -45,6 +45,18 @@
   overflow-wrap: anywhere;
 }
 
+/* Provenance line: the decoded language as a pill, then the run-together
+   crumbs. The language sits first and named in full because it is the one
+   value the operator acts on — a wrong one means re-transcribe with an
+   override — while date, model and device are only ever read. */
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
 .meta {
   font-size: var(--text-sm);
   color: var(--text-muted);
@@ -55,6 +67,38 @@
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* The language picker and the Transcribe button are one control: they wrap
+   together rather than drifting to opposite ends of the action row. */
+.transcribeGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.languageLabel {
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.language {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-sm) / 1.5 var(--font-body);
+}
+
+.language:focus-visible {
+  border-color: var(--accent);
+}
+
+.language:disabled {
+  color: var(--text-faint);
 }
 
 .tabs {

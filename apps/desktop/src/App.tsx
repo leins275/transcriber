@@ -38,6 +38,7 @@ import type {
   MeetingUpdate,
   ServiceStatusView,
   SettingsView,
+  TranscriptLanguage,
 } from "./types";
 
 const INITIAL_SERVICE_STATUS: ServiceStatusView = {
@@ -343,8 +344,8 @@ function App() {
   }, []);
 
   const handleTranscribe = useCallback(
-    async (entryId: string) => {
-      const snapshot = await api.transcribeVaultEntry(entryId);
+    async (entryId: string, language: TranscriptLanguage | null) => {
+      const snapshot = await api.transcribeVaultEntry(entryId, language);
       // Show it in the pinned list immediately; its later transitions
       // arrive through `jobs://updated` like any other job's.
       upsertJob(snapshot);

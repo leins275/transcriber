@@ -132,7 +132,11 @@ class JobCreate(BaseModel):
     audio_path: str | None = Field(default=None, min_length=1)
     input_path: str | None = Field(default=None, min_length=1)
     output_dir: str = Field(min_length=1)
-    language: str | None = None
+    # The operator's language universe is exactly {ru, en} (FR-3); anything
+    # else -- including `""` -- is rejected here, before `JobManager.submit`,
+    # so an invalid request never leaves a ledger row behind (NFR-3).
+    # `None` (or an omitted field) means constrained auto-detection (FR-1).
+    language: Literal["ru", "en"] | None = None
     provider: str | None = None
     model: str | None = None
     meeting: dict[str, Any] | None = None

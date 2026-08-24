@@ -595,6 +595,10 @@ class JobManager:
             job.elapsed_sec = elapsed
             job.audio_duration_sec = result.duration_sec
             job.cost_usd = result.cost_usd
+            # FR-4: record the language the decode actually used, not the one
+            # the request asked for -- on an auto job the row went in as NULL
+            # and the provider's constrained detection picked the winner.
+            job.language = result.language
             self._ledger.finish_succeeded(
                 job.job_id,
                 elapsed_sec=elapsed,
@@ -603,6 +607,7 @@ class JobManager:
                 filtered_segment_count=result.filtered_segment_count,
                 cost_usd=result.cost_usd,
                 currency=result.currency,
+                language=result.language,
             )
         except ServiceError as exc:
             elapsed = time.monotonic() - start

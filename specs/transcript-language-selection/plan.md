@@ -73,7 +73,7 @@ Component changes, grounded:
 
 ## Tasks
 
-### [ ] T1: Validate `language` on `POST /v1/jobs`  [deps: —]
+### [x] T1: Validate `language` on `POST /v1/jobs`  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/schema.py`, `services/transcription/tests/test_api_jobs.py`
 - **Test first**: `services/transcription/tests/test_api_jobs.py` — cases: `POST /v1/jobs` with `language="de"` → 400, body `error_kind == "invalid_request"`, ledger has no row and `GET /v1/jobs` lists no job (FR-3, NFR-3); same for `language=""`; `language="ru"`, `"en"`, and omitted are accepted (202, job created).
@@ -81,7 +81,7 @@ Component changes, grounded:
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests pass; `uv run --directory services/transcription pytest -q` green; `make lint` and `make type` pass.
 
-### [ ] T2: Validate `language` in config layering and the CLI  [deps: —]
+### [x] T2: Validate `language` in config layering and the CLI  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/config.py`, `services/transcription/tests/test_config.py`, `services/transcription/tests/test_cli.py`
 - **Test first**: `services/transcription/tests/test_config.py` — cases: `load_config` with `language="de"` (from config file, from `TRANSCRIBER_LANGUAGE`, and from overrides) raises `ConfigError` whose message names `ru`/`en`; `""` normalizes to `None`; `"ru"`/`"en"`/unset accepted (FR-3). `services/transcription/tests/test_cli.py` — cases: `main(["transcribe", ..., "--language", "de", ...])` exits nonzero with the allowed values named on stderr; `--language en` proceeds past config loading (FR-3 acceptance: CLI exit).
@@ -89,7 +89,7 @@ Component changes, grounded:
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests pass; `uv run --directory services/transcription pytest -q` green; `make lint` and `make type` pass.
 
-### [ ] T3: Constrained {ru, en} detection in the local provider  [deps: —]
+### [x] T3: Constrained {ru, en} detection in the local provider  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/providers/local_whisper.py`, `services/transcription/tests/test_provider_local.py`
 - **Test first**: `services/transcription/tests/test_provider_local.py` (extend the existing inline fake `WhisperModel`s at lines ~103/127/178 with a `detect_language` returning canned `all_language_probs`) — cases: (a) probabilities ranking `uk` above both `ru` and `en` → decode still receives the higher of `ru`/`en` in `decode_kwargs["language"]` (FR-1 acceptance bullet 2); (b) constraint applies on the sequential path *and* on the `BatchedInferencePipeline` path — assert the pipeline fake's received kwargs (FR-1 bullet 3); (c) explicit `language="en"`/`"ru"` skips detection entirely (no `detect_language` call) and is passed through (FR-2); (d) result `language` equals the forced/chosen value and `language_probability` is the constrained-detection probability on auto runs, the model-reported value on forced runs (FR-4); (e) exactly one `detect_language` call per auto transcribe (NFR-1).
@@ -97,7 +97,7 @@ Component changes, grounded:
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests pass; `uv run --directory services/transcription pytest -q` green; `make lint` and `make type` pass.
 
-### [ ] T4: Job pipeline records the actual decode language (transcript + ledger)  [deps: —]
+### [x] T4: Job pipeline records the actual decode language (transcript + ledger)  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`, `services/transcription/src/transcription/ledger.py`, `services/transcription/tests/test_jobs.py`, `services/transcription/tests/test_ledger.py`, `services/transcription/tests/fakes.py`
 - **Test first**: `services/transcription/tests/test_jobs.py` (extend `fakes.py`'s `FakeProvider` to record the `language` kwarg it received, e.g. `self.seen_language`) — cases: submit with `language="en"` → provider received `"en"`, `transcript.json.language == "en"`, ledger row `language == "en"` (FR-2 spy acceptance, FR-4); symmetric for `"ru"`; submit with no language and a FakeProvider that "detects" `"ru"` with probability 0.9 → `transcript.json.language == "ru"`, `language_probability == 0.9`, ledger row `language == "ru"` even though it was inserted as `NULL` (FR-4 both bullets). `services/transcription/tests/test_ledger.py` — cases: `finish_succeeded(language="en")` updates the column; `finish_succeeded()` with no language leaves the inserted value untouched (LLM rows unaffected).
@@ -105,7 +105,7 @@ Component changes, grounded:
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests pass; `uv run --directory services/transcription pytest -q` green (including `test_llm_jobs.py`, untouched); `make lint` and `make type` pass.
 
-### [ ] T5: Rust plumbing — `transcribe_vault_entry` carries a validated language to the wire  [deps: —]
+### [x] T5: Rust plumbing — `transcribe_vault_entry` carries a validated language to the wire  [deps: —]
 
 - **Files**: `apps/desktop/src-tauri/src/commands.rs`, `apps/desktop/src-tauri/src/commands/meetings.rs`, `apps/desktop/src-tauri/src/jobs.rs`, `apps/desktop/src-tauri/src/service/http.rs`, `apps/desktop/src-tauri/src/service/fake.rs`
 - **Test first**: `apps/desktop/src-tauri/src/service/http.rs` (existing submit-body test module, ~line 570) — cases: `SubmitBody` with `language: Some("en")` serializes `"language":"en"`; with `None` the key is absent from the JSON body (FR-5 both checkboxes: override carried / Auto omitted). `apps/desktop/src-tauri/src/commands/meetings.rs` tests — cases: handler with `language: Some("de".into())` returns `invalid_argument` and enqueues nothing (IPC args are untrusted — desktop profile); `Some("en")`/`Some("ru")`/`None` accepted. `apps/desktop/src-tauri/src/jobs.rs` tests — case: a `PendingWork::Filed { language: Some("en") }` job produces a `SubmitRequest` with `language: Some("en")`; the ingest path still submits `language: None`.
@@ -113,7 +113,7 @@ Component changes, grounded:
 - **Skills**: —
 - **Done when**: new tests pass; `cargo test --workspace` green; `cargo clippy --workspace --all-targets -- -D warnings` (make lint) and `cargo check --workspace` (make type) pass.
 
-### [ ] T6: Recording-page language control (Auto / Russian / English) wired to the command  [deps: —]
+### [x] T6: Recording-page language control (Auto / Russian / English) wired to the command  [deps: —]
 
 - **Files**: `apps/desktop/src/components/RecordingPage.tsx`, `apps/desktop/src/components/RecordingPage.test.tsx`, `apps/desktop/src/components/RecordingPage.module.css`, `apps/desktop/src/App.tsx`, `apps/desktop/src/api.ts`, `apps/desktop/src/types.ts`
 - **Test first**: `apps/desktop/src/components/RecordingPage.test.tsx` — cases: default control state is Auto and clicking Transcribe/Re-transcribe calls `onTranscribe(entryId, null)` (FR-5: default = constrained auto, no silent hard-force); selecting English then Re-transcribe calls `onTranscribe(entryId, "en")`, symmetric for Russian (FR-5); the control renders only when the button does (`entry.has_source`); existing Transcribe/Re-transcribe tests (line ~107) updated for the new callback signature.
@@ -121,7 +121,7 @@ Component changes, grounded:
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: new tests pass; `npm --prefix apps/desktop run test` green; `npm --prefix apps/desktop run lint` and `npm --prefix apps/desktop run type` pass.
 
-### [ ] T7: Recording-page language indicator  [deps: T6]
+### [x] T7: Recording-page language indicator  [deps: T6]
 
 - **Files**: `apps/desktop/src/components/RecordingPage.tsx`, `apps/desktop/src/components/RecordingPage.test.tsx`, `apps/desktop/src/components/RecordingPage.module.css`
 - **Test first**: `apps/desktop/src/components/RecordingPage.test.tsx` — cases: a loaded transcript with `language: "en"` shows an English indicator; `language: "ru"` shows Russian; `language: null` (legacy transcript) renders no indicator and no placeholder (FR-6 acceptance, exactly).
@@ -129,7 +129,7 @@ Component changes, grounded:
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: new tests pass; `npm --prefix apps/desktop run test` green; `npm --prefix apps/desktop run lint` and `npm --prefix apps/desktop run type` pass.
 
-### [ ] T8: Integration — real-audio fixtures and full-stack verification  [deps: T1, T2, T3, T4, T5, T6, T7]
+### [x] T8: Integration — real-audio fixtures and full-stack verification  [deps: T1, T2, T3, T4, T5, T6, T7]
 
 - **Files**: `services/transcription/tests/test_gpu_integration.py`, `services/transcription/tests/data/README.md`
 - **Test first**: `services/transcription/tests/test_gpu_integration.py` — extend the opt-in `@pytest.mark.gpu` test (self-skips without a sample/CUDA, per its existing pattern): an English-speech sample submitted with no `language` produces `transcript.json` with `language: "en"` and English text; a Russian sample produces `"ru"` and Russian text; the ledger row matches (FR-1 acceptance bullet 1, FR-4). Samples resolved via `TRANSCRIBER_TEST_SAMPLE`-style env vars (`TRANSCRIBER_TEST_SAMPLE_EN` / `_RU`), documented in `tests/data/README.md`.

@@ -334,6 +334,42 @@ def test_model_path_flag_beats_env_beats_config_file(
     assert summary["model_path"] == "from-flag"
 
 
+def test_invalid_language_flag_exits_invalid_request_with_allowed_values_on_stderr(
+    tmp_app_dir: Path, audio_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """FR-3 acceptance: `--language de` fails the one-shot run with a nonzero
+    exit and a message naming the allowed values; nothing on stdout."""
+    providers.register("fake", FakeProvider)
+    output_dir = tmp_app_dir / "out-bad-language"
+
+    args = _common_args(tmp_app_dir, audio_file, output_dir) + ["--language", "de"]
+    code = main(args)
+
+    assert code == EXIT_CODES[ErrorKind.INVALID_REQUEST]
+    assert code != 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "ru" in captured.err
+    assert "en" in captured.err
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize("language", ["ru", "en"])
+def test_valid_language_flag_proceeds_past_config_loading(
+    language: str, tmp_app_dir: Path, audio_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    providers.register("fake", FakeProvider)
+    output_dir = tmp_app_dir / f"out-language-{language}"
+
+    args = _common_args(tmp_app_dir, audio_file, output_dir) + ["--language", language]
+    code = main(args)
+
+    assert code == 0
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out.strip())
+    assert summary["status"] == "succeeded"
+
+
 def test_serve_wires_merged_config_into_run_server(
     tmp_app_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

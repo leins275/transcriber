@@ -28,6 +28,7 @@ import type {
   ServiceStatusView,
   SettingsView,
   SummaryView,
+  TranscriptLanguage,
   TranscriptView,
   VaultMeetingView,
 } from "./types";
@@ -93,9 +94,12 @@ export const api = {
     call<SummaryView>("read_summary", { entryId }),
   /** Re-runs transcription over a recording already filed in the vault --
    * never a second ingest, which would file a duplicate under a suffixed
-   * name. */
-  transcribeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
-    call<JobSnapshot>("transcribe_vault_entry", { entryId }),
+   * name. `language` is the operator's per-recording override; `null` leaves
+   * the service on its constrained {ru, en} auto-detection. */
+  transcribeVaultEntry: (
+    entryId: string,
+    language: TranscriptLanguage | null,
+  ): Promise<JobSnapshot> => call<JobSnapshot>("transcribe_vault_entry", { entryId, language }),
   /** Resolves `false` when there was nothing left to cancel (the job never
    * reached the service, or already finished) -- information, not an error. */
   cancelJob: (jobId: string): Promise<boolean> => call<boolean>("cancel_job", { jobId }),

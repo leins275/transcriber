@@ -605,6 +605,77 @@ mod tests {
     }
 
     #[test]
+    fn submit_carries_the_selected_language_on_the_wire() {
+        // FR-5: an operator-chosen override must actually reach F2's
+        // `JobCreate.language` -- the field this app hardcoded to `None`
+        // until the recording page grew a language control.
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .and(body_json(serde_json::json!({
+                    "audio_path": "C:\\Meetings\\ELS\\260812\\source.mp4",
+                    "output_dir": "C:\\Meetings\\ELS\\260812",
+                    "language": "en",
+                })))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_json(serde_json::json!({"job_id": "job-1"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            service
+                .submit(SubmitRequest {
+                    language: Some("en".to_string()),
+                    ..request()
+                })
+                .await
+                .expect("submit should succeed");
+        });
+    }
+
+    #[test]
+    fn submit_omits_the_language_key_entirely_when_the_choice_is_auto() {
+        // FR-5's second half: Auto is the *absence* of the field, not an
+        // empty string or a null -- F2 must be free to run its own
+        // constrained detection.
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_json(serde_json::json!({"job_id": "job-1"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            service
+                .submit(request())
+                .await
+                .expect("submit should succeed");
+
+            let requests = server
+                .received_requests()
+                .await
+                .expect("mock server records requests");
+            let body: serde_json::Value =
+                serde_json::from_slice(&requests[0].body).expect("body is json");
+            assert!(
+                body.get("language").is_none(),
+                "an Auto submission must omit `language` entirely, got {body}"
+            );
+        });
+    }
+
+    #[test]
     fn submit_sends_bearer_token_when_configured_and_omits_it_otherwise() {
         run(async {
             let server = MockServer::start().await;

@@ -12,11 +12,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers import local_whisper
 from transcription.providers.base import CancelToken
+
+# What `WhisperModel.detect_language` reports by default in these tests: an
+# English recording, with the full ~100-language distribution abbreviated to
+# the handful that matter here.
+_DEFAULT_LANGUAGE_PROBS: list[tuple[str, float]] = [("en", 0.9), ("ru", 0.05), ("uk", 0.01)]
 
 
 def _config(**overrides: Any) -> SimpleNamespace:
@@ -86,12 +92,20 @@ def make_fake_model_factory(
     raise_on_construct: Exception | None = None,
     raise_on_transcribe: Exception | None = None,
     counting: bool = False,
+    language_probs: list[tuple[str, float]] | None = None,
 ) -> Any:
     """Build a class usable as a `WhisperModel` replacement, tracking calls."""
 
-    state: dict[str, Any] = {"construct_calls": 0, "construct_kwargs": None}
+    state: dict[str, Any] = {
+        "construct_calls": 0,
+        "construct_kwargs": None,
+        "detect_language_calls": 0,
+        "detect_language_kwargs": None,
+        "transcribe_audio": None,
+    }
     segs = segments if segments is not None else _default_segments()
     fw_info = info if info is not None else _FWInfo()
+    probs = language_probs if language_probs is not None else _DEFAULT_LANGUAGE_PROBS
 
     class _Model:
         def __init__(self, **kwargs: Any) -> None:
@@ -100,8 +114,19 @@ def make_fake_model_factory(
             if raise_on_construct is not None:
                 raise raise_on_construct
 
-        def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, _FWInfo]:
+        def detect_language(self, **kwargs: Any) -> tuple[str, float, list[tuple[str, float]]]:
+            """Mirrors `WhisperModel.detect_language`'s return contract in
+            faster-whisper 1.2.1: `(language, language_probability,
+            all_language_probs)`, the last one covering every language the
+            model knows -- not just the two this feature cares about."""
+            state["detect_language_calls"] += 1
+            state["detect_language_kwargs"] = kwargs
+            top_language, top_probability = max(probs, key=lambda item: item[1])
+            return top_language, top_probability, list(probs)
+
+        def transcribe(self, audio: Any, **kwargs: Any) -> tuple[Any, _FWInfo]:
             state["transcribe_kwargs"] = kwargs
+            state["transcribe_audio"] = audio
             if raise_on_transcribe is not None:
                 raise raise_on_transcribe
             if counting:
@@ -122,12 +147,14 @@ class _FakeBatchedPipeline:
     def __init__(self, *, model: Any) -> None:
         self.model = model
         self.transcribe_kwargs: dict[str, Any] | None = None
+        self.transcribe_audio: Any = None
         _FakeBatchedPipeline.instances.append(self)
 
-    def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, Any]:
+    def transcribe(self, audio: Any, **kwargs: Any) -> tuple[Any, Any]:
         self.transcribe_kwargs = kwargs
+        self.transcribe_audio = audio
         forwarded = {key: value for key, value in kwargs.items() if key != "batch_size"}
-        return self.model.transcribe(path, **forwarded)
+        return self.model.transcribe(audio, **forwarded)
 
 
 @pytest.fixture(autouse=True)
@@ -136,6 +163,45 @@ def _reset_fake_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     the real `BatchedInferencePipeline` must never wrap a fake model."""
     _FakeBatchedPipeline.instances = []
     monkeypatch.setattr(local_whisper, "BatchedInferencePipeline", _FakeBatchedPipeline)
+
+
+@pytest.fixture(autouse=True)
+def fake_decode_audio(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """`decode_audio` is the only thing in this provider that reads the file
+    off disk; tests hand back a fixed waveform instead so no fixture audio is
+    needed. Returns the list of sources it was asked to decode."""
+    calls: list[Any] = []
+    waveform = np.zeros(16_000, dtype=np.float32)
+
+    def _decode(source: Any, **kwargs: Any) -> Any:
+        calls.append(source)
+        return waveform
+
+    monkeypatch.setattr(local_whisper, "decode_audio", _decode, raising=False)
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def fake_vad(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Silero stands in for the real VAD model: unit tests never load it.
+
+    Records the waveform it was asked to scan and the options it got, and by
+    default reports the whole waveform as speech. A test can plant its own
+    `chunks` (including `[]`, "no speech anywhere") before transcribing.
+    """
+    state: dict[str, Any] = {"audio": None, "options": None, "calls": 0, "chunks": None}
+
+    def _get_speech_timestamps(audio: Any, vad_options: Any = None, **kwargs: Any) -> list[Any]:
+        state["calls"] += 1
+        state["audio"] = audio
+        state["options"] = vad_options
+        planted = state["chunks"]
+        if planted is not None:
+            return list(planted)
+        return [{"start": 0, "end": len(audio)}]
+
+    monkeypatch.setattr(local_whisper, "get_speech_timestamps", _get_speech_timestamps)
+    return state
 
 
 def test_model_not_constructed_at_provider_construction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,7 +241,10 @@ def test_describe_model_state_walks_unloaded_loading_loaded(
         def __init__(self, **kwargs: Any) -> None:
             observed.append(provider.describe().model_state)
 
-        def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, _FWInfo]:
+        def detect_language(self, **kwargs: Any) -> tuple[str, float, list[tuple[str, float]]]:
+            return "en", 0.9, list(_DEFAULT_LANGUAGE_PROBS)
+
+        def transcribe(self, audio: Any, **kwargs: Any) -> tuple[Any, _FWInfo]:
             return iter(_default_segments()), _FWInfo()
 
     monkeypatch.setattr(local_whisper, "WhisperModel", _ObservingModel)
@@ -311,7 +380,10 @@ def test_auto_resolved_cuda_construction_failure_falls_back_to_cpu_and_succeeds(
             if kwargs["device"] == "cuda":
                 raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
 
-        def transcribe(self, path: str, **kwargs: Any) -> tuple[Any, _FWInfo]:
+        def detect_language(self, **kwargs: Any) -> tuple[str, float, list[tuple[str, float]]]:
+            return "en", 0.9, list(_DEFAULT_LANGUAGE_PROBS)
+
+        def transcribe(self, audio: Any, **kwargs: Any) -> tuple[Any, _FWInfo]:
             return iter(_default_segments()), _FWInfo()
 
     monkeypatch.setattr(local_whisper, "WhisperModel", _FallbackModel)
@@ -644,6 +716,309 @@ def test_word_timestamps_resegment_multi_utterance_segment(
     assert [seg["text"] for seg in result.segments] == [" Привет.", " Как дела?", " Хорошо"]
     assert [seg["id"] for seg in result.segments] == [0, 1, 2]
     assert result.text == " Привет. Как дела? Хорошо"
+
+
+def test_auto_detection_picks_the_stronger_of_ru_en_even_when_another_language_wins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-1: unconstrained detection is what transcribed an English meeting in
+    Russian. With `uk` outranking both targets, the decode language is still
+    the higher of `ru`/`en` -- never a third language."""
+    model_cls = make_fake_model_factory(
+        language_probs=[("uk", 0.7), ("ru", 0.05), ("en", 0.2), ("de", 0.02)]
+    )
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert model_cls.state["transcribe_kwargs"]["language"] == "en"
+
+
+def test_auto_detection_constraint_applies_on_the_batched_pipeline_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-1: the constraint is applied before the decode call, so the batched
+    (CUDA) path is forced exactly like the sequential one."""
+    model_cls = make_fake_model_factory(language_probs=[("uk", 0.7), ("ru", 0.2), ("en", 0.05)])
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    monkeypatch.setattr(local_whisper, "_cuda_device_count", lambda: 1)
+
+    provider = local_whisper.LocalWhisperProvider(_config(device="auto", batch_size=4))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    pipeline = _FakeBatchedPipeline.instances[0]
+    assert pipeline.transcribe_kwargs is not None
+    assert pipeline.transcribe_kwargs["language"] == "ru"
+
+
+def test_auto_detection_falls_back_to_english_when_neither_target_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-1: the decode language is always exactly `ru` or `en`, even if the
+    model reports a distribution containing neither. FR-4 ("`language_-
+    probability` is populated on auto-detected runs") holds unconditionally:
+    the fallback records `0.0` -- no evidence for the chosen language -- rather
+    than a null the downstream F3 consumer would have to special-case."""
+    model_cls = make_fake_model_factory(language_probs=[("uk", 0.7), ("de", 0.3)])
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    result = provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert model_cls.state["transcribe_kwargs"]["language"] == "en"
+    assert result.language == "en"
+    assert result.language_probability == 0.0
+
+
+@pytest.mark.parametrize("requested", ["en", "ru"])
+def test_explicit_language_is_passed_through_without_any_detection(
+    monkeypatch: pytest.MonkeyPatch, requested: str
+) -> None:
+    """FR-2: an explicit language decodes in that language regardless of what
+    detection would have said -- and costs no detection pass at all."""
+    model_cls = make_fake_model_factory(language_probs=[("uk", 0.9), ("en", 0.05), ("ru", 0.04)])
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    result = provider.transcribe(
+        Path("a.wav"), language=requested, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert model_cls.state["transcribe_kwargs"]["language"] == requested
+    assert model_cls.state["detect_language_calls"] == 0
+    assert result.language == requested
+
+
+def test_forced_run_reports_the_requested_language_and_model_probability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-4: on a forced run the result names the language actually decoded --
+    not whatever `info.language` happens to echo -- with the model-reported
+    probability."""
+    model_cls = make_fake_model_factory(info=_FWInfo(language="en", language_probability=0.42))
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    result = provider.transcribe(
+        Path("a.wav"), language="ru", on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert result.language == "ru"
+    assert result.language_probability == 0.42
+
+
+def test_auto_run_reports_the_constrained_language_and_its_probability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-4: on an auto run the result carries the constrained choice and the
+    probability that choice was made on."""
+    model_cls = make_fake_model_factory(
+        info=_FWInfo(language="uk", language_probability=0.99),
+        language_probs=[("uk", 0.7), ("ru", 0.25), ("en", 0.03)],
+    )
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    result = provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert result.language == "ru"
+    assert result.language_probability == 0.25
+
+
+def test_auto_transcribe_detects_language_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NFR-1: one detection window per job, not one per segment or per call."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert model_cls.state["detect_language_calls"] == 1
+
+
+def test_auto_run_decodes_the_audio_once_and_reuses_it_for_the_decode_pass(
+    monkeypatch: pytest.MonkeyPatch, fake_decode_audio: list[Any]
+) -> None:
+    """NFR-1: detection needs a waveform (`detect_language` takes no path), so
+    the file is decoded once up front and that same waveform is handed to the
+    transcribe call -- never decoded a second time."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert len(fake_decode_audio) == 1
+    # The decode pass gets the decoded waveform itself; detection gets speech
+    # carved out of that same array (see the VAD tests below) -- never a
+    # second `decode_audio` call.
+    waveform = local_whisper.decode_audio("probe")  # the fixture's fixed waveform
+    assert model_cls.state["transcribe_audio"] is waveform
+    assert model_cls.state["detect_language_kwargs"]["audio"] is not None
+
+
+def test_auto_detection_detects_on_vad_filtered_speech(
+    monkeypatch: pytest.MonkeyPatch, fake_vad: dict[str, Any]
+) -> None:
+    """E1: faster-whisper's own auto path VAD-filters the waveform *before*
+    language detection (`WhisperModel.transcribe` runs `get_speech_timestamps`
+    and detects on the filtered features). The constrained detection must be
+    at least as accurate: a recording that opens with silence, hold music or
+    keyboard noise must not have its ru/en choice made from that non-speech
+    audio."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    # Speech starts a quarter of the way into the (1 s) waveform.
+    fake_vad["chunks"] = [{"start": 4_000, "end": 12_000}]
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    scanned = fake_vad["audio"]
+    detected = model_cls.state["detect_language_kwargs"]["audio"]
+    assert fake_vad["calls"] == 1
+    assert len(detected) == 8_000, "detection must see the speech chunk, not the raw waveform"
+    assert np.array_equal(detected, scanned[4_000:12_000])
+    # The decode pass still receives the *unfiltered* waveform: `transcribe`
+    # runs its own VAD and needs the original timeline to map timestamps back.
+    assert len(model_cls.state["transcribe_audio"]) == 16_000
+
+
+def test_detection_vad_uses_the_same_tightened_parameters_as_the_decode_pass(
+    monkeypatch: pytest.MonkeyPatch, fake_vad: dict[str, Any]
+) -> None:
+    """E1: detection and decode must agree on what counts as speech --
+    and `get_speech_timestamps` needs a `VadOptions`, not the raw dict
+    (`transcribe` converts dicts, the detection path does not)."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config(vad_min_silence_ms=700))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    options = fake_vad["options"]
+    assert isinstance(options, local_whisper.VadOptions)
+    decode_kwargs = model_cls.state["transcribe_kwargs"]["vad_parameters"]
+    assert options.min_silence_duration_ms == decode_kwargs["min_silence_duration_ms"] == 700
+    assert options.speech_pad_ms == decode_kwargs["speech_pad_ms"] == 400
+
+
+def test_detection_falls_back_to_raw_audio_when_vad_finds_no_speech(
+    monkeypatch: pytest.MonkeyPatch, fake_vad: dict[str, Any]
+) -> None:
+    """A file the VAD hears nothing in still gets a language and a decode --
+    detecting on the raw window is exactly the pre-fix behaviour, and it beats
+    handing the encoder an empty array (which raises inside faster-whisper)."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    fake_vad["chunks"] = []
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    result = provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    detected = model_cls.state["detect_language_kwargs"]["audio"]
+    assert len(detected) == 16_000
+    assert result.language == "en"
+    assert model_cls.state["transcribe_kwargs"]["language"] == "en"
+
+
+def test_detection_vad_scans_only_a_bounded_prefix_of_a_long_recording(
+    monkeypatch: pytest.MonkeyPatch, fake_vad: dict[str, Any]
+) -> None:
+    """NFR-1: the detection pass may not turn into a second full-file Silero
+    sweep on top of the one the decode pass already runs (~5.7 s per hour of
+    audio, measured). It scans a bounded prefix -- long enough to skip a
+    lead-in of silence or hold music, short enough to stay inside the
+    overhead budget."""
+    prefix_samples = local_whisper._DETECTION_PREFIX_SEC * local_whisper._SAMPLE_RATE
+    long_waveform = np.zeros(prefix_samples + 16_000, dtype=np.float32)
+    monkeypatch.setattr(
+        local_whisper, "decode_audio", lambda *args, **kwargs: long_waveform, raising=False
+    )
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert len(fake_vad["audio"]) == prefix_samples
+    assert local_whisper._DETECTION_PREFIX_SEC <= 600
+    # The decode pass is untouched by the detection budget: it still gets the
+    # whole recording.
+    assert model_cls.state["transcribe_audio"] is long_waveform
+
+
+def test_forced_run_hands_the_path_straight_to_the_model(
+    monkeypatch: pytest.MonkeyPatch, fake_decode_audio: list[Any]
+) -> None:
+    """FR-2: with no detection to run there is nothing to decode up front --
+    faster-whisper reads the file itself, exactly as before this feature."""
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+    provider.transcribe(
+        Path("a.wav"), language="en", on_progress=lambda _: None, cancel=CancelToken()
+    )
+
+    assert fake_decode_audio == []
+    assert model_cls.state["transcribe_audio"] == str(Path("a.wav"))
+
+
+def test_detection_failure_maps_to_a_classified_service_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A detection pass that blows up is classified like any other decode
+    failure -- never a raw exception escaping the provider."""
+
+    decode_calls: list[Any] = []
+
+    class _FailingDetectModel:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def detect_language(self, **kwargs: Any) -> tuple[str, float, list[tuple[str, float]]]:
+            raise RuntimeError("Invalid data found when processing input")
+
+        def transcribe(self, audio: Any, **kwargs: Any) -> tuple[Any, _FWInfo]:
+            decode_calls.append(audio)
+            return iter(_default_segments()), _FWInfo()
+
+    monkeypatch.setattr(local_whisper, "WhisperModel", _FailingDetectModel)
+
+    provider = local_whisper.LocalWhisperProvider(_config())
+
+    with pytest.raises(ServiceError) as exc_info:
+        provider.transcribe(
+            Path("bad.mp4"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+        )
+
+    assert exc_info.value.kind == ErrorKind.AUDIO_DECODE
+    assert "bad.mp4" in exc_info.value.message
+    assert decode_calls == [], "decode must not run once detection has failed"
 
 
 def test_cost_usd_and_currency_are_none_for_local_provider(

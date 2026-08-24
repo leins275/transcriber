@@ -310,6 +310,70 @@ async def test_success_writes_transcript_and_succeeded_ledger_row(
     assert row["cost_usd"] is None
 
 
+@pytest.mark.parametrize(("requested", "would_detect"), [("en", "ru"), ("ru", "en")])
+async def test_explicit_language_reaches_the_provider_and_is_recorded(
+    manager: JobManager,
+    ledger: Ledger,
+    audio_file: Path,
+    output_dir: Path,
+    requested: str,
+    would_detect: str,
+) -> None:
+    """FR-2/FR-4: an explicit language is handed to the provider, and both
+    `transcript.json` and the ledger row record it."""
+    # The fake would "detect" the *other* language if left to itself, so a
+    # passing assertion can only come from the explicit request winning.
+    provider = FakeProvider(language=would_detect)
+    providers.register("fake", lambda config: provider)
+
+    job_id = await manager.submit(
+        audio_path=str(audio_file),
+        output_dir=str(output_dir),
+        provider="fake",
+        language=requested,
+    )
+    await _wait_until_terminal(manager, job_id)
+
+    assert provider.seen_language == requested
+
+    doc = json.loads((output_dir / "transcript.json").read_text(encoding="utf-8"))
+    assert doc["language"] == requested
+
+    row = ledger.get_job(job_id)
+    assert row is not None
+    assert row["language"] == requested
+
+
+async def test_auto_language_job_records_the_decoded_language(
+    manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    """FR-4: with no requested language the ledger row is inserted `NULL` and
+    then corrected to the language the decode actually used."""
+    provider = FakeProvider(language="ru", language_probability=0.9)
+    providers.register("fake", lambda config: provider)
+
+    job_id = await manager.submit(
+        audio_path=str(audio_file), output_dir=str(output_dir), provider="fake"
+    )
+    # No await between submit and here: the worker cannot have run yet.
+    queued_row = ledger.get_job(job_id)
+    assert queued_row is not None
+    assert queued_row["language"] is None
+
+    await _wait_until_terminal(manager, job_id)
+
+    assert provider.seen_language is None
+
+    doc = json.loads((output_dir / "transcript.json").read_text(encoding="utf-8"))
+    assert doc["language"] == "ru"
+    assert doc["language_probability"] == pytest.approx(0.9)
+
+    row = ledger.get_job(job_id)
+    assert row is not None
+    assert row["language"] == "ru"
+    assert manager.status(job_id).language == "ru"
+
+
 async def test_provider_failure_produces_failed_row_and_no_transcript(
     manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:
