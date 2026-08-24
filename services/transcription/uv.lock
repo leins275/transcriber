@@ -4271,6 +4271,7 @@ llm-cuda = [
 dev = [
     { name = "httpx" },
     { name = "mypy" },
+    { name = "pypdf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -4302,6 +4303,7 @@ provides-extras = ["cuda", "diarization", "llm-cpu", "llm-cuda"]
 dev = [
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mypy", specifier = ">=1.11" },
+    { name = "pypdf", specifier = ">=3" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23,<2" },
     { name = "ruff", specifier = ">=0.6" },

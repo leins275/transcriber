@@ -1,7 +1,7 @@
 ---
 slug: pdf-cyrillic-rendering
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Fix PDF rendering and Cyrillic output in per-meeting exports
@@ -47,7 +47,7 @@ Parallelism is inherently limited: the whole fix lives in one module, so T1–T3
 
 ## Tasks
 
-### [ ] T1: Bridge the registered font family into xhtml2pdf's font list  [deps: —]
+### [x] T1: Bridge the registered font family into xhtml2pdf's font list  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/pdf.py`, `services/transcription/tests/test_pdf.py`, `services/transcription/tests/pdf_asserts.py`, `services/transcription/pyproject.toml`
 - **Test first**: `services/transcription/tests/pdf_asserts.py` — pypdf helpers: `embedded_base_fonts(pdf_path)` (walk page `/Resources` → `/Font` → `/BaseFont`, return the set of names) and `extract_text(pdf_path)`. `services/transcription/tests/test_pdf.py` — cases (all Arial-dependent ones `skipif` `%WINDIR%\Fonts\arial.ttf` missing, per FR-5 "skips cleanly, not falsely passes"):
@@ -60,7 +60,7 @@ Parallelism is inherently limited: the whole fix lives in one module, so T1–T3
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests fail against the unbridged code and pass after; `make format`, `make lint`, `make type`, `make test` all pass.
 
-### [ ] T2: Surface font degradation on the export job's warnings  [deps: T1]
+### [x] T2: Surface font degradation on the export job's warnings  [deps: T1]
 
 - **Files**: `services/transcription/src/transcription/pdf.py`, `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_pdf.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_pdf.py` — cases:
@@ -72,7 +72,7 @@ Parallelism is inherently limited: the whole fix lives in one module, so T1–T3
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests fail before / pass after; existing export-job test (`test_export_assembles_sections_in_order_and_renders_a_pdf`) still passes within its current timeout (NFR-4); `make format`, `make lint`, `make type`, `make test` pass.
 
-### [ ] T3: Cyrillic-capable monospace for code spans and blocks  [deps: T2]
+### [x] T3: Cyrillic-capable monospace for code spans and blocks  [deps: T2]
 
 - **Files**: `services/transcription/src/transcription/pdf.py`, `services/transcription/tests/test_pdf.py`
 - **Test first**: `services/transcription/tests/test_pdf.py` — cases:
@@ -82,7 +82,7 @@ Parallelism is inherently limited: the whole fix lives in one module, so T1–T3
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests fail before / pass after; `make format`, `make lint`, `make type`, `make test` pass.
 
-### [ ] T4: Job-level Cyrillic regression through the real export path  [deps: T2]
+### [x] T4: Job-level Cyrillic regression through the real export path  [deps: T2]
 
 - **Files**: `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: this task IS the test. `services/transcription/tests/test_llm_jobs.py`, export section — new case `test_export_renders_cyrillic_with_embedded_fonts` (`skipif` Arial absent, per FR-5):
