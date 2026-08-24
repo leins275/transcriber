@@ -1,7 +1,7 @@
 ---
 slug: action-item-archive-grouping
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Archive status and source grouping for action items
