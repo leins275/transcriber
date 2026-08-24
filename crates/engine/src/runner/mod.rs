@@ -12,6 +12,7 @@
 //! ids are assigned last, by the filter pass, so they number the transcript
 //! that was actually written.
 
+pub mod export;
 pub mod llm_jobs;
 
 use std::path::{Path, PathBuf};
@@ -328,14 +329,11 @@ impl JobRunner for EngineRunner {
             JobKind::Summarize | JobKind::ActionItems | JobKind::Facts | JobKind::Report => {
                 self.run_llm_job(job, ctx)
             }
-            // Deterministic assembly with no model behind it; the PDF half is
-            // what it is still waiting for. Failing by name is deliberate: a
-            // job that appeared to succeed while writing nothing would be
-            // worse than one that says it cannot run yet.
-            JobKind::Export => Err(JobFailure::new(
-                ErrorKind::Internal,
-                "the local engine cannot run an export job yet".to_string(),
-            )),
+            // Deterministic assembly with no model behind it, so it needs
+            // neither engine loaded.
+            JobKind::Export => {
+                export::export_meeting(Path::new(&job.input_path), Path::new(&job.output_dir), ctx)
+            }
         }
     }
 

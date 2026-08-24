@@ -192,12 +192,28 @@ pub fn extract_items(
     })
 }
 
+/// The facts about the job that every item's front matter records, gathered
+/// once rather than per item.
+///
+/// These keys are not decoration: `source_meeting` is what the export job
+/// filters a project's items by, so an item written without it is invisible to
+/// the export that should have included it.
+struct ItemContext {
+    project: String,
+    meeting: String,
+    recording: Option<String>,
+    created: String,
+    model: String,
+    job_id: String,
+}
+
 /// One extracted item, whichever kind, reduced to what writing it needs.
 trait Writable {
     fn title(&self) -> &str;
     fn body(&self) -> &str;
     fn stamps(&self) -> &[f64];
-    fn front_matter(&self, meeting: &str) -> serde_json::Map<String, serde_json::Value>;
+    /// The type discriminator, under the key that kind of item uses.
+    fn type_entry(&self) -> (&'static str, serde_json::Value);
 }
 
 impl Writable for ActionItemOut {
@@ -210,16 +226,11 @@ impl Writable for ActionItemOut {
     fn stamps(&self) -> &[f64] {
         &self.timestamps
     }
-    fn front_matter(&self, meeting: &str) -> serde_json::Map<String, serde_json::Value> {
-        let mut meta = serde_json::Map::new();
-        meta.insert("kind".into(), serde_json::json!("action_item"));
-        meta.insert(
-            "type".into(),
+    fn type_entry(&self) -> (&'static str, serde_json::Value) {
+        (
+            "type",
             serde_json::to_value(self.item_type).unwrap_or(serde_json::Value::Null),
-        );
-        meta.insert("meeting".into(), serde_json::json!(meeting));
-        meta.insert("timestamps".into(), serde_json::json!(self.timestamps));
-        meta
+        )
     }
 }
 
@@ -233,16 +244,43 @@ impl Writable for FactOut {
     fn stamps(&self) -> &[f64] {
         &self.timestamps
     }
-    fn front_matter(&self, meeting: &str) -> serde_json::Map<String, serde_json::Value> {
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            "kind".into(),
+    fn type_entry(&self) -> (&'static str, serde_json::Value) {
+        (
+            "kind",
             serde_json::to_value(self.kind).unwrap_or(serde_json::Value::Null),
-        );
-        meta.insert("meeting".into(), serde_json::json!(meeting));
-        meta.insert("timestamps".into(), serde_json::json!(self.timestamps));
-        meta
+        )
     }
+}
+
+/// Build one item's front matter, in the key order the Python service wrote.
+///
+/// Order matters because the block is rendered line by line: a reordered map
+/// produces a different file for the same item, and every artifact already in
+/// a vault was written this way.
+fn front_matter<T: Writable>(
+    item: &T,
+    context: &ItemContext,
+    screenshots: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    let (type_key, type_value) = item.type_entry();
+    meta.insert(type_key.to_string(), type_value);
+    meta.insert("title".into(), serde_json::json!(item.title()));
+    meta.insert("source_project".into(), serde_json::json!(context.project));
+    meta.insert("source_meeting".into(), serde_json::json!(context.meeting));
+    meta.insert(
+        "source_recording".into(),
+        match &context.recording {
+            Some(name) => serde_json::json!(name),
+            None => serde_json::Value::Null,
+        },
+    );
+    meta.insert("timestamps".into(), serde_json::json!(item.stamps()));
+    meta.insert("created".into(), serde_json::json!(context.created));
+    meta.insert("model".into(), serde_json::json!(context.model));
+    meta.insert("job_id".into(), serde_json::json!(context.job_id));
+    meta.insert("screenshots".into(), serde_json::json!(screenshots));
+    meta
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -262,11 +300,17 @@ fn write_items<T: Writable>(
     }
 
     let parent = output_dir.join(kind.dir_name());
-    let meeting = meeting_dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let source = source_file(meeting_dir);
+    let context = ItemContext {
+        // The items live under the project folder, which is the parent of
+        // where this job writes.
+        project: name_of(output_dir),
+        meeting: name_of(meeting_dir),
+        recording: source.as_ref().map(|path| name_of(path)),
+        created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
+        model: inputs.llm.describe().model,
+        job_id: ctx.job_id().to_string(),
+    };
 
     // Screenshots share the last fifth of the progress bar; the model owns the
     // rest, because it is where the time actually goes.
@@ -276,9 +320,16 @@ fn write_items<T: Writable>(
 
         let planned = frames::plan(item.stamps(), Some(duration_sec));
         let mut images = Vec::new();
-        if let (Some(source), false, false) =
-            (source.as_ref(), planned.is_empty(), screenshots_broken)
-        {
+        let mut screenshots = if planned.is_empty() {
+            "none"
+        } else {
+            "succeeded"
+        }
+        .to_string();
+
+        if screenshots_broken {
+            screenshots = "failed".to_string();
+        } else if let (Some(source), false) = (source.as_ref(), planned.is_empty()) {
             match inputs
                 .decoder
                 .extract_frames(source, &planned, &ctx.cancel_token())
@@ -288,21 +339,29 @@ fn write_items<T: Writable>(
                         .into_iter()
                         .map(|(stamp, png)| (frames::screenshot_name(stamp), png))
                         .collect();
+                    if images.is_empty() {
+                        screenshots = "none".to_string();
+                    }
                 }
                 Err(err) => {
-                    // One broken decode means the rest will break too; say so
-                    // once and write the items without pictures rather than
-                    // failing work the model already did.
+                    // One broken decode means the rest will break too: say so
+                    // once, record it per item, and write the items without
+                    // pictures rather than failing work the model already did.
                     screenshots_broken = true;
-                    warnings.push(format!("screenshots failed: {err}"));
+                    screenshots = "failed".to_string();
+                    warnings.push(format!(
+                        "screenshots failed: {err}; items were written without images"
+                    ));
                 }
             }
+        } else if source.is_none() {
+            screenshots = "none".to_string();
         }
 
         wire::artifacts::write_item(
             &parent,
             item.title(),
-            &item.front_matter(&meeting),
+            &front_matter(item, &context, &screenshots),
             item.body(),
             &images,
         )
@@ -318,6 +377,13 @@ fn write_items<T: Writable>(
     }
 
     Ok(items.len())
+}
+
+/// A path's last component, as a string.
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// The recording inside a meeting folder, if it still has one.

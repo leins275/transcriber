@@ -178,6 +178,9 @@ impl CancelToken {
 /// What a running job is given: somewhere to report progress, and the two
 /// questions it must keep asking.
 pub struct JobContext {
+    /// The id of the job being run, which its artifacts record so a written
+    /// item can be traced back to the run that produced it.
+    job_id: String,
     progress: Arc<AtomicU64>,
     cancel: CancelToken,
 }
@@ -192,9 +195,15 @@ impl JobContext {
     /// not a way to start work outside it.
     pub fn detached(cancel: CancelToken) -> Self {
         JobContext {
+            job_id: String::new(),
             progress: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             cancel,
         }
+    }
+
+    /// The job this context belongs to; empty for a detached one.
+    pub fn job_id(&self) -> &str {
+        &self.job_id
     }
 
     /// Report progress, clamped to 0.0..=1.0.
@@ -489,6 +498,7 @@ fn worker_loop(
 
         let started = Instant::now();
         let ctx = JobContext {
+            job_id: job_id.clone(),
             progress,
             cancel: cancel.clone(),
         };

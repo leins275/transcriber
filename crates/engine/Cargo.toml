@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 version = "0.9.0"
 name = "engine"
 edition = "2021"
@@ -54,6 +54,12 @@ pyannote-rs = { version = "0.3.4", default-features = false, features = [
 ort = { version = "=2.0.0-rc.10", default-features = false, features = [
   "load-dynamic",
 ] }
+typst = "0.15"
+typst-pdf = "0.15"
+pulldown-cmark = "0.13"
+typst-assets = { version = "0.15", features = ["fonts"] }
+typst-layout = "0.15"
 
 [dev-dependencies]
+pdf-extract = "0.12"
 tempfile = "3"

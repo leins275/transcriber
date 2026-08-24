@@ -26,6 +26,7 @@ pub mod ledger;
 pub mod llm;
 pub mod media;
 pub mod models;
+pub mod pdf;
 pub mod runner;
 pub mod stt;
 
