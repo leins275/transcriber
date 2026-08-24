@@ -55,7 +55,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 
 ## Tasks
 
-### [ ] T1: assignSpeakerToSegments in lib/turns  [deps: —]
+### [x] T1: assignSpeakerToSegments in lib/turns  [deps: —]
 
 - **Files**: `apps/desktop/src/lib/turns.ts`, `apps/desktop/src/lib/turns.test.ts`
 - **Test first**: `apps/desktop/src/lib/turns.test.ts` — cases: assigning ids N..M adds exactly those entries, no more/fewer (FR-2); `null` / blank name deletes the ids' entries; input map is not mutated; regroup after mid-turn reassign — segments 1–5 "Maxim", assign id 3 to "Anna" via the new function, `groupIntoTurns` yields turns 1–2 "Maxim" / 3 "Anna" / 4–5 "Maxim" (FR-3); same on an unlabelled turn leaves flanking ranges `speaker: null` (FR-3); existing `assignSpeaker` tests stay green (FR-10).
@@ -63,7 +63,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`
 - **Done when**: new cases plus the whole existing `turns.test.ts` pass; `make format lint type test` pass.
 
-### [ ] T2: selection→segment mapping (lib/selection)  [deps: —]
+### [x] T2: selection→segment mapping (lib/selection)  [deps: —]
 
 - **Files**: `apps/desktop/src/lib/selection.ts`, `apps/desktop/src/lib/selection.test.ts`
 - **Test first**: `apps/desktop/src/lib/selection.test.ts` — build a jsdom fixture mimicking the viewer (an `<ol>` of turns, each `<p>` containing `<span data-segment-id>` spans with chrome elements between) and construct `Range`s over its text nodes. Cases: range covering segments N..M exactly returns `[N..M]` (FR-2); range starting/ending mid-segment includes that whole segment — snap outward (FR-2); range spanning the tail of one turn and the head of the next returns ids from both, in document order (FR-9); collapsed range returns `[]` (FR-1); range entirely outside segment spans (toolbar, timestamps) returns `[]` (FR-1); boundary point on turn chrome between spans still resolves via the in-range fallback.
@@ -71,7 +71,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`
 - **Done when**: all cases pass under Vitest/jsdom; `make format lint type test` pass.
 
-### [ ] T3: per-segment spans in the turn paragraph  [deps: —]
+### [x] T3: per-segment spans in the turn paragraph  [deps: —]
 
 - **Files**: `apps/desktop/src/components/TranscriptViewer.tsx`, `apps/desktop/src/components/TranscriptViewer.test.tsx`, `apps/desktop/src/components/TranscriptViewer.module.css`
 - **Test first**: `apps/desktop/src/components/TranscriptViewer.test.tsx` — cases: each turn's paragraph contains one element per segment carrying `data-segment-id` matching the segment's id (FR-2's "segments render as identifiable spans"); the paragraph's visible text is unchanged from today's joined form (guarded by the existing "groups segments into turns" and Cyrillic tests staying green); whitespace-only segments still render nothing.
@@ -79,7 +79,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: new + all existing `TranscriptViewer.test.tsx` cases pass; `make format lint type test` pass.
 
-### [ ] T4: SelectionSpeakerMenu component  [deps: —]
+### [x] T4: SelectionSpeakerMenu component  [deps: —]
 
 - **Files**: `apps/desktop/src/components/SelectionSpeakerMenu.tsx`, `apps/desktop/src/components/SelectionSpeakerMenu.module.css`, `apps/desktop/src/components/SelectionSpeakerMenu.test.tsx`
 - **Test first**: `apps/desktop/src/components/SelectionSpeakerMenu.test.tsx` — cases: renders a button per known name in the given (first-speech) order plus a new-name input (FR-1); clicking a known name calls `onAssign(name)`; typing a new name + Enter calls `onAssign(trimmed)`; empty/whitespace new name does not assign; Escape anywhere calls `onDismiss` (FR-7); pointer-down outside the menu calls `onDismiss`, pointer-down inside does not (FR-7); listeners are removed on unmount.
@@ -87,7 +87,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: all component cases pass; `make format lint type test` pass.
 
-### [ ] T5: wire selection flow into TranscriptViewer  [deps: T1, T2, T3, T4]
+### [x] T5: wire selection flow into TranscriptViewer  [deps: T1, T2, T3, T4]
 
 - **Files**: `apps/desktop/src/components/TranscriptViewer.tsx`, `apps/desktop/src/components/TranscriptViewer.test.tsx`, `apps/desktop/src/components/TranscriptViewer.module.css`
 - **Test first**: `apps/desktop/src/components/TranscriptViewer.test.tsx` (selection built via `document.createRange` + `window.getSelection().addRange`, then pointer-up on the transcript list) — cases: selecting text inside a turn surfaces the menu offering every known speaker plus a new-name input (FR-1); collapsed/empty selection surfaces nothing (FR-1); assigning "Anna" over segments N..M calls `onSaveSpeakers` with exactly the merged map — prior entries kept, precisely N..M added (FR-2, FR-4); a mid-segment selection snaps outward to the whole segment (FR-2); after assigning an inner segment the list re-renders as three turns with the flanks keeping their previous attribution, including `null` (FR-3); with `onSaveSpeakers` rejecting, the new attribution stays visible and the `role="alert"` shows the message (FR-6).
@@ -95,7 +95,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: new cases plus the entire pre-existing `TranscriptViewer.test.tsx` suite pass; `make format lint type test` pass.
 
-### [ ] T6: dismissal, filtered view, cross-turn, coexistence  [deps: T5]
+### [x] T6: dismissal, filtered view, cross-turn, coexistence  [deps: T5]
 
 - **Files**: `apps/desktop/src/components/TranscriptViewer.tsx`, `apps/desktop/src/components/TranscriptViewer.test.tsx`
 - **Test first**: `apps/desktop/src/components/TranscriptViewer.test.tsx` — cases: Escape closes the menu and `onSaveSpeakers` is never called — speaker map unchanged (FR-7); click-away closes it likewise (FR-7); clearing the selection (collapsed re-select) closes it (FR-7); with an active search query, assigning inside a visible turn updates the correct segment ids and the match count/grouping refresh, hidden turns untouched (FR-8); a selection spanning the tail of turn A and head of turn B assigns all overlapped segments of both to the one name (FR-9); after a sub-turn assignment, renaming that speaker via `SpeakerTag` still renames every segment holding the name, including the newly assigned ones (FR-10); turn-level assign via `SpeakerTag` still works on the new smaller turns (FR-10).
@@ -103,7 +103,7 @@ Schema/API changes: **none**. `speakers.json` stays v1; `setSpeakerLabels` (`app
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: all cases pass with the full suite; `make format lint type test` pass.
 
-### [ ] T7: end-to-end verification and compatibility proof  [deps: T6]
+### [x] T7: end-to-end verification and compatibility proof  [deps: T6]
 
 - **Files**: none — verification only; no source changes may be introduced by this task (regressions found here are fixed under the owning task's file contract)
 - **Test first**: not applicable (verification task); evidence is the checks below, mapped to FR-4, FR-5, NFR-1, NFR-2 and the desktop profile's Verification section.

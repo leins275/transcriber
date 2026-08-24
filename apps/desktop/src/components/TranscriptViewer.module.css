@@ -104,6 +104,12 @@
   line-height: 1.7;
 }
 
+/* A segment is a selection target, not a visual unit: it must not disturb
+   line breaking or wrapping inside the paragraph. */
+.segment {
+  display: inline;
+}
+
 .plain {
   width: 100%;
   max-width: 640px;
