@@ -1048,8 +1048,9 @@ pub async fn read_summary(
 pub async fn transcribe_vault_entry(
     state: tauri::State<'_, AppState>,
     entry_id: String,
+    language: Option<String>,
 ) -> Result<JobSnapshot, AppError> {
-    meetings::transcribe_vault_entry_handler(&state, &entry_id).await
+    meetings::transcribe_vault_entry_handler(&state, &entry_id, language).await
 }
 
 #[tauri::command]

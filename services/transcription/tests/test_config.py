@@ -312,3 +312,88 @@ def test_public_reports_diarization_but_never_the_token(tmp_app_dir: Path) -> No
     assert public["diarize"] is False
     assert public["diarization_model"] == "pyannote/speaker-diarization-3.1"
     assert "hf_secret" not in json.dumps(public)
+
+
+# -- language (FR-3: validation at every entry point) -------------------------
+
+
+def test_language_from_config_file_outside_ru_en_raises_naming_allowed_values(
+    tmp_app_dir: Path,
+) -> None:
+    _write_config(tmp_app_dir, {"language": "de"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env)
+
+    message = str(exc_info.value)
+    assert "de" in message
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_from_env_outside_ru_en_raises_naming_allowed_values(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": "de"}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env)
+
+    message = str(exc_info.value)
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_from_overrides_outside_ru_en_raises_naming_allowed_values(
+    tmp_app_dir: Path,
+) -> None:
+    """The CLI's `--language` flag arrives as an override; a bogus value must
+    fail config loading (which `cli.main` maps to a nonzero exit)."""
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env, overrides={"language": "de"})
+
+    message = str(exc_info.value)
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_override_beats_a_valid_config_file_value(tmp_app_dir: Path) -> None:
+    """Validation runs after the layers merge: an invalid file value that a
+    valid override replaces must not fail the load, and vice versa."""
+    _write_config(tmp_app_dir, {"language": "de"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env, overrides={"language": "en"})
+
+    assert cfg.language == "en"
+
+
+def test_language_empty_string_normalizes_to_none(tmp_app_dir: Path) -> None:
+    _write_config(tmp_app_dir, {"language": ""})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language is None
+
+    env_empty = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": ""}
+    assert load_config(env=env_empty).language is None
+
+
+def test_language_is_normalized_to_lowercase(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": "EN"}
+
+    assert load_config(env=env).language == "en"
+
+
+@pytest.mark.parametrize("language", ["ru", "en"])
+def test_language_accepts_ru_and_en(tmp_app_dir: Path, language: str) -> None:
+    _write_config(tmp_app_dir, {"language": language})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language == language
+
+
+def test_language_unset_stays_none(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language is None

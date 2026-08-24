@@ -42,6 +42,11 @@ _VAULT_ROOT_KEY = "vault_root"
 # being copied through the generic loop.
 _MODEL_KEY = "model"
 
+# The operator's language universe is exactly these two (F2 FR-3); anything
+# else -- from the config file, `TRANSCRIBER_LANGUAGE`, or `--language` -- is
+# a configuration error rather than a value handed to the decoder.
+_ALLOWED_LANGUAGES = ("ru", "en")
+
 
 class ConfigError(Exception):
     """Raised when configuration cannot be loaded (e.g. malformed config file)."""
@@ -194,6 +199,26 @@ def _parse_bool(value: object) -> bool:
     return str(value).strip().lower() in _TRUE_STRINGS
 
 
+def _normalize_language(value: object) -> str | None:
+    """Normalize a layered ``language`` value, rejecting anything but ru/en.
+
+    Unset and empty (``None``, ``""``, whitespace) mean "no explicit language"
+    -- constrained auto-detection, not an error (FR-3).
+    """
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _ALLOWED_LANGUAGES:
+        allowed = ", ".join(repr(code) for code in _ALLOWED_LANGUAGES)
+        raise ConfigError(
+            f"invalid language {str(value)!r}: allowed values are {allowed}, or unset for "
+            f"automatic detection"
+        )
+    return normalized
+
+
 def _env_value(env: Mapping[str, str], key: str) -> str | None:
     return env.get(f"TRANSCRIBER_{key.upper()}")
 
@@ -325,6 +350,11 @@ def load_config(
 
     if "compute_type" in values and values["compute_type"] in (None, ""):
         values["compute_type"] = None
+
+    # Validated after every layer has merged, so a valid override can replace
+    # an invalid config-file/env value (and an invalid override always loses).
+    if "language" in values:
+        values["language"] = _normalize_language(values["language"])
 
     if "port" in values:
         values["port"] = int(values["port"])

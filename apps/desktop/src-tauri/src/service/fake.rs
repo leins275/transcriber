@@ -194,6 +194,10 @@ struct Inner {
     llm_model: FakeModelDownload,
     /// Every derived-job submission this fake accepted, for assertions.
     llm_submissions: Vec<LlmSubmitRequest>,
+    /// Every transcription submission this fake accepted, for assertions --
+    /// the only place a caller can observe what actually went on the wire
+    /// (per-job `language`, FR-5), since `submit()` itself only returns an id.
+    submissions: Vec<SubmitRequest>,
 }
 
 /// In-memory fake used by tests and by `--fake-service` dev mode (T11).
@@ -221,6 +225,7 @@ impl FakeService {
                 model: FakeModelDownload::present(),
                 llm_model: FakeModelDownload::present(),
                 llm_submissions: Vec::new(),
+                submissions: Vec::new(),
             }),
         }
     }
@@ -245,6 +250,15 @@ impl FakeService {
             .expect("fake service mutex poisoned")
             .llm_model = FakeModelDownload::absent();
         fake
+    }
+
+    /// Every transcription submission this fake has accepted, in order.
+    pub fn submissions(&self) -> Vec<SubmitRequest> {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .submissions
+            .clone()
     }
 
     /// Every derived-job submission this fake has accepted, in order.
@@ -337,13 +351,14 @@ impl TranscriptionService for FakeService {
         })
     }
 
-    async fn submit(&self, _req: SubmitRequest) -> Result<String, ServiceError> {
+    async fn submit(&self, req: SubmitRequest) -> Result<String, ServiceError> {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
         if inner.down {
             return Err(ServiceError::Unavailable {
                 detail: "fake service is down".to_string(),
             });
         }
+        inner.submissions.push(req);
         let job_id = Uuid::new_v4().to_string();
         let outcome = std::mem::replace(&mut inner.next_outcome, ScriptedOutcome::Succeed);
         let timing = inner.timing;

@@ -128,6 +128,12 @@ enum PendingWork {
         meeting_dir: PathBuf,
         source_dest: PathBuf,
         classification: Option<String>,
+        /// The operator's per-recording language choice, already validated
+        /// by the command layer: `Some("ru")`/`Some("en")` force that
+        /// decode language, `None` leaves F2 to its constrained
+        /// auto-detection. Only this arm can carry one -- a dropped file
+        /// has no control attached to it (FR-5, Q1).
+        language: Option<String>,
     },
     /// A derived (LLM) job over material already in the vault: nothing to
     /// ingest, submitted via `submit_llm`, then polled exactly like a
@@ -328,11 +334,16 @@ impl JobRegistry {
     /// one-at-a-time ordering, the same progress events and the same
     /// service-unavailable handling, instead of growing a second path that
     /// would have to re-learn all three.
+    ///
+    /// `language` is the operator's per-recording choice (FR-5): `None` is
+    /// the default and means F2 picks, `Some("ru")`/`Some("en")` force it.
+    /// Validation belongs to the command layer, which owns the IPC contract.
     pub async fn enqueue_filed(
         &self,
         meeting_dir: PathBuf,
         source_dest: PathBuf,
         classification: Option<String>,
+        language: Option<String>,
     ) -> JobSnapshot {
         let snapshot = new_pending_snapshot(&source_dest);
         self.shared.store_and_emit(snapshot.clone()).await;
@@ -342,6 +353,7 @@ impl JobRegistry {
                 meeting_dir,
                 source_dest,
                 classification,
+                language,
             },
         });
         snapshot
@@ -421,8 +433,9 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
         other => other,
     };
 
-    // Where the recording ends up, however it got there.
-    let (meeting_dir, source_dest) = match work {
+    // Where the recording ends up, however it got there, and which language
+    // (if any) the operator pinned for it.
+    let (meeting_dir, source_dest, language) = match work {
         PendingWork::Ingest { source_path } => {
             snapshot.state = JobState::Ingesting;
             shared.store_and_emit(snapshot.clone()).await;
@@ -438,7 +451,9 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
                     if let Some(message) = collision_message(&outcome.collision) {
                         snapshot.message = Some(message);
                     }
-                    (outcome.meeting_dir, outcome.source_dest)
+                    // A dropped file carries no language control (Q1), so
+                    // an ingest always submits as Auto.
+                    (outcome.meeting_dir, outcome.source_dest, None)
                 }
                 Err(err) => {
                     // FR-6: a rejected file (bad extension, directory, escapes
@@ -457,13 +472,14 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             meeting_dir,
             source_dest,
             classification,
+            language,
         } => {
             // Nothing to ingest and nothing to roll back: the recording is
             // already where it belongs. The job goes straight from Pending
             // to Queued, never showing an "ingesting" step that is not
             // happening.
             snapshot.classification = classification;
-            (meeting_dir, source_dest)
+            (meeting_dir, source_dest, language)
         }
         // Peeled off above; this match only ever sees ingest-shaped work.
         PendingWork::Llm { .. } => unreachable!("llm work is handled before this match"),
@@ -477,7 +493,7 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
     let submit_request = SubmitRequest {
         audio_path: path_string(&source_dest),
         output_dir: path_string(&meeting_dir),
-        language: None,
+        language,
     };
 
     let service = shared.service.read().await.clone();
@@ -1415,6 +1431,126 @@ mod tests {
                 .clone();
             assert_eq!(calls.len(), 1);
             assert!(calls[0].contains("service died mid-session"));
+        });
+    }
+
+    // -- per-job language (FR-5) ------------------------------------------
+
+    #[test]
+    fn a_filed_job_carries_its_selected_language_into_the_submit_request() {
+        // FR-5: the operator's per-recording override is only worth having
+        // if it survives the queue -- assert it on the request the seam
+        // actually submits, not on the snapshot.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let meeting_dir = root.path().join("ELS").join("260812 - Security issue");
+            fs::create_dir_all(&meeting_dir).expect("create meeting dir");
+            let source = write_recording(&meeting_dir, "source.mp4");
+
+            let service = Arc::new(FakeService::with_timing(FakeTiming {
+                queued_polls: 0,
+                running_polls: 0,
+            }));
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service.clone(),
+                sink,
+                Duration::from_millis(5),
+            );
+
+            let snapshot = registry
+                .enqueue_filed(
+                    meeting_dir,
+                    source,
+                    Some("sorted".to_string()),
+                    Some("en".to_string()),
+                )
+                .await;
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = service.submissions();
+            assert_eq!(submissions.len(), 1);
+            assert_eq!(submissions[0].language.as_deref(), Some("en"));
+        });
+    }
+
+    #[test]
+    fn a_filed_job_with_no_language_submits_auto() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let meeting_dir = root.path().join("ELS").join("260812 - Security issue");
+            fs::create_dir_all(&meeting_dir).expect("create meeting dir");
+            let source = write_recording(&meeting_dir, "source.mp4");
+
+            let service = Arc::new(FakeService::with_timing(FakeTiming {
+                queued_polls: 0,
+                running_polls: 0,
+            }));
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service.clone(),
+                sink,
+                Duration::from_millis(5),
+            );
+
+            let snapshot = registry
+                .enqueue_filed(meeting_dir, source, Some("sorted".to_string()), None)
+                .await;
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = service.submissions();
+            assert_eq!(submissions.len(), 1);
+            assert_eq!(submissions[0].language, None);
+        });
+    }
+
+    #[test]
+    fn the_drag_drop_ingest_path_still_submits_without_a_language() {
+        // Q1: there is no ingest-time language control, so a dropped file is
+        // always F2's constrained auto-detection -- the field stays absent.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let downloads = tempdir().expect("tempdir");
+            let source = write_recording(downloads.path(), "ELS - 260812 - Security issue.mp4");
+
+            let service = Arc::new(FakeService::with_timing(FakeTiming {
+                queued_polls: 0,
+                running_polls: 0,
+            }));
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service.clone(),
+                sink,
+                Duration::from_millis(5),
+            );
+
+            let snapshots = registry.enqueue(vec![source]).await;
+            wait_for(
+                &registry,
+                &snapshots[0].id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = service.submissions();
+            assert_eq!(submissions.len(), 1);
+            assert_eq!(submissions[0].language, None);
         });
     }
 

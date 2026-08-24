@@ -90,6 +90,11 @@ export type TranscriptSegmentView = {
   text: string;
 };
 
+/** The two languages the service decodes in. `null` anywhere this appears as
+ * a request field means "auto" — the service picks between these two itself
+ * (specs/transcript-language-selection). */
+export type TranscriptLanguage = "ru" | "en";
+
 export type TranscriptView = {
   entry_id: string;
   meeting_name: string;

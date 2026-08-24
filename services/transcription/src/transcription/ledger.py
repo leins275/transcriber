@@ -191,12 +191,20 @@ class Ledger:
         cost_usd: float | None = None,
         currency: str | None = None,
         result_json: str | None = None,
+        language: str | None = None,
     ) -> None:
         """Flip a row to ``succeeded``.
 
         ``audio_duration_sec``/``segment_count`` describe a transcription's
         output and stay ``NULL`` for the LLM job types, which instead record
         their artifact manifest in ``result_json``.
+
+        ``language`` is the language a transcribe job actually decoded in,
+        which is only known once the job has run and may differ from the
+        (possibly absent) language requested at insert time. ``COALESCE``
+        keeps the write additive: passing ``None`` leaves whatever the row
+        already carries, so the LLM job types -- which never pass one --
+        are untouched.
         """
         realtime_factor = elapsed_sec / audio_duration_sec if audio_duration_sec else None
         with self._lock:
@@ -212,7 +220,8 @@ class Ledger:
                     filtered_segment_count=?,
                     cost_usd=?,
                     currency=?,
-                    result_json=?
+                    result_json=?,
+                    language=COALESCE(?, language)
                 WHERE job_id=?
                 """,
                 (
@@ -225,6 +234,7 @@ class Ledger:
                     cost_usd,
                     currency,
                     result_json,
+                    language,
                     job_id,
                 ),
             )
