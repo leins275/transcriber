@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.10.1 — 2026-08-24
+
+### Bug fixes
+
+- **llm**: Detect output truncation, recover by splitting, and budget for unlimited context
+
 ## 0.10.0 — 2026-08-24
 
 ### Bug fixes
