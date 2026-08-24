@@ -498,6 +498,39 @@ mod tests {
         path
     }
 
+    /// A side-by-side test install shares the release install's downloaded
+    /// weights by pointing these two at it -- ~23 GB that is otherwise
+    /// re-fetched per install. The desktop injects `TRANSCRIBER_APP_DIR` into
+    /// the same environment on every start, so what this pins is that the
+    /// injected app dir does not win: `fill_derived_defaults` must leave an
+    /// already-set path alone rather than re-deriving it.
+    #[test]
+    fn an_explicit_model_path_survives_the_injected_app_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = tempfile::tempdir().unwrap();
+        let mut env = env_with(dir.path());
+        env.insert(
+            "TRANSCRIBER_MODEL_PATH".to_string(),
+            shared.path().join("models").display().to_string(),
+        );
+        env.insert(
+            "TRANSCRIBER_LLM_MODEL_PATH".to_string(),
+            shared.path().join("models/llm").display().to_string(),
+        );
+
+        let config = Config::load(None, &env).unwrap();
+
+        assert_eq!(config.model_path, shared.path().join("models"));
+        assert_eq!(config.llm_model_path, shared.path().join("models/llm"));
+        // Everything else still belongs to this install: sharing the weights
+        // must not silently share the job ledger too.
+        assert_eq!(config.db_path, dir.path().join("data/jobs.sqlite3"));
+        assert_eq!(
+            config.diarization_model_path,
+            dir.path().join("models/diarization")
+        );
+    }
+
     #[test]
     fn defaults_hang_off_the_app_dir() {
         let dir = tempfile::tempdir().unwrap();

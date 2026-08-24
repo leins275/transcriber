@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Transcriber Test",
+  "identifier": "com.transcriber.desktop.test",
+  "app": {
+    "windows": [
+      {
+        "title": "Transcriber Test"
+      }
+    ]
+  },
+  "bundle": {
+    "shortDescription": "Transcriber test build, installed alongside the release",
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/leins275/transcriber/releases/download/no-updates/latest.json"
+      ]
+    }
+  }
+}

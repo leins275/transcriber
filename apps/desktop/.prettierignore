@@ -2,5 +2,8 @@ dist
 node_modules
 src-tauri/target
 src-tauri/gen
-src-tauri/resources/pyenv
+# Build output: `scripts/stage_engine_payload.py` writes the staged engine
+# payload and its manifest here, so a local build would otherwise leave
+# `format:check` failing on a generated file.
+src-tauri/resources/engine
 package-lock.json

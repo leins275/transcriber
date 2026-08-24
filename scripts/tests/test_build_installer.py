@@ -210,7 +210,7 @@ def test_stage_tauri_build_passes_locked_through_to_the_tauri_cli(
     fake_installer = tmp_path / sync_version.artifact_name("0.0.0")
     fake_installer.write_bytes(b"")
     monkeypatch.setattr(
-        build_installer, "find_built_installer", lambda repo_root, version=None: fake_installer
+        build_installer, "find_built_installer", lambda repo_root, version=None, product=None: fake_installer
     )
 
     ctx = build_installer.BuildContext()
@@ -429,3 +429,94 @@ def test_stage_gate_raises_build_installer_error_when_oversized(tmp_path: Path) 
 
     with pytest.raises(build_installer.BuildInstallerError):
         build_installer.stage_gate(ctx)
+
+
+def test_every_stage_function_named_in_stages_actually_resolves() -> None:
+    # The stages are looked up by name off STAGES, and every test that drives
+    # the pipeline monkeypatches them -- so a stage whose body references a
+    # module that is no longer imported passes every existing test and fails
+    # only during a real build. Caught exactly that way: the engine-payload
+    # stage lost its import during the Python removal.
+    for stage in build_installer.STAGES:
+        func = getattr(build_installer, stage.func_name, None)
+        assert callable(func), f"{stage.name} has no {stage.func_name}"
+        for name in func.__code__.co_names:
+            if name.startswith("stage_") or name.endswith("_impl"):
+                assert hasattr(build_installer, name) or name in dir(build_installer), (
+                    f"{stage.func_name} references {name}, which the module does not define"
+                )
+
+
+def test_side_by_side_renames_the_product_so_it_installs_beside_a_release() -> None:
+    # Same install directory, identifier and uninstall entry would make this
+    # an upgrade of the released copy rather than a second one.
+    release = build_installer.BuildContext()
+    test_build = build_installer.BuildContext(side_by_side=True)
+
+    assert release.product_name() != test_build.product_name()
+    assert "--config" not in build_installer._tauri_build_args(False)
+    assert build_installer.SIDE_BY_SIDE_CONFIG in build_installer._tauri_build_args(True)
+    assert Path(build_installer.SIDE_BY_SIDE_CONFIG).is_file()
+
+    overlay = json.loads(
+        (
+            Path(build_installer.SIDE_BY_SIDE_CONFIG)
+        ).read_text(encoding="utf-8")
+    )
+    base = json.loads(
+        (REPO_ROOT / "apps" / "desktop" / "src-tauri" / "tauri.conf.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert overlay["productName"] == test_build.product_name()
+    assert overlay["identifier"] != base["identifier"]
+    # No signing key is available for a local build, and updater artifacts
+    # cannot be produced without one.
+    assert overlay["bundle"]["createUpdaterArtifacts"] is False
+
+
+# -- --no-updater ----------------------------------------------------------
+#
+# `createUpdaterArtifacts` is on in tauri.conf.json, so the bundler stops with
+# "A public key has been found, but no private key" on any machine without the
+# release signing key -- after the installer is already on disk, but with a
+# non-zero exit, so `stage_collect` never runs. These pin the escape hatch.
+
+
+def test_no_updater_overlay_file_exists_and_only_disables_updater_artifacts():
+    path = Path(build_installer.NO_UPDATER_CONFIG)
+    assert path.is_file(), path
+    overlay = json.loads(path.read_text(encoding="utf-8"))
+    assert overlay["bundle"]["createUpdaterArtifacts"] is False
+    # It must not touch identity: this flavour IS the release product, just
+    # built without the key. Renaming it here would silently produce an
+    # installer that upgrades nothing.
+    assert "productName" not in overlay
+    assert "identifier" not in overlay
+
+
+def test_no_updater_passes_the_overlay_to_the_tauri_cli():
+    args = build_installer._tauri_build_args(no_updater=True)
+    assert build_installer.NO_UPDATER_CONFIG in args
+    assert args[args.index(build_installer.NO_UPDATER_CONFIG) - 1] == "--config"
+
+
+def test_plain_build_still_produces_updater_artifacts():
+    assert build_installer.NO_UPDATER_CONFIG not in build_installer._tauri_build_args()
+
+
+def test_side_by_side_implies_no_updater():
+    """The side-by-side overlay disables updater artifacts itself, but the
+    context flag must agree -- otherwise a later reader of `ctx.no_updater`
+    would conclude the test flavour was signed."""
+    args = build_installer._parse_args(["--side-by-side"])
+    ctx = build_installer.build_context_from_args(args)
+    assert ctx.no_updater is True
+
+
+def test_no_updater_alone_keeps_the_release_product_name():
+    args = build_installer._parse_args(["--no-updater"])
+    ctx = build_installer.build_context_from_args(args)
+    assert ctx.no_updater is True
+    assert ctx.side_by_side is False
+    assert ctx.product_name() == sync_version.DEFAULT_PRODUCT

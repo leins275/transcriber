@@ -263,19 +263,33 @@ def set_version(version: str) -> None:
         set_lock_version(package, version)
 
 
-def artifact_name(version: str | None = None, target: str | None = None) -> str:
+# The product name Tauri bundles under, and therefore the prefix of every
+# artifact it writes. A side-by-side test build overrides it (see
+# `tauri.sidebyside.conf.json`), which is why callers can pass their own.
+DEFAULT_PRODUCT = "Transcriber"
+
+
+def artifact_name(
+    version: str | None = None,
+    target: str | None = None,
+    product: str = DEFAULT_PRODUCT,
+) -> str:
     """The installer filename Tauri's bundler produces for `target`.
 
     `target` is a `sys.platform` value; it defaults to the running platform,
     which is what both `build_installer.py` and each CI release leg want.
     The names mirror Tauri v2's bundler defaults: the NSIS `*_x64-setup.exe`
     on Windows, the `*_aarch64.dmg` on Apple Silicon macOS.
+
+    `product` must match the bundle's `productName`, because the bundler
+    names the file after it. Getting this wrong does not produce a
+    misnamed file -- it produces a build that cannot find its own output.
     """
     resolved = version if version is not None else read_version()
     resolved_target = target if target is not None else sys.platform
     if resolved_target == "darwin":
-        return f"Transcriber_{resolved}_aarch64.dmg"
-    return f"Transcriber_{resolved}_x64-setup.exe"
+        return f"{product}_{resolved}_aarch64.dmg"
+    return f"{product}_{resolved}_x64-setup.exe"
 
 
 def main(argv: list[str] | None = None) -> int:

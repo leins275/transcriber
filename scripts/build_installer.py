@@ -87,6 +87,7 @@ DEFAULT_DIST_DIR = REPO_ROOT / "dist"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import stage_engine_payload as stage_engine_payload_impl  # noqa: E402
 import sync_version  # noqa: E402
 import verify_locks  # noqa: E402
 
@@ -105,6 +106,28 @@ PAYLOAD_LABELS: dict[str, Path] = {
     "rust": REPO_ROOT / "apps/desktop/src-tauri/Cargo.toml",
     "node": REPO_ROOT / "apps/desktop/package.json",
 }
+
+
+# A Tauri config overlay that renames the product and its identifier, so the
+# result installs beside a released copy instead of upgrading it: the product
+# name decides the install directory and the Start Menu entry, the identifier
+# decides both the uninstall registry key and `%APPDATA%\<identifier>\`, where
+# config.json lives. It also turns updater artifacts off, which is what lets a
+# local build run without the release signing key.
+# Absolute, because the tauri CLI resolves `--config` against its own
+# working directory rather than against the crate it is building.
+SIDE_BY_SIDE_CONFIG_NAME = "tauri.sidebyside.conf.json"
+SIDE_BY_SIDE_CONFIG = str(APP_DIR / "src-tauri" / SIDE_BY_SIDE_CONFIG_NAME)
+SIDE_BY_SIDE_PRODUCT = "Transcriber Test"
+
+# A second overlay, for building the release product itself on a machine
+# without the release signing key. The bundler refuses to finish when a
+# public key is configured and `TAURI_SIGNING_PRIVATE_KEY` is not set --
+# it has already written the installer by then, but exits non-zero, so the
+# collect stage never sees it. Dropping the updater artifacts removes the
+# only step that needs the key; the installer itself is unaffected.
+NO_UPDATER_CONFIG_NAME = "tauri.noupdater.conf.json"
+NO_UPDATER_CONFIG = str(APP_DIR / "src-tauri" / NO_UPDATER_CONFIG_NAME)
 
 
 class BuildInstallerError(RuntimeError):
@@ -144,10 +167,18 @@ class BuildContext:
     # Which cargo profile the engine libraries are collected from, and where
     # the pinned third-party payload is cached between builds.
     engine_profile: str = "release"
+    # Build the side-by-side test flavour instead of the release product.
+    side_by_side: bool = False
+    # Skip the signed updater artifacts, so a build needs no signing key.
+    no_updater: bool = False
     payload_cache: Path = field(
         default_factory=lambda: REPO_ROOT / ".cache/engine-payload"
     )
     dry_run: bool = False
+
+    def product_name(self) -> str:
+        """The bundle's `productName`, which every artifact is named after."""
+        return SIDE_BY_SIDE_PRODUCT if self.side_by_side else sync_version.DEFAULT_PRODUCT
 
     # populated as stages run
     payload_manifest: dict | None = None
@@ -230,7 +261,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def find_built_installer(repo_root: Path = REPO_ROOT, version: str | None = None) -> Path:
+def find_built_installer(
+    repo_root: Path = REPO_ROOT,
+    version: str | None = None,
+    product: str = sync_version.DEFAULT_PRODUCT,
+) -> Path:
     """Locate the installer the Tauri bundle stage just produced.
 
     Matched by its exact expected name -- `sync_version.artifact_name`, the
@@ -252,7 +287,7 @@ def find_built_installer(repo_root: Path = REPO_ROOT, version: str | None = None
     back to something that happens to be lying nearby.
     """
     search_dir = bundle_dir(repo_root)
-    expected = sync_version.artifact_name(version)
+    expected = sync_version.artifact_name(version, product=product)
     candidate = search_dir / expected
     if candidate.is_file():
         return candidate
@@ -283,6 +318,7 @@ def collect(
     version: str,
     git_commit: str,
     payload_manifest: dict,
+    product: str = sync_version.DEFAULT_PRODUCT,
     payload_versions: dict[str, str],
     dist_dir: Path,
 ) -> CollectResult:
@@ -290,7 +326,7 @@ def collect(
     build manifest (FR-15). Deterministic filenames, no prompts."""
     dist_dir.mkdir(parents=True, exist_ok=True)
 
-    dest_name = sync_version.artifact_name(version)
+    dest_name = sync_version.artifact_name(version, product=product)
     dest_path = dist_dir / dest_name
     shutil.copyfile(installer_src, dest_path)
 
@@ -362,7 +398,7 @@ def stage_engine_payload(ctx: BuildContext) -> None:
         raise BuildInstallerError(f"engine payload staging failed: {exc}") from exc
 
 
-def _tauri_build_args() -> list[str]:
+def _tauri_build_args(side_by_side: bool = False, no_updater: bool = False) -> list[str]:
     """The `tauri <args>` this platform's bundle build needs.
 
     tauri.conf.json commits to `targets: ["nsis"]` (a Windows-only list
@@ -372,6 +408,10 @@ def _tauri_build_args() -> list[str]:
     media).
     """
     args = ["build"]
+    if side_by_side:
+        args += ["--config", SIDE_BY_SIDE_CONFIG]
+    if no_updater:
+        args += ["--config", NO_UPDATER_CONFIG]
     if sys.platform == "darwin":
         args += ["--bundles", "app,dmg"]
     return args
@@ -393,9 +433,19 @@ def stage_tauri_build(ctx: BuildContext) -> None:
     # default)". Without both, `--locked` never leaves the `npm`/`tauri`
     # layer.
     _run(
-        ["npm", "--prefix", str(APP_DIR), "run", "tauri", "--", *_tauri_build_args(), "--", "--locked"]
+        [
+            "npm",
+            "--prefix",
+            str(APP_DIR),
+            "run",
+            "tauri",
+            "--",
+            *_tauri_build_args(ctx.side_by_side, ctx.no_updater),
+            "--",
+            "--locked",
+        ]
     )
-    ctx.installer_src = find_built_installer(ctx.repo_root)
+    ctx.installer_src = find_built_installer(ctx.repo_root, product=ctx.product_name())
 
 
 def stage_collect(ctx: BuildContext) -> None:
@@ -411,6 +461,7 @@ def stage_collect(ctx: BuildContext) -> None:
         payload_manifest=ctx.payload_manifest or {},
         payload_versions=payload_versions,
         dist_dir=ctx.dist_dir,
+        product=ctx.product_name(),
     )
 
 
@@ -445,8 +496,11 @@ def describe_plan(ctx: BuildContext) -> list[str]:
         f"uv run {SCRIPTS_DIR / 'verify_locks.py'} --check",
         f"uv run {SCRIPTS_DIR / 'stage_engine_payload.py'} --profile {ctx.engine_profile}",
         f"npm --prefix {APP_DIR} ci",
-        f"npm --prefix {APP_DIR} run tauri -- {' '.join(_tauri_build_args())} -- --locked",
-        f"collect -> {ctx.dist_dir}/{sync_version.artifact_name('<version>')} (+ .sha256, build-manifest.json)",
+        f"npm --prefix {APP_DIR} run tauri -- "
+        f"{' '.join(_tauri_build_args(ctx.side_by_side, ctx.no_updater))} -- --locked",
+        "collect -> "
+        f"{ctx.dist_dir}/{sync_version.artifact_name('<version>', product=ctx.product_name())}"
+        " (+ .sha256, build-manifest.json)",
         f"gate: installer size <= {SIZE_LIMIT_BYTES} bytes (300 MB)",
     ]
 
@@ -459,17 +513,52 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default="release",
         help="cargo profile to collect the engine libraries from",
     )
+    parser.add_argument(
+        "--side-by-side",
+        action="store_true",
+        help=(
+            "build the test flavour: its own product name, identifier and "
+            "install directory, so it can be installed next to a release "
+            "copy instead of upgrading it. Needs no signing key, because it "
+            "produces no updater artifacts"
+        ),
+    )
+    parser.add_argument(
+        "--no-updater",
+        action="store_true",
+        help=(
+            "skip the signed updater artifacts, so the release product "
+            "can be built without TAURI_SIGNING_PRIVATE_KEY. The installer "
+            "is byte-for-byte what a signed build produces; only the "
+            "updater bundle and its .sig are missing, so do not publish "
+            "the result as a release. Implied by --side-by-side"
+        ),
+    )
     parser.add_argument("--dist-dir", type=Path, default=DEFAULT_DIST_DIR)
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv)
-    ctx = BuildContext(
+def build_context_from_args(args: argparse.Namespace) -> BuildContext:
+    """Turn parsed flags into the context the stages read.
+
+    Separate from `main` so the flag-to-context rules -- notably that
+    --side-by-side implies --no-updater -- are reachable without running a
+    build.
+    """
+    return BuildContext(
         dist_dir=args.dist_dir,
         engine_profile=args.engine_profile,
+        side_by_side=args.side_by_side,
+        # The side-by-side overlay switches updater artifacts off in the
+        # config; the flag has to say so too, or a reader of `ctx.no_updater`
+        # would conclude the test flavour was signed.
+        no_updater=args.no_updater or args.side_by_side,
         dry_run=args.dry_run,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    ctx = build_context_from_args(_parse_args(argv))
 
     if ctx.dry_run:
         for line in describe_plan(ctx):
