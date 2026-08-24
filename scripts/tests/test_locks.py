@@ -16,7 +16,6 @@ VERIFY_LOCKS = REPO_ROOT / "scripts" / "verify_locks.py"
 LOCK_FILES = [
     REPO_ROOT / "Cargo.lock",
     REPO_ROOT / "apps" / "desktop" / "package-lock.json",
-    REPO_ROOT / "services" / "transcription" / "uv.lock",
 ]
 
 
@@ -56,15 +55,10 @@ def test_verify_locks_check_exits_nonzero_when_a_lock_is_missing(tmp_path: Path)
 
     scratch = tmp_path / "repo"
     (scratch / "apps" / "desktop").mkdir(parents=True)
-    (scratch / "services" / "transcription").mkdir(parents=True)
 
+    # Cargo.lock only: the frontend's lock is deliberately left out, which is
+    # the missing file this asserts the check refuses to pass.
     shutil.copy(REPO_ROOT / "Cargo.lock", scratch / "Cargo.lock")
-    shutil.copy(
-        REPO_ROOT / "apps" / "desktop" / "package-lock.json",
-        scratch / "apps" / "desktop" / "package-lock.json",
-    )
-    # Deliberately omit uv.lock to simulate removal.
 
     result = _run_check(cwd=scratch)
     assert result.returncode != 0
-    assert "uv.lock" in (result.stdout + result.stderr)

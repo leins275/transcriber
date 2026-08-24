@@ -65,13 +65,13 @@ def test_all_targets_have_a_rule() -> None:
 
 
 @pytest.mark.parametrize("target", FANOUT_TARGETS)
-def test_fanout_target_invokes_all_three_languages(target: str) -> None:
+def test_fanout_target_invokes_both_languages(target: str) -> None:
+    # Two, not three: the Python service that was the third is gone.
     text = _makefile_text()
     recipe = _target_recipe(text, target)
     assert "cargo" in recipe, f"{target} recipe does not invoke cargo (Rust)"
-    assert "npm --prefix apps/desktop" in recipe, f"{target} recipe does not invoke the app's npm scripts"
-    assert "uv run --directory services/transcription" in recipe, (
-        f"{target} recipe does not invoke uv for the Python service"
+    assert "npm --prefix apps/desktop" in recipe, (
+        f"{target} recipe does not invoke the app's npm scripts"
     )
 
 

@@ -89,7 +89,7 @@ def test_set_then_check_syncs_every_manifest_and_is_idempotent():
     # Cargo.lock is restored too: `--set` now writes the workspace members'
     # versions there as well, so a snapshot without it leaves the lockfile
     # dirty at the test's scratch version.
-    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+    tracked = [version_txt, sync_version.CARGO_LOCK] + [
         m.path for m in sync_version.MANIFESTS
     ]
     snapshot = _snapshot(tracked)
@@ -170,7 +170,7 @@ def test_print_artifact_name_embeds_the_version():
     # Cargo.lock is restored too: `--set` now writes the workspace members'
     # versions there as well, so a snapshot without it leaves the lockfile
     # dirty at the test's scratch version.
-    tracked = [version_txt, sync_version.CARGO_LOCK, sync_version.UV_LOCK] + [
+    tracked = [version_txt, sync_version.CARGO_LOCK] + [
         m.path for m in sync_version.MANIFESTS
     ]
     snapshot = _snapshot(tracked)
@@ -225,7 +225,7 @@ def test_check_fails_when_only_cargo_lock_drifts():
 
 def test_set_syncs_cargo_lock_members_without_touching_registry_crates():
     lock = sync_version.CARGO_LOCK
-    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+    paths = [REPO_ROOT / "version.txt", lock] + [
         m.path for m in sync_version.MANIFESTS
     ]
     snapshot = _snapshot(paths)
@@ -256,7 +256,7 @@ def test_set_syncs_cargo_lock_members_without_touching_registry_crates():
 
 def test_set_preserves_cargo_locks_newline_style():
     lock = sync_version.CARGO_LOCK
-    paths = [REPO_ROOT / "version.txt", lock, sync_version.UV_LOCK] + [
+    paths = [REPO_ROOT / "version.txt", lock] + [
         m.path for m in sync_version.MANIFESTS
     ]
     snapshot = _snapshot(paths)
@@ -268,118 +268,6 @@ def test_set_preserves_cargo_locks_newline_style():
         assert (b"\r\n" in lock.read_bytes()) is had_crlf
     finally:
         _restore(snapshot)
-
-
-def test_uv_lock_project_entry_matches_version_txt():
-    # `uv export --frozen` in the pyenv bake refuses a lockfile whose project
-    # version disagrees with pyproject.toml -- the release build's first real
-    # failure, before this was synced.
-    version = sync_version.read_version()
-    transcription = next(
-        package for package in sync_version.LOCK_PACKAGES if package.path == sync_version.UV_LOCK
-    )
-    assert sync_version.lock_version(transcription) == version
-
-
-def test_check_fails_when_only_uv_lock_drifts():
-    lock = sync_version.UV_LOCK
-    snapshot = _snapshot([lock])
-    try:
-        text = lock.read_text(encoding="utf-8")
-        pattern = sync_version._lock_version_re("transcription")
-        lock.write_text(
-            pattern.sub(r"\g<1>9.9.9\g<3>", text, count=1),
-            encoding="utf-8",
-            newline=sync_version._detect_newline(lock),
-        )
-
-        result = _run("--check")
-
-        assert result.returncode == 1
-        assert "services/transcription/uv.lock (transcription)" in result.stderr
-    finally:
-        _restore(snapshot)
-
-
-def test_set_syncs_the_uv_lock_project_without_touching_dependencies():
-    lock = sync_version.UV_LOCK
-    paths = [REPO_ROOT / "version.txt", lock, sync_version.CARGO_LOCK] + [
-        m.path for m in sync_version.MANIFESTS
-    ]
-    snapshot = _snapshot(paths)
-    try:
-        before = lock.read_text(encoding="utf-8")
-
-        sync_version.set_version("9.9.9")
-
-        after = lock.read_text(encoding="utf-8")
-        changed = [
-            (a, b) for a, b in zip(before.splitlines(), after.splitlines(), strict=True) if a != b
-        ]
-        # Exactly one line: the project's own version. Every other
-        # `[[package]]` in that file is a third-party dependency.
-        assert len(changed) == 1, changed
-    finally:
-        _restore(snapshot)
-
-
-# -- the Python package's own `__version__` --------------------------------
-#
-# Not cosmetic: `/health` reports it and the sqlite ledger stamps it into
-# every job row as `service_version`, so a release that leaves it behind
-# reports the previous version at runtime and mislabels its own history.
-
-
-def test_transcription_package_version_matches_version_txt():
-    package_init = next(m for m in sync_version.MANIFESTS if m.kind == "python")
-    assert sync_version.manifest_version(package_init) == sync_version.read_version()
-
-
-def test_check_fails_when_only_the_package_version_drifts():
-    package_init = next(m for m in sync_version.MANIFESTS if m.kind == "python")
-    snapshot = _snapshot([package_init.path])
-    try:
-        text = package_init.path.read_text(encoding="utf-8")
-        package_init.path.write_text(
-            text.replace('__version__ = "', '__version__ = "9.9.9', 1),
-            encoding="utf-8",
-            newline=sync_version._detect_newline(package_init.path),
-        )
-
-        result = _run("--check")
-
-        assert result.returncode == 1
-        assert "__init__.py" in result.stderr
-    finally:
-        _restore(snapshot)
-
-
-# A module that mentions `__version__` three times but assigns it once:
-# in a docstring, in a commented-out line, and for real.
-FIXTURE_MODULE = "\n".join(
-    [
-        "'A docstring mentioning __version__ = 0.0.1 in prose.'",
-        "",
-        '__version__ = "0.1.0"',
-        '# __version__ = "0.0.9" (an old value, commented out)',
-        "",
-    ]
-)
-
-
-def test_set_rewrites_only_the_assignment_not_the_docstring(tmp_path):
-    # Anchored to the start of a line, so a `__version__` mentioned in prose
-    # or in a commented-out line is never rewritten.
-    module = tmp_path / "__init__.py"
-    module.write_text(FIXTURE_MODULE, encoding="utf-8", newline="\n")
-
-    sync_version._write_python_version(module, "2.0.0")
-
-    written = module.read_text(encoding="utf-8")
-    assert '__version__ = "2.0.0"' in written
-    assert "in prose" in written
-    assert "0.0.1" in written, "the docstring must be untouched"
-    assert "0.0.9" in written, "the commented-out line must be untouched"
 
 
 def test_read_python_version_reports_a_module_with_no_version():

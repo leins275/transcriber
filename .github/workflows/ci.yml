@@ -17,10 +17,8 @@
 #               guard that a Windows-focused PR cannot silently break the
 #               macOS release build's compile. The full macOS test suite
 #               runs on the release leg and on developers' Macs.
-#   python      windows-only. `runtime_dlls` and `cuda_runtime` are about
 #               Windows DLL loading, and their tests assert on it.
 #   scripts     windows-only. The build-system tests know about NSIS, the
-#               baked pyenv and Windows paths.
 #   frontend    Linux. React and vitest care about none of the above, and a
 #               Linux runner is both quicker to start and billed at 1x
 #               rather than the 2x Windows costs on a private repository.
@@ -148,41 +146,6 @@ jobs:
       - name: vitest
         run: npm --prefix apps/desktop run test
 
-  python:
-    name: Python service
-    runs-on: windows-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --frozen --directory services/transcription
-
-      - name: ruff format
-        run: uv run --directory services/transcription ruff format --check .
-
-      - name: ruff check
-        run: uv run --directory services/transcription ruff check .
-
-      - name: mypy
-        run: uv run --directory services/transcription mypy src
-
-      - name: pytest
-        run: uv run --directory services/transcription pytest -q
-
-      - name: working tree is clean
-        shell: bash
-        run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "the service suite left the working tree dirty:"
-            git status --porcelain
-            exit 1
-          fi
-
   repo:
     name: Build system
     runs-on: windows-latest
@@ -203,14 +166,13 @@ jobs:
       - name: dependency locks committed
         run: uv run scripts/verify_locks.py --check
 
-      # Two markers excluded, for two different reasons.
+      # Two markers excluded.
       #
-      # `slow` is `test_build_pyenv`'s real bake: a managed CPython download
-      # plus the frozen dependency tree, minutes and hundreds of megabytes,
-      # which is not what a per-push gate is for. It is not left untested --
-      # `release.yml` runs the real bake as a stage of the installer build,
-      # and does so *before* the tag is pushed, so a bake that fails on a
-      # runner means no release is published rather than a broken one.
+      # `slow` marks anything that downloads or builds a real payload, which
+      # is not what a per-push gate is for. It is not left untested --
+      # `release.yml` stages the real engine payload as part of the installer
+      # build, and does so *before* the tag is pushed, so a staging failure
+      # means no release is published rather than a broken one.
       #
       # `host` is `test_bootstrap`, which its own docstring calls an
       # integration test of the operator's machine. A runner is not that

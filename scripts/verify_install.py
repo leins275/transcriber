@@ -45,8 +45,18 @@ SKELETON_DIRS = ("models", "logs", "data")
 
 # The bundled runtime tree T6's `bundle.resources` mapping deposits at the
 # install root (see `apps/desktop/src-tauri/src/app_paths.rs`): directly
-# under `pyenv\`, not `resources\pyenv\`.
-PYENV_SUBDIRS = ("pyenv/python", "pyenv/site-packages", "pyenv/service")
+# The engine's own files, staged by `stage_engine_payload.py` and shipped into
+# the application folder's root. An install missing any of them starts but
+# cannot transcribe, which is a worse failure than not starting at all.
+ENGINE_FILES = (
+    "whisper.dll",
+    "llama.dll",
+    "ggml.dll",
+    "ggml-base.dll",
+    "ffmpeg.exe",
+    "runtime/onnx/onnxruntime.dll",
+)
+ENGINE_DIRS = ("runtime/engine/backends", "models/diarization")
 
 DEFAULT_APP_EXE_NAME = "Transcriber.exe"
 
@@ -65,14 +75,17 @@ def check_directory_skeleton(install_dir: Path) -> list[str]:
     return problems
 
 
-def check_pyenv_tree(install_dir: Path) -> list[str]:
-    """Flags a missing bundled-runtime subtree under `install_dir\\pyenv\\`."""
+def check_engine_payload(install_dir: Path) -> list[str]:
+    """Flags anything the engine needs that the installer did not put there."""
     problems: list[str] = []
-    for rel in PYENV_SUBDIRS:
-        if not (install_dir / rel).is_dir():
-            problems.append(f"missing bundled runtime directory: {install_dir / rel}")
+    for name in ENGINE_FILES:
+        if not (install_dir / name).is_file():
+            problems.append(f"missing engine file: {name}")
+    for name in ENGINE_DIRS:
+        directory = install_dir / name
+        if not directory.is_dir() or not any(directory.iterdir()):
+            problems.append(f"missing or empty engine directory: {name}")
     return problems
-
 
 def check_app_executable(install_dir: Path, exe_name: str = DEFAULT_APP_EXE_NAME) -> list[str]:
     """Flags a missing app executable at the install root."""
@@ -247,7 +260,7 @@ def run_checks(
 
     if install_dir is not None:
         results["app executable"] = check_app_executable(install_dir, exe_name)
-        results["bundled runtime (pyenv)"] = check_pyenv_tree(install_dir)
+        results["engine payload"] = check_engine_payload(install_dir)
         results["app-folder skeleton (models/logs/data)"] = check_directory_skeleton(install_dir)
         for name in SKELETON_DIRS:
             target = install_dir / name

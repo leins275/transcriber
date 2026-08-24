@@ -1,9 +1,9 @@
-﻿//! `#[tauri::command]` handlers â€” the only IPC surface (T11).
+//! `#[tauri::command]` handlers — the only IPC surface (T11).
 //!
 //! Every handler validates its arguments first and returns
 //! `Result<T, AppError>` (NFR-6). Each `#[tauri::command]`-annotated
 //! function here is a thin wrapper around a plain `*_handler` function that
-//! takes `&AppState` directly â€” that's what lets these be unit tested below
+//! takes `&AppState` directly — that's what lets these be unit tested below
 //! without a Tauri runtime (`tauri::State` has no public constructor).
 //!
 //! `AppState` owns the pieces `lib.rs` wires up at startup: settings, the
@@ -20,11 +20,10 @@ use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Serialize;
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::app_paths;
@@ -32,9 +31,7 @@ use crate::config::{self, Settings};
 use crate::error::AppError;
 use crate::jobs::{self, JobRegistry, JobSnapshot};
 use crate::paths;
-use crate::service::http::HttpTranscriptionService;
 use crate::service::{JobStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService};
-use crate::sidecar::{self, ReadyLine, Sidecar, SidecarError, SidecarPlan, SidecarSpawnConfig};
 
 /// The three model-download commands (T13, FR-12, FR-17) -- a submodule of
 /// this file (`src/commands/model.rs`) rather than a sibling of `commands`
@@ -55,14 +52,14 @@ pub mod meetings;
 pub mod llm;
 
 /// A defensive upper bound on a single dropped-path argument's length
-/// (Windows' own extended-length path limit is 32767 UTF-16 code units) â€”
+/// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever
 /// touching the filesystem for it (NFR-6).
 const MAX_PATH_ARG_LEN: usize = 32_768;
 
 /// The full IPC-contract `SettingsView` (plan.md's frozen IPC contract):
 /// `config.rs`'s own `SettingsView` deliberately omits
-/// `supported_extensions` (it comes from `paths.rs`, not `config.rs`) â€”
+/// `supported_extensions` (it comes from `paths.rs`, not `config.rs`) —
 /// this is where the two are combined.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SettingsResponse {
@@ -151,7 +148,7 @@ pub struct ServiceStatusView {
     pub detail: Option<String>,
 }
 
-/// Where a `service://status` transition is pushed â€” the production
+/// Where a `service://status` transition is pushed — the production
 /// implementation (`lib.rs`) wraps a Tauri `AppHandle`; tests use a
 /// recording fake, mirroring `jobs::EventSink`'s own design.
 pub trait ServiceStatusSink: Send + Sync {
@@ -185,7 +182,7 @@ impl jobs::ServiceUnavailableSink for RegistryStatusSinkAdapter {
 /// A `TranscriptionService` that always reports unavailable, carrying a
 /// fixed detail message. Used as the placeholder while the sidecar is
 /// starting, and as the fallback when a spawn/ready-line wait fails or a
-/// configured `service.base_url` turns out to be invalid â€” in every case
+/// configured `service.base_url` turns out to be invalid — in every case
 /// ingest keeps working (FR-13); only the transcription seam is down.
 pub struct UnavailableTranscriptionService {
     detail: String,
@@ -222,64 +219,9 @@ impl TranscriptionService for UnavailableTranscriptionService {
 
 /// Abstracts "spawn F2 and wait for its ready line" and "terminate the
 /// running child" behind a trait so nothing in this file (or its tests)
-/// ever needs to spawn the real F2 process â€” QA's expectation (plan.md)
-/// that no test spawns the real sidecar or requires a whisper model.
-#[async_trait]
-pub trait SidecarController: Send + Sync {
-    async fn spawn_and_await_ready(
-        &self,
-        config: &SidecarSpawnConfig,
-        timeout: Duration,
-    ) -> Result<ReadyLine, SidecarError>;
-
-    async fn terminate(&self);
-}
-
-/// Wraps a real `sidecar::Sidecar` â€” used in production.
-pub struct RealSidecarController {
-    sidecar: TokioMutex<Sidecar>,
-}
-
-impl RealSidecarController {
-    pub fn new() -> Self {
-        RealSidecarController {
-            sidecar: TokioMutex::new(Sidecar::new()),
-        }
-    }
-}
-
-impl Default for RealSidecarController {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl SidecarController for RealSidecarController {
-    async fn spawn_and_await_ready(
-        &self,
-        config: &SidecarSpawnConfig,
-        timeout: Duration,
-    ) -> Result<ReadyLine, SidecarError> {
-        let stdout = {
-            let mut guard = self.sidecar.lock().await;
-            guard.restart(config).await?
-        };
-        let command = format!("{} {}", config.program, config.args.join(" "));
-        let ready = sidecar::read_ready_line(stdout, timeout, &command).await?;
-        // E6: record F2's own pid so a later `terminate()` kills the real
-        // service process tree, not just the `uv` wrapper `restart` spawned.
-        self.sidecar.lock().await.record_service_pid(ready.pid);
-        Ok(ready)
-    }
-
-    async fn terminate(&self) {
-        self.sidecar.lock().await.terminate().await;
-    }
-}
-
+/// ever needs to spawn the real F2 process — QA's expectation (plan.md)
 /// The actual program `reveal_job` launches (never a caller-supplied
-/// string â€” see [`Revealer`]).
+/// string — see [`Revealer`]).
 #[cfg(windows)]
 pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 
@@ -287,7 +229,7 @@ pub const EXPLORER_PROGRAM: &str = "explorer.exe";
 /// a single **raw** string rather than a `Vec<String>` fed through
 /// `Command::args`. `Command::args` quotes any argument containing a space
 /// as one token, and every F1 meeting folder name is `<date> - <Title>`, so
-/// that route would turn `/select,<path>` into `"/select,<path>"` â€” the
+/// that route would turn `/select,<path>` into `"/select,<path>"` — the
 /// switch quoted together with the path. Explorer parses that as an
 /// unrecognized argument and opens the user's Documents folder instead of
 /// the target (E1, verified empirically against a real folder with spaces
@@ -302,11 +244,11 @@ pub fn reveal_command_line(path: &Path) -> String {
 }
 
 /// Spawns `program` with `raw_tail` appended verbatim to the command line
-/// via [`CommandExt::raw_arg`] â€” never `std::process::Command::args`, whose
+/// via [`CommandExt::raw_arg`] — never `std::process::Command::args`, whose
 /// own quoting is exactly the E1 defect [`reveal_command_line`]'s doc
-/// comment describes â€” and waits for it to exit. Explorer's own exit code
-/// carries no meaning to this app â€” it simply hands the request off to an
-/// already-running shell process â€” so any exit status is tolerated; only a
+/// comment describes — and waits for it to exit. Explorer's own exit code
+/// carries no meaning to this app — it simply hands the request off to an
+/// already-running shell process — so any exit status is tolerated; only a
 /// failure to spawn at all is reported.
 #[cfg(windows)]
 pub fn run_reveal_command(program: &str, raw_tail: &str) -> Result<(), AppError> {
@@ -317,7 +259,7 @@ pub fn run_reveal_command(program: &str, raw_tail: &str) -> Result<(), AppError>
         .map_err(|err| AppError::io(format!("failed to launch {program}: {err}")))
 }
 
-/// Executes a validated reveal target â€” implemented by actually launching
+/// Executes a validated reveal target — implemented by actually launching
 /// Explorer in production; a recording fake in tests, so a unit test never
 /// opens a visible window.
 pub trait Revealer: Send + Sync {
@@ -371,8 +313,13 @@ pub struct AppState {
     pub config_error: RwLock<Option<String>>,
     pub sink: Arc<dyn jobs::EventSink>,
     pub status_sink: Arc<dyn ServiceStatusSink>,
-    pub sidecar: Arc<dyn SidecarController>,
     pub revealer: Arc<dyn Revealer>,
+    /// The running engine, when there is one.
+    ///
+    /// Held so the app can put it down deliberately -- on exit, and before an
+    /// update overwrites the libraries it has loaded. `None` in a fake-service
+    /// session and when the engine could not start.
+    pub engine: Option<engine::EngineHandle>,
     /// Set by `lib.rs` when the installed service lives *in this process*:
     /// either the `--fake-service`/`TRANSCRIBER_FAKE_SERVICE` dev switch
     /// (E20), or `TRANSCRIBER_SERVICE=local`, which runs the real engine
@@ -398,7 +345,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Full constructor â€” every collaborator injected, used by tests (and
+    /// Full constructor — every collaborator injected, used by tests (and
     /// internally by [`AppState::new`]).
     #[allow(clippy::too_many_arguments)]
     pub fn new_with(
@@ -411,7 +358,6 @@ impl AppState {
         service_starting: bool,
         sink: Arc<dyn jobs::EventSink>,
         status_sink: Arc<dyn ServiceStatusSink>,
-        sidecar: Arc<dyn SidecarController>,
         revealer: Arc<dyn Revealer>,
     ) -> Self {
         let registry = JobRegistry::new(root, service.clone(), sink.clone());
@@ -431,8 +377,8 @@ impl AppState {
             config_error: RwLock::new(None),
             sink,
             status_sink,
-            sidecar,
             revealer,
+            engine: None,
             in_process_mode: false,
             vault_index: RwLock::new(HashMap::new()),
         }
@@ -461,7 +407,6 @@ impl AppState {
             service_starting,
             sink,
             status_sink,
-            Arc::new(RealSidecarController::new()),
             Arc::new(ExplorerRevealer),
         )
     }
@@ -472,53 +417,6 @@ impl AppState {
 /// it's testable without touching real process state.
 pub fn fake_service_requested(env_var: Option<String>, args: &[String]) -> bool {
     env_var.is_some() || args.iter().any(|arg| arg == "--fake-service")
-}
-
-/// Resolves which `TranscriptionService` to use for `plan`: connects
-/// directly for `UseExisting`, or spawns and waits for F2's ready line
-/// (bounded by `timeout`) through `controller` for `Spawn`, falling back to
-/// [`UnavailableTranscriptionService`] if the spawn/ready-line wait fails or
-/// the resulting base URL is somehow invalid â€” the transcription seam
-/// being down never fails app startup or a settings change (FR-13).
-pub async fn resolve_service(
-    controller: &dyn SidecarController,
-    plan: SidecarPlan,
-) -> (Arc<dyn TranscriptionService>, Option<String>) {
-    match plan {
-        SidecarPlan::UseExisting { base_url } => {
-            match HttpTranscriptionService::new(&base_url, None) {
-                Ok(client) => (Arc::new(client), Some(base_url)),
-                Err(_) => (
-                    Arc::new(UnavailableTranscriptionService::new(format!(
-                        "configured service.base_url {base_url} is invalid"
-                    ))),
-                    Some(base_url),
-                ),
-            }
-        }
-        SidecarPlan::Spawn(spawn_config) => {
-            match controller
-                .spawn_and_await_ready(&spawn_config, sidecar::READY_TIMEOUT)
-                .await
-            {
-                Ok(ready) => {
-                    let base_url = ready.base_url();
-                    let service: Arc<dyn TranscriptionService> =
-                        match HttpTranscriptionService::new(&base_url, Some(ready.token)) {
-                            Ok(client) => Arc::new(client),
-                            Err(_) => Arc::new(UnavailableTranscriptionService::new(
-                                "sidecar reported an invalid base url".to_string(),
-                            )),
-                        };
-                    (service, Some(base_url))
-                }
-                Err(err) => (
-                    Arc::new(UnavailableTranscriptionService::new(err.to_string())),
-                    None,
-                ),
-            }
-        }
-    }
 }
 
 /// Installs a resolved `(service, base_url)` pair into `state`: swaps the
@@ -565,25 +463,22 @@ pub async fn apply_resolved_service(
 }
 
 /// The `service://status` detail while the app is shutting the sidecar
-/// down for an update install â€” one constant so the handler and its tests
+/// down for an update install — one constant so the handler and its tests
 /// cannot drift on the exact wording.
 pub const UPDATE_STOP_DETAIL: &str = "stopped for update";
 
-/// `prepare_update` â€” stops the bundled Python sidecar so the updater's
-/// installer can run.
+/// `prepare_update` -- puts the engine down so the updater's installer can
+/// overwrite the files it holds open.
 ///
-/// The NSIS installer overwrites `pyenv\` in place, and a running
-/// `python.exe` from that tree holds locks on its own DLLs â€” installing
-/// over it fails with "Error opening file for writing: ...\pyenv\...".
-/// The updater plugin exits *this* process via `std::process::exit` when
-/// it launches the installer, which never runs `lib.rs`'s `RunEvent::Exit`
-/// hook, so the sidecar would be left running as an orphan. The frontend
-/// therefore calls this between downloading the update and installing it.
+/// The app itself loads `whisper.dll`, `llama.dll` and the ggml backends, and
+/// the installer overwrites them in place. The updater plugin exits this
+/// process with `std::process::exit` when it launches the installer, which
+/// never runs `lib.rs`'s `RunEvent::Exit` hook -- so a transcription in flight
+/// would still be running when the files under it are replaced.
 ///
 /// The service is swapped for an [`UnavailableTranscriptionService`] first
-/// (registry included, so an in-flight poll loop sees it too), then the
-/// sidecar process tree is terminated and awaited â€” by the time this
-/// returns, nothing of ours holds a file under `pyenv\` open.
+/// (registry included, so an in-flight poll loop sees it too) and the engine
+/// is shut down, which stops the worker and releases the models.
 pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
     let service: Arc<dyn TranscriptionService> =
         Arc::new(UnavailableTranscriptionService::new(UPDATE_STOP_DETAIL));
@@ -605,7 +500,9 @@ pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
         .set_root_and_service(root, service)
         .await;
 
-    state.sidecar.terminate().await;
+    if let Some(engine) = state.engine.as_ref() {
+        engine.shutdown();
+    }
 
     state.status_sink.emit(&ServiceStatusView {
         state: ServiceState::Unavailable,
@@ -617,7 +514,7 @@ pub async fn prepare_update_handler(state: &AppState) -> Result<(), AppError> {
 
 // -- Handler bodies (testable without a Tauri runtime) ---------------------
 
-/// `get_settings` â€” never fails; wrapped in `Result` to match the IPC
+/// `get_settings` — never fails; wrapped in `Result` to match the IPC
 /// contract's uniform `Result<T, AppError>` shape.
 pub async fn get_settings_handler(state: &AppState) -> Result<SettingsResponse, AppError> {
     let settings = state.settings.read().await;
@@ -625,7 +522,7 @@ pub async fn get_settings_handler(state: &AppState) -> Result<SettingsResponse, 
     Ok(build_settings_response(&settings, config_error))
 }
 
-/// `set_meetings_root` â€” validates and persists the new root (FR-16) and
+/// `set_meetings_root` — validates and persists the new root (FR-16) and
 /// returns the resulting settings view immediately (E17). Resolving and
 /// (re)starting the sidecar (or reconnecting to a configured URL) so F2's
 /// own allowed-roots list stays in sync is *not* done here: for the `Spawn`
@@ -690,31 +587,19 @@ pub async fn set_meetings_root_handler(
 /// in this file is tested.
 pub async fn resolve_and_apply_meetings_root_service(
     state: &AppState,
-    settings: &Settings,
+    _settings: &Settings,
     root: PathBuf,
 ) -> ServiceStatusView {
-    if state.in_process_mode {
-        // E20: a session whose service already lives in this process -- the
-        // fake, or the real in-process engine -- must keep it across a
-        // meetings-root change. Only the registry's root needs to move; the
-        // installed service must not be discarded in favor of a sidecar spawn
-        // (or `UnavailableTranscriptionService`) the way an unconditional
-        // `plan_sidecar` + `resolve_service` would.
-        let service = state.service.read().await.clone();
-        let base_url = state.service_base_url.read().await.clone();
-        return apply_resolved_service(state, service, base_url, root).await;
-    }
-
-    let plan = sidecar::plan_sidecar(
-        settings,
-        &config::config_path(&state.config_dir),
-        &state.app_dir,
-    );
-    let (service, base_url) = resolve_service(state.sidecar.as_ref(), plan).await;
+    // The engine lives in this process, so changing the meetings root moves
+    // the registry's root and nothing else. There is no service to resolve:
+    // when the service was a child process this had to plan a spawn, and
+    // getting that wrong discarded a running one.
+    let service = state.service.read().await.clone();
+    let base_url = state.service_base_url.read().await.clone();
     apply_resolved_service(state, service, base_url, root).await
 }
 
-/// `enqueue_paths` â€” validates every argument before any IO (NFR-1, NFR-6)
+/// `enqueue_paths` — validates every argument before any IO (NFR-1, NFR-6)
 /// and hands well-formed absolute paths straight to the job registry, which
 /// returns their initial `Pending` snapshots immediately.
 pub async fn enqueue_paths_handler(
@@ -757,7 +642,7 @@ pub async fn list_jobs_handler(state: &AppState) -> Result<Vec<JobSnapshot>, App
     Ok(state.registry.read().await.list().await)
 }
 
-/// `service_status` â€” while the sidecar is still starting this reports
+/// `service_status` — while the sidecar is still starting this reports
 /// `starting` without probing health; afterwards it reflects a live
 /// `health()` call, so a down service is reported `unavailable` naming
 /// whatever base URL is on record (FR-13).
@@ -791,7 +676,7 @@ pub async fn service_status_handler(state: &AppState) -> Result<ServiceStatusVie
     })
 }
 
-/// `list_vault` â€” scans the configured meetings root read-only (F1's
+/// `list_vault` — scans the configured meetings root read-only (F1's
 /// `vault::list_meetings`, off the UI thread via `spawn_blocking`, the same
 /// pattern `ingest.rs` already uses for F1's blocking calls) and returns
 /// every meeting found, newest first (F1's own ordering).
@@ -850,7 +735,7 @@ pub async fn list_vault_handler(state: &AppState) -> Result<Vec<VaultMeetingView
     Ok(views)
 }
 
-/// `reveal_vault_entry` â€” looks the entry up **by id** (never trusting a
+/// `reveal_vault_entry` — looks the entry up **by id** (never trusting a
 /// caller-supplied path, exactly like [`reveal_job_handler`]), re-validates
 /// containment under the *current* configured meetings-root, and only then
 /// launches Explorer on the meeting folder itself.
@@ -879,12 +764,12 @@ pub async fn reveal_vault_entry_handler(state: &AppState, entry_id: &str) -> Res
         .map_err(|join_err| AppError::internal(format!("reveal task panicked: {join_err}")))?
 }
 
-/// `reveal_job` â€” looks the job up **by id** (never trusting a caller-
+/// `reveal_job` — looks the job up **by id** (never trusting a caller-
 /// supplied path), picks its most specific known path (transcript, then the
 /// filed recording, then the meeting folder), re-validates containment
 /// under the *current* configured meetings-root, and only then launches
 /// Explorer (FR-15). Refuses a job whose recorded path no longer resolves
-/// inside that root â€” this is what makes the containment check a Rust-side
+/// inside that root — this is what makes the containment check a Rust-side
 /// guarantee rather than something the frontend could be trusted to do.
 pub async fn reveal_job_handler(state: &AppState, job_id: &str) -> Result<(), AppError> {
     let snapshot = state
@@ -1080,7 +965,7 @@ pub async fn list_service_jobs(
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
+
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -1089,7 +974,6 @@ mod tests {
     use crate::config::Settings;
     use crate::jobs::JobState;
     use crate::service::fake::FakeService;
-    use crate::sidecar::{ReadyLine, SidecarError, SidecarSpawnConfig};
 
     use super::*;
 
@@ -1140,55 +1024,6 @@ mod tests {
         }
     }
 
-    /// A `SidecarController` that never spawns a real process â€” QA's
-    /// expectation is that no test spawns the real F2 sidecar. Records the
-    /// configs it was asked to launch and returns pre-scripted results.
-    #[derive(Default)]
-    struct RecordingSidecarController {
-        calls: Mutex<Vec<SidecarSpawnConfig>>,
-        response: Mutex<Option<Result<ReadyLine, SidecarError>>>,
-        terminated: AtomicBool,
-    }
-
-    impl RecordingSidecarController {
-        fn scripted(response: Result<ReadyLine, SidecarError>) -> Self {
-            RecordingSidecarController {
-                calls: Mutex::new(Vec::new()),
-                response: Mutex::new(Some(response)),
-                terminated: AtomicBool::new(false),
-            }
-        }
-
-        fn calls(&self) -> Vec<SidecarSpawnConfig> {
-            self.calls.lock().expect("calls mutex poisoned").clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl SidecarController for RecordingSidecarController {
-        async fn spawn_and_await_ready(
-            &self,
-            config: &SidecarSpawnConfig,
-            _timeout: Duration,
-        ) -> Result<ReadyLine, SidecarError> {
-            self.calls
-                .lock()
-                .expect("calls mutex poisoned")
-                .push(config.clone());
-            self.response
-                .lock()
-                .expect("response mutex poisoned")
-                .take()
-                .unwrap_or(Err(SidecarError::Io {
-                    message: "no scripted response".to_string(),
-                }))
-        }
-
-        async fn terminate(&self) {
-            self.terminated.store(true, Ordering::SeqCst);
-        }
-    }
-
     #[derive(Default)]
     struct RecordingRevealer {
         calls: Mutex<Vec<PathBuf>>,
@@ -1213,7 +1048,6 @@ mod tests {
             settings,
             root,
             service,
-            Arc::new(RecordingSidecarController::default()),
             Arc::new(RecordingRevealer::default()),
         )
     }
@@ -1222,7 +1056,6 @@ mod tests {
         settings: Settings,
         root: PathBuf,
         service: Arc<dyn TranscriptionService>,
-        sidecar: Arc<dyn SidecarController>,
         revealer: Arc<dyn Revealer>,
     ) -> AppState {
         let config_dir = root.clone();
@@ -1236,7 +1069,6 @@ mod tests {
             false,
             Arc::new(RecordingSink::default()),
             Arc::new(RecordingStatusSink::default()),
-            sidecar,
             revealer,
         )
     }
@@ -1506,7 +1338,6 @@ mod tests {
                     queued_polls: 0,
                     running_polls: 0,
                 })),
-                Arc::new(RecordingSidecarController::default()),
                 revealer.clone(),
             );
 
@@ -1651,7 +1482,6 @@ mod tests {
                 settings,
                 root.path().to_path_buf(),
                 Arc::new(FakeService::new()),
-                Arc::new(RecordingSidecarController::default()),
                 revealer.clone(),
             );
 
@@ -1805,141 +1635,6 @@ mod tests {
         );
     }
 
-    // -- set_meetings_root_handler / resolve_and_apply_meetings_root_service
-
-    #[test]
-    fn set_meetings_root_returns_before_resolving_the_sidecar_e17_regression() {
-        // E17: `set_meetings_root_handler` on its own must never await the
-        // sidecar's ready-line wait (up to `sidecar::READY_TIMEOUT` = 30s)
-        // before returning the persisted settings -- that used to leave
-        // the operator's folder-picker click looking ignored for the
-        // whole spawn window. Resolving/(re)starting the sidecar is a
-        // separate step (`resolve_and_apply_meetings_root_service`) the
-        // `#[tauri::command]` wrapper drives in the background.
-        run(async {
-            let config_dir = tempdir().expect("tempdir");
-            let new_root = tempdir().expect("tempdir");
-
-            let sidecar = Arc::new(RecordingSidecarController::scripted(Ok(ReadyLine {
-                port: 51234,
-                token: "tok".to_string(),
-                pid: 1,
-            })));
-            let state = state_with_full(
-                Settings::default(),
-                config_dir.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                sidecar.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-
-            let response = set_meetings_root_handler(
-                &state,
-                new_root.path().to_str().expect("valid utf8 path"),
-            )
-            .await
-            .expect("set_meetings_root must succeed");
-
-            assert_eq!(
-                response.meetings_root.as_deref(),
-                Some(new_root.path().to_str().expect("valid utf8 path"))
-            );
-            assert!(
-                sidecar.calls().is_empty(),
-                "set_meetings_root_handler must return before the sidecar is resolved"
-            );
-        });
-    }
-
-    #[test]
-    fn set_meetings_root_persists_and_the_background_step_triggers_a_sidecar_restart_with_the_new_root(
-    ) {
-        run(async {
-            let config_dir = tempdir().expect("tempdir");
-            let new_root = tempdir().expect("tempdir");
-
-            let sidecar = Arc::new(RecordingSidecarController::scripted(Ok(ReadyLine {
-                port: 51234,
-                token: "tok".to_string(),
-                pid: 1,
-            })));
-            let state = state_with_full(
-                Settings::default(),
-                config_dir.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                sidecar.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-
-            let response = set_meetings_root_handler(
-                &state,
-                new_root.path().to_str().expect("valid utf8 path"),
-            )
-            .await
-            .expect("set_meetings_root must succeed");
-
-            // The `#[tauri::command]` wrapper drives this as a spawned
-            // background task; the unit test drives it directly (no Tauri
-            // runtime needed) to assert its effect on the sidecar/registry.
-            let settings = state.settings.read().await.clone();
-            resolve_and_apply_meetings_root_service(
-                &state,
-                &settings,
-                PathBuf::from(new_root.path()),
-            )
-            .await;
-
-            assert_eq!(
-                response.meetings_root.as_deref(),
-                Some(new_root.path().to_str().expect("valid utf8 path"))
-            );
-
-            let calls = sidecar.calls();
-            assert_eq!(calls.len(), 1, "must trigger exactly one sidecar restart");
-            let env: std::collections::HashMap<_, _> = calls[0].envs.iter().cloned().collect();
-            assert_eq!(
-                env.get("TRANSCRIBER_ALLOWED_ROOTS").map(String::as_str),
-                Some(new_root.path().to_str().expect("valid utf8 path"))
-            );
-        });
-    }
-
-    #[test]
-    fn set_meetings_root_background_step_does_not_spawn_when_a_service_base_url_is_configured() {
-        run(async {
-            let config_dir = tempdir().expect("tempdir");
-            let new_root = tempdir().expect("tempdir");
-
-            let mut settings = Settings::default();
-            settings.service.base_url = Some("http://127.0.0.1:8756".to_string());
-            let sidecar = Arc::new(RecordingSidecarController::default());
-            let state = state_with_full(
-                settings,
-                config_dir.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                sidecar.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-
-            set_meetings_root_handler(&state, new_root.path().to_str().expect("valid utf8"))
-                .await
-                .expect("set_meetings_root must succeed");
-
-            let settings = state.settings.read().await.clone();
-            resolve_and_apply_meetings_root_service(
-                &state,
-                &settings,
-                PathBuf::from(new_root.path()),
-            )
-            .await;
-
-            assert!(
-                sidecar.calls().is_empty(),
-                "a configured base_url must never spawn a sidecar"
-            );
-        });
-    }
-
     #[test]
     fn set_meetings_root_moves_the_registry_root_synchronously_e21_regression() {
         // E21: before this fix, `set_meetings_root_handler` persisted the
@@ -1958,7 +1653,6 @@ mod tests {
             let old_root = tempdir().expect("tempdir");
             let new_root = tempdir().expect("tempdir");
 
-            let sidecar = Arc::new(RecordingSidecarController::default());
             let fake = Arc::new(FakeService::with_timing(crate::service::fake::FakeTiming {
                 queued_polls: 0,
                 running_polls: 0,
@@ -1967,7 +1661,6 @@ mod tests {
                 Settings::default(),
                 old_root.path().to_path_buf(),
                 fake,
-                sidecar.clone(),
                 Arc::new(RecordingRevealer::default()),
             );
 
@@ -2003,72 +1696,6 @@ mod tests {
                 !Path::new(&meeting_dir).starts_with(old_root.path()),
                 "job must not be filed under the previous root {:?}, got {meeting_dir}",
                 old_root.path()
-            );
-        });
-    }
-
-    #[test]
-    fn resolve_and_apply_meetings_root_service_keeps_the_fake_service_in_fake_mode_e20_regression()
-    {
-        // E20: the `--fake-service`/`TRANSCRIBER_FAKE_SERVICE` dev switch
-        // must survive a meetings-root change. Before this fix,
-        // `resolve_and_apply_meetings_root_service` always ran
-        // `plan_sidecar` + `resolve_service` unconditionally, which would
-        // spawn a real `uv` sidecar (or install `UnavailableTranscriptionService`)
-        // in place of the `FakeService`, breaking "the whole UI flow
-        // testable without F2 existing" the moment the operator touched
-        // the setting.
-        run(async {
-            let old_root = tempdir().expect("tempdir");
-            let new_root = tempdir().expect("tempdir");
-
-            let sidecar = Arc::new(RecordingSidecarController::default());
-            let fake = Arc::new(FakeService::with_timing(crate::service::fake::FakeTiming {
-                queued_polls: 0,
-                running_polls: 0,
-            }));
-            let mut state = state_with_full(
-                Settings::default(),
-                old_root.path().to_path_buf(),
-                fake.clone(),
-                sidecar.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-            state.in_process_mode = true;
-
-            set_meetings_root_handler(&state, new_root.path().to_str().expect("valid utf8"))
-                .await
-                .expect("set_meetings_root must succeed");
-            let settings = state.settings.read().await.clone();
-            resolve_and_apply_meetings_root_service(
-                &state,
-                &settings,
-                new_root.path().to_path_buf(),
-            )
-            .await;
-
-            assert!(
-                sidecar.calls().is_empty(),
-                "fake mode must never spawn or connect to a real sidecar"
-            );
-
-            // The registry's root must still have moved to `new_root` --
-            // only the service substitution is skipped, not the root move.
-            let downloads = tempdir().expect("tempdir");
-            let source = write_recording(downloads.path(), "ELS - 260812 - Security issue.mp4");
-            let snapshots =
-                enqueue_paths_handler(&state, vec![source.to_string_lossy().into_owned()])
-                    .await
-                    .expect("enqueue must succeed");
-            let done = wait_for_terminal(&state, &snapshots[0].id, Duration::from_secs(5)).await;
-            let meeting_dir = done.meeting_dir.expect("meeting_dir set");
-            // See the note in the E21 regression above: compare against the
-            // canonical root, not the tempdir's own spelling.
-            let expected_root = expected_root_for(new_root.path());
-            assert!(
-                Path::new(&meeting_dir).starts_with(&expected_root),
-                "job must be filed under the newly configured root {:?}, got {meeting_dir}",
-                expected_root
             );
         });
     }
@@ -2274,72 +1901,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_service_with_use_existing_builds_an_http_client_without_spawning() {
-        run(async {
-            let sidecar = Arc::new(RecordingSidecarController::default());
-            let (service, base_url) = resolve_service(
-                sidecar.as_ref(),
-                crate::sidecar::SidecarPlan::UseExisting {
-                    base_url: "http://127.0.0.1:8756".to_string(),
-                },
-            )
-            .await;
-
-            assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:8756"));
-            assert!(sidecar.calls().is_empty());
-            // Health will fail (nothing is listening) but must not panic.
-            let _ = service.health().await;
-        });
-    }
-
-    #[test]
-    fn resolve_service_with_spawn_uses_the_controllers_ready_line() {
-        run(async {
-            let sidecar = Arc::new(RecordingSidecarController::scripted(Ok(ReadyLine {
-                port: 51234,
-                token: "tok".to_string(),
-                pid: 1,
-            })));
-            let config = SidecarSpawnConfig {
-                program: "uv".to_string(),
-                args: vec!["run".to_string()],
-                envs: vec![],
-            };
-
-            let (_service, base_url) =
-                resolve_service(sidecar.as_ref(), crate::sidecar::SidecarPlan::Spawn(config)).await;
-
-            assert_eq!(base_url.as_deref(), Some("http://127.0.0.1:51234"));
-        });
-    }
-
-    #[test]
-    fn resolve_service_falls_back_to_unavailable_when_the_sidecar_never_becomes_ready() {
-        run(async {
-            let sidecar = Arc::new(RecordingSidecarController::scripted(Err(
-                SidecarError::Timeout {
-                    command: "uv run ...".to_string(),
-                },
-            )));
-            let config = SidecarSpawnConfig {
-                program: "uv".to_string(),
-                args: vec!["run".to_string()],
-                envs: vec![],
-            };
-
-            let (service, base_url) =
-                resolve_service(sidecar.as_ref(), crate::sidecar::SidecarPlan::Spawn(config)).await;
-
-            assert_eq!(base_url, None);
-            let err = service.health().await.expect_err("must be unavailable");
-            assert!(matches!(
-                err,
-                crate::service::ServiceError::Unavailable { .. }
-            ));
-        });
-    }
-
-    #[test]
     fn apply_resolved_service_updates_state_and_emits_status() {
         run(async {
             let root = tempdir().expect("tempdir");
@@ -2354,7 +1915,6 @@ mod tests {
                 true,
                 Arc::new(RecordingSink::default()),
                 status_sink.clone(),
-                Arc::new(RecordingSidecarController::default()),
                 Arc::new(RecordingRevealer::default()),
             );
 
@@ -2385,16 +1945,14 @@ mod tests {
     }
 
     #[test]
-    fn prepare_update_terminates_the_sidecar_and_reports_unavailable() {
-        // The updater's installer overwrites pyenv\ in place; a still-running
-        // python.exe from that tree makes the install fail with "Error
-        // opening file for writing". prepare_update must have the sidecar
-        // fully terminated by the time it returns, and must tell the UI the
+    fn prepare_update_puts_the_engine_down_and_reports_unavailable() {
+        // The updater's installer overwrites the engine libraries in place
+        // while this process still has them loaded. prepare_update must have
+        // stopped the engine by the time it returns, and must tell the UI the
         // service is down rather than leaving a stale "ready" on screen.
         run(async {
             let root = tempdir().expect("tempdir");
             let status_sink = Arc::new(RecordingStatusSink::default());
-            let sidecar = Arc::new(RecordingSidecarController::default());
             let state = AppState::new_with(
                 root.path().to_path_buf(),
                 root.path().to_path_buf(),
@@ -2405,7 +1963,6 @@ mod tests {
                 false,
                 Arc::new(RecordingSink::default()),
                 status_sink.clone(),
-                sidecar.clone(),
                 Arc::new(RecordingRevealer::default()),
             );
 
@@ -2413,10 +1970,6 @@ mod tests {
                 .await
                 .expect("prepare_update must succeed");
 
-            assert!(
-                sidecar.terminated.load(Ordering::SeqCst),
-                "prepare_update must terminate the sidecar before returning"
-            );
             assert_eq!(*state.service_base_url.read().await, None);
             let err = state
                 .service
@@ -2465,7 +2018,6 @@ mod tests {
                 true,
                 Arc::new(RecordingSink::default()),
                 Arc::new(RecordingStatusSink::default()),
-                Arc::new(RecordingSidecarController::default()),
                 revealer.clone(),
             );
 

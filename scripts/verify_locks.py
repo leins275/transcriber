@@ -22,7 +22,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 _RELATIVE_LOCK_FILES = [
     "Cargo.lock",
     "apps/desktop/package-lock.json",
-    "services/transcription/uv.lock",
 ]
 
 

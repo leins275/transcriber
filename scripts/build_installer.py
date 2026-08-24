@@ -8,7 +8,7 @@ deterministic path. Per the pipeline documented in plan.md:
 
     1. version check   scripts/sync_version.py --check      (FR-5)
     2. lock check      scripts/verify_locks.py --check       (FR-4)
-    3. pyenv bake       scripts/build_pyenv.py               (FR-8, NFR-1)
+    3. engine payload  scripts/stage_engine_payload.py       (FR-8, NFR-1)
     4. tauri build      npm --prefix apps/desktop run tauri -- build -- --locked   (frozen, E5)
                         (on macOS: `build --bundles app,dmg`, since
                         tauri.conf.json's committed `targets` list is the
@@ -16,18 +16,14 @@ deterministic path. Per the pipeline documented in plan.md:
     5. collect          dist/Transcriber_<version>_x64-setup.exe (Windows)
                         or dist/Transcriber_<version>_aarch64.dmg (macOS)
                         + its .sha256 and dist/build-manifest.json (FR-15)
-    6. gate             installer size <= 1.5 GB                (NFR-1, R4)
+    6. gate             installer size <= 300 MB                (NFR-1, R4)
 
-No `--extra cuda` by default (Defect 1, `docs/verification-installer.md`
-"Blocker 1"): the vendored, 32-bit `makensis.exe` empirically cannot
-compile the ~2.3 GiB payload that extra produces. The CUDA runtime wheels
-are fetched at first run instead (`transcription.cuda_runtime`), mirroring
-the existing model-download pattern. Pass `--extra cuda` explicitly for a
-dev/CI build that still wants it baked in (that build cannot go through
-NSIS packaging today).
+The speech and assistant models are not in the installer: they are
+gigabytes, and they are fetched on first run instead (`crates/fetcher`).
+What ships is only what the app cannot start without.
 
 Every stage is a plain module-level function looked up by name off `STAGES`
-so failure injection in tests (monkeypatching `stage_pyenv_bake`, etc.) is
+so failure injection in tests (monkeypatching `stage_engine_payload`, etc.) is
 possible without touching the pipeline machinery itself. Each stage aborts
 the whole run with its own fixed, distinct exit code (FR-6: "exits non-zero
 if any payload fails"), so a caller (or a human) can tell which payload
@@ -82,25 +78,6 @@ def bundle_dir(repo_root: Path = REPO_ROOT) -> Path:
 DEFAULT_DIST_DIR = REPO_ROOT / "dist"
 
 # tauri.conf.json's `bundle.resources` maps
-# "apps/desktop/src-tauri/resources/pyenv/" -> "pyenv/" at bundle time (T6).
-# A plain `make installer` (no --pyenv-out override) must bake straight into
-# that directory -- build_pyenv.DEFAULT_OUT (repo-root build/pyenv/) is a
-# generic default for standalone `build_pyenv.py` invocations, not what the
-# bundler reads, and baking there would ship the tracked resources/pyenv/
-# .gitkeep placeholder instead of the freshly-baked runtime (found by T12,
-# fixed by T14).
-DEFAULT_PYENV_OUT = APP_DIR / "src-tauri" / "resources" / "pyenv"
-
-# The tracked placeholder's exact committed contents. `build_pyenv.bake`
-# rmtrees the directory this lives in, so the release build has to put it
-# back byte-for-byte or leave the working tree dirty.
-GITKEEP_CONTENTS = (
-    "# Placeholder so this directory exists on a clean checkout -- tauri-build's\n"
-    "# bundleResources errors if the configured resource path is missing.\n"
-    "# The release build (scripts/build_pyenv.py, invoked by `make installer`)\n"
-    "# replaces this directory's contents with the baked Python runtime.\n"
-)
-
 # scripts/ is a sibling-module directory (no package, no conftest.py, per the
 # plan's "each test module derives the repo root itself" contract) -- make
 # sure the other build-system modules are importable regardless of whether
@@ -110,23 +87,23 @@ GITKEEP_CONTENTS = (
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-import build_pyenv  # noqa: E402
 import sync_version  # noqa: E402
 import verify_locks  # noqa: E402
 
 # NFR-1, revised at the spec gate for GPU-first CUDA inference (R4): the
 # whole 1.5 GB budget is spent once cuBLAS/cuDNN ship.
-SIZE_LIMIT_BYTES = int(1.5 * 1024**3)
+# The pyenv bake made this 1.5 GB. The engine payload is ~184 MB before
+# compression, so a budget that would have been generous then is now a gate
+# that would not notice an accidental doubling.
+SIZE_LIMIT_BYTES = int(300 * 1024**2)
 
-# Rust (the Tauri app crate), Node (the desktop UI) and Python (the service)
-# each carry their own copy of the product version, kept in sync by T3.
-# FR-15 asks the manifest to record "the resolved versions of the three
-# payloads" -- reusing sync_version's own manifest table means this never
-# drifts from what --check actually verified.
+# Rust (the Tauri app crate) and Node (the desktop UI) each carry their own
+# copy of the product version, kept in sync by T3. Reusing sync_version's own
+# manifest table means this never drifts from what --check actually verified.
+# The third payload used to be the Python service, which no longer exists.
 PAYLOAD_LABELS: dict[str, Path] = {
     "rust": REPO_ROOT / "apps/desktop/src-tauri/Cargo.toml",
     "node": REPO_ROOT / "apps/desktop/package.json",
-    "python": REPO_ROOT / "services/transcription/pyproject.toml",
 }
 
 
@@ -135,7 +112,7 @@ class BuildInstallerError(RuntimeError):
 
 
 class SizeGateError(BuildInstallerError):
-    """Raised when the produced installer exceeds NFR-1's 1.5 GB budget."""
+    """Raised when the produced installer exceeds its size budget."""
 
 
 @dataclass
@@ -145,13 +122,13 @@ class Stage:
     func_name: str
 
 
-# The documented order, byte-for-byte: version check -> lock check ->
-# pyenv bake -> tauri build -> collect -> gate. Each exit code is unique so
+# The documented order: version check -> lock check -> engine payload ->
+# tauri build -> collect -> gate. Each exit code is unique so
 # a caller can tell which payload broke without parsing stderr (FR-6).
 STAGES: list[Stage] = [
     Stage("version_check", 1, "stage_version_check"),
     Stage("lock_check", 2, "stage_lock_check"),
-    Stage("pyenv_bake", 3, "stage_pyenv_bake"),
+    Stage("engine_payload", 3, "stage_engine_payload"),
     Stage("tauri_build", 4, "stage_tauri_build"),
     Stage("collect", 5, "stage_collect"),
     Stage("gate", 6, "stage_gate"),
@@ -164,21 +141,16 @@ class BuildContext:
 
     repo_root: Path = REPO_ROOT
     dist_dir: Path = DEFAULT_DIST_DIR
-    pyenv_out: Path = field(default_factory=lambda: DEFAULT_PYENV_OUT)
-    # No CUDA wheels baked in by default (Defect 1,
-    # `docs/verification-installer.md` "Blocker 1"): the vendored `makensis`
-    # is a 32-bit, non-large-address-aware compiler that cannot compile the
-    # ~2.3 GiB payload `--extra cuda` produces (`pyenv-manifest.json`:
-    # `total_bytes: 2496449478`) -- confirmed empirically, not merely by
-    # inspection, against the real toolchain. The CUDA runtime is now
-    # acquired at first run instead (`transcription.cuda_runtime`); the
-    # non-CUDA bake is ~414 MB and NSIS-compilable. Pass `--extra cuda`
-    # explicitly for a dev/CI build that still wants it baked in.
-    extras: tuple[str, ...] = ()
+    # Which cargo profile the engine libraries are collected from, and where
+    # the pinned third-party payload is cached between builds.
+    engine_profile: str = "release"
+    payload_cache: Path = field(
+        default_factory=lambda: REPO_ROOT / ".cache/engine-payload"
+    )
     dry_run: bool = False
 
     # populated as stages run
-    pyenv_manifest: dict | None = None
+    payload_manifest: dict | None = None
     installer_src: Path | None = None
     collect_result: "CollectResult | None" = None
 
@@ -310,7 +282,7 @@ def collect(
     installer_src: Path,
     version: str,
     git_commit: str,
-    pyenv_manifest: dict,
+    payload_manifest: dict,
     payload_versions: dict[str, str],
     dist_dir: Path,
 ) -> CollectResult:
@@ -330,10 +302,9 @@ def collect(
         "product_version": version,
         "git_commit": git_commit,
         "payload_versions": dict(sorted(payload_versions.items())),
-        "pyenv": {
-            "python_version": pyenv_manifest.get("python_version"),
-            "packages": pyenv_manifest.get("packages", {}),
-            "total_bytes": pyenv_manifest.get("total_bytes"),
+        "engine_payload": {
+            "files": payload_manifest.get("files", []),
+            "total_bytes": payload_manifest.get("total_bytes"),
         },
         "artifact": {
             "name": dest_name,
@@ -375,40 +346,20 @@ def stage_lock_check(ctx: BuildContext) -> None:
         raise BuildInstallerError("lock check failed: " + "; ".join(problems))
 
 
-def stage_pyenv_bake(ctx: BuildContext) -> None:
-    try:
-        ctx.pyenv_manifest = build_pyenv.bake(ctx.pyenv_out, extras=ctx.extras)
-    except build_pyenv.BuildPyenvError as exc:
-        raise BuildInstallerError(f"pyenv bake failed: {exc}") from exc
-    _restore_gitkeep(ctx.pyenv_out)
+def stage_engine_payload(ctx: BuildContext) -> None:
+    """Collect the engine libraries, ffmpeg, ONNX Runtime and the diarization
+    models the installer ships.
 
-
-def _restore_gitkeep(pyenv_out: Path) -> None:
-    """Put back the tracked `.gitkeep` the bake just deleted.
-
-    `build_pyenv.bake` replaces its output directory wholesale
-    (`shutil.rmtree`), which is right for a build artifact -- but when that
-    directory is `apps/desktop/src-tauri/resources/pyenv/` it also removes a
-    *tracked* file. The .gitignore there ignores the directory's contents and
-    keeps exactly this one placeholder, because `tauri-build`'s
-    `bundleResources` errors out if the source path does not exist on a clean
-    checkout. Without this, every release build left `git status` reporting a
-    deleted file nobody deleted, and a clean clone that had built once could
-    no longer build.
-
-    Only ever recreated inside the tracked resources directory: a standalone
-    `build_pyenv.py --out somewhere/else` has no placeholder to restore.
-
-    Restored with its committed *contents*, not as an empty file. The
-    placeholder explains why it exists, and a build that silently emptied it
-    would still leave `git status` dirty -- which is the whole thing this is
-    supposed to stop.
+    Replaces the pyenv bake. That staged a ~420 MB Python runtime because half
+    the product was a Python service; this stages ~184 MB of native pieces
+    because the product is one binary plus the libraries it loads.
     """
-    if pyenv_out != DEFAULT_PYENV_OUT:
-        return
-    gitkeep = pyenv_out / ".gitkeep"
-    if not gitkeep.exists():
-        gitkeep.write_text(GITKEEP_CONTENTS, encoding="utf-8", newline="\n")
+    try:
+        ctx.payload_manifest = stage_engine_payload_impl.stage(
+            ctx.engine_profile, ctx.payload_cache
+        )
+    except stage_engine_payload_impl.StageError as exc:
+        raise BuildInstallerError(f"engine payload staging failed: {exc}") from exc
 
 
 def _tauri_build_args() -> list[str]:
@@ -457,7 +408,7 @@ def stage_collect(ctx: BuildContext) -> None:
         installer_src=ctx.installer_src,
         version=version,
         git_commit=git_commit,
-        pyenv_manifest=ctx.pyenv_manifest or {},
+        payload_manifest=ctx.payload_manifest or {},
         payload_versions=payload_versions,
         dist_dir=ctx.dist_dir,
     )
@@ -489,16 +440,14 @@ def run_stages(ctx: BuildContext, stages: Sequence[Stage] = STAGES) -> int:
 
 def describe_plan(ctx: BuildContext) -> list[str]:
     """Human-readable command list for `--dry-run` (FR-6, NFR-5)."""
-    extras_flags = " ".join(f"--extra {extra}" for extra in ctx.extras)
     return [
         f"uv run {SCRIPTS_DIR / 'sync_version.py'} --check",
         f"uv run {SCRIPTS_DIR / 'verify_locks.py'} --check",
-        f"uv run {SCRIPTS_DIR / 'build_pyenv.py'} --out {ctx.pyenv_out}"
-        + (f" {extras_flags}" if extras_flags else ""),
+        f"uv run {SCRIPTS_DIR / 'stage_engine_payload.py'} --profile {ctx.engine_profile}",
         f"npm --prefix {APP_DIR} ci",
         f"npm --prefix {APP_DIR} run tauri -- {' '.join(_tauri_build_args())} -- --locked",
         f"collect -> {ctx.dist_dir}/{sync_version.artifact_name('<version>')} (+ .sha256, build-manifest.json)",
-        f"gate: installer size <= {SIZE_LIMIT_BYTES} bytes (1.5 GB, NFR-1)",
+        f"gate: installer size <= {SIZE_LIMIT_BYTES} bytes (300 MB)",
     ]
 
 
@@ -506,30 +455,19 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="print the plan; touch nothing")
     parser.add_argument(
-        "--extra",
-        action="append",
-        default=[],
-        dest="extras",
-        help=(
-            "uv optional-dependency-group passed through to build_pyenv.py "
-            "(repeatable); default: none (Defect 1 -- pass '--extra cuda' "
-            "explicitly for a dev/CI build that still bakes it in; NSIS "
-            "cannot compile that payload for a real release build)"
-        ),
+        "--engine-profile",
+        default="release",
+        help="cargo profile to collect the engine libraries from",
     )
     parser.add_argument("--dist-dir", type=Path, default=DEFAULT_DIST_DIR)
-    parser.add_argument("--pyenv-out", type=Path, default=None)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    # Defect 1: no CUDA wheels baked in by default -- see BuildContext.extras.
-    extras = tuple(args.extras) if args.extras else ()
     ctx = BuildContext(
         dist_dir=args.dist_dir,
-        pyenv_out=args.pyenv_out if args.pyenv_out is not None else DEFAULT_PYENV_OUT,
-        extras=extras,
+        engine_profile=args.engine_profile,
         dry_run=args.dry_run,
     )
 

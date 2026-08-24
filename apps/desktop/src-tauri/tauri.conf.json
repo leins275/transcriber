@@ -24,7 +24,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "Transcriber",
     "shortDescription": "Local meeting transcription with faster-whisper",
     "icon": [
@@ -35,7 +37,7 @@
       "icons/icon.icns"
     ],
     "resources": {
-      "resources/pyenv/": "pyenv/"
+      "resources/engine/": "./"
     },
     "windows": {
       "webviewInstallMode": {
@@ -44,7 +46,9 @@
       "nsis": {
         "installMode": "currentUser",
         "installerHooks": "../../../installer/installer_hooks.nsh",
-        "languages": ["English"],
+        "languages": [
+          "English"
+        ],
         "displayLanguageSelector": false
       }
     },
@@ -53,7 +57,9 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGRTM3MTk5MDIxODcxOUIKUldTYmNSZ0NtWEhqbit0NzJ1VnFlTDhrUDZ4NlJqWm5VTFRBTHNXWCtRNUNVRTBIWG0ybUw4SFIK",
-      "endpoints": ["https://github.com/leins275/transcriber/releases/latest/download/latest.json"],
+      "endpoints": [
+        "https://github.com/leins275/transcriber/releases/latest/download/latest.json"
+      ],
       "windows": {
         "installMode": "passive"
       }

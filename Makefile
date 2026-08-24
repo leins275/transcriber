@@ -1,6 +1,6 @@
 # Root Makefile -- QA fanout across the three-payload monorepo (Rust in
 # crates/vault + apps/desktop/src-tauri, TypeScript in apps/desktop, Python in
-# services/transcription) plus the release build entry points (FR-2, FR-6).
+# plus the release build entry points (FR-2, FR-6).
 #
 # NOTE (R6): `make` is not installed on a fresh clone until scripts/bootstrap.ps1
 # has been run once (T2). Every recipe below is one command per line -- run any
@@ -16,43 +16,35 @@
 # Direct equivalents (run in order, from the repo root):
 #   cargo fmt --all
 #   npm --prefix apps/desktop run format
-#   uv run --directory services/transcription ruff format .
 format:
 	cargo fmt --all
 	npm --prefix apps/desktop run format
-	uv run --directory services/transcription ruff format .
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo clippy --workspace --all-targets -- -D warnings
 #   npm --prefix apps/desktop run lint
-#   uv run --directory services/transcription ruff check .
 #   uv run scripts/sync_version.py --check
 #   uv run scripts/verify_locks.py --check
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 	npm --prefix apps/desktop run lint
-	uv run --directory services/transcription ruff check .
 	uv run scripts/sync_version.py --check
 	uv run scripts/verify_locks.py --check
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo check --workspace
 #   npm --prefix apps/desktop run type
-#   uv run --directory services/transcription mypy src
 type:
 	cargo check --workspace
 	npm --prefix apps/desktop run type
-	uv run --directory services/transcription mypy src
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo test --workspace
 #   npm --prefix apps/desktop run test
-#   uv run --directory services/transcription pytest -q
 #   uv run --with pytest -- pytest scripts/tests -q
 test:
 	cargo test --workspace
 	npm --prefix apps/desktop run test
-	uv run --directory services/transcription pytest -q
 	uv run --with pytest -- pytest scripts/tests -q
 
 # Direct equivalent (built by a later wave -- this target resolves under

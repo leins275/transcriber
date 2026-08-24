@@ -53,29 +53,6 @@ def test_all_four_tauri_hook_macros_are_defined() -> None:
         _macro_body(text, name)  # asserts internally
 
 
-def test_preinstall_stops_only_processes_running_from_instdir_pyenv() -> None:
-    """Field report (v0.2.1 -> v0.3.0 auto-update): the update install failed
-    with "Error opening file for writing: ...\\pyenv\\python\\DLLs\\_asyncio.pyd"
-    because the app's bundled Python sidecar was still running while the new
-    installer overwrote $INSTDIR\\pyenv (the updater plugin exits the app
-    process on a path that skips its RunEvent::Exit sidecar cleanup).
-    NSIS_HOOK_PREINSTALL must terminate anything still executing out of
-    $INSTDIR\\pyenv before file copy -- and must stay filtered to that path,
-    never a machine-wide kill of every python.exe."""
-    body = _macro_body(_read_hooks(), "NSIS_HOOK_PREINSTALL")
-    _assert_pyenv_kill_shape(body, "NSIS_HOOK_PREINSTALL")
-
-
-def test_preuninstall_also_stops_processes_running_from_instdir_pyenv() -> None:
-    """The uninstaller runs both for real uninstalls and as the old
-    version's automatic "replace" step during an upgrade; in both cases a
-    still-running bundled python.exe leaves locked pyenv\\ files behind for
-    the file-removal step to trip on, so the same path-filtered kill must
-    run there too."""
-    body = _macro_body(_read_hooks(), "NSIS_HOOK_PREUNINSTALL")
-    _assert_pyenv_kill_shape(body, "NSIS_HOOK_PREUNINSTALL")
-
-
 def _assert_pyenv_kill_shape(body: str, macro: str) -> None:
     kill_lines = [line for line in body.splitlines() if "Stop-Process" in line]
     assert kill_lines, (

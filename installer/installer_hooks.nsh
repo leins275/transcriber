@@ -92,37 +92,13 @@
 ; $INSTDIR before NSIS_HOOK_POSTINSTALL restores/creates the three
 ; subfolders (R1).
 ;
-; Field report (v0.2.1 -> v0.3.0 auto-update): the update install failed
-; with "Error opening file for writing: ...\pyenv\python\DLLs\_asyncio.pyd".
-; The app's bundled Python sidecar (spawned from $INSTDIR\pyenv) was still
-; running while this installer tried to overwrite its DLLs. Tauri's updater
-; exits the *app* process before launching this installer, but that exit
-; path skips the app's own RunEvent::Exit sidecar cleanup, so the Python
-; process lives on as an orphan holding locks on the very files being
-; replaced. Newer app builds stop the sidecar themselves before installing
-; (the `prepare_update` command), but this hook runs from the *new*
-; installer, so it is the only fix that also covers updating *from* a
-; version that predates that command. Kill anything still executing out of
-; $INSTDIR\pyenv, then wait for those exact processes to actually exit.
-; The path filter keeps this strictly to our own bundled interpreter --
-; never a system-wide "taskkill python.exe".
-;
-; Second field report (the v0.5.0 update still failed the same way): the
-; first version of this hook filtered `Get-Process` on `$_.Path`. NSIS is
-; a 32-bit process, so its `powershell.exe` resolves through WOW64 to the
-; *32-bit* PowerShell -- and a 32-bit process cannot read the main module
-; path of a 64-bit process, so `.Path` came back empty for the 64-bit
-; bundled python.exe, the filter matched nothing, and nothing was killed.
-; `Get-CimInstance Win32_Process` asks WMI (a system service) instead of
-; reading the process's modules directly, so `ExecutablePath` is populated
-; regardless of the querying PowerShell's bitness. `Wait-Process` (with a
-; timeout) then confirms the kills landed instead of hoping a fixed sleep
-; was long enough; the short Sleep after it is only for the OS to finish
-; releasing the file handles of the just-exited processes.
+; The bundled Python sidecar this hook used to kill no longer exists. It was
+; spawned as a child process, survived the app's exit when the updater used
+; `std::process::exit`, and held locks on the very DLLs the installer was
+; replacing. There is no child process now: the engine runs inside the app, so
+; its libraries are released when the app exits, and `prepare_update` stops the
+; engine before the installer starts.
 !macro NSIS_HOOK_PREINSTALL
-  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -Command "$$procs = Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$INSTDIR\pyenv\*' }; $$procs | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; $$procs | ForEach-Object { Wait-Process -Id $$_.ProcessId -Timeout 15 -ErrorAction SilentlyContinue }"`
-  Pop $0
-  Sleep 500
 !macroend
 
 ; ---------------------------------------------------------------------------
@@ -185,15 +161,6 @@
 ;         user chose to keep it)
 ;   "1" = a real uninstall where the user explicitly opted to delete it
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Same orphaned-sidecar kill as NSIS_HOOK_PREINSTALL (see its comment for
-  ; the WOW64/bitness rationale): this uninstaller runs both for real
-  ; uninstalls and as the old version's automatic "replace" step during an
-  ; upgrade, and in both cases a still-running bundled python.exe would
-  ; leave locked pyenv\ files behind for the file-removal step to trip on.
-  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -Command "$$procs = Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$INSTDIR\pyenv\*' }; $$procs | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; $$procs | ForEach-Object { Wait-Process -Id $$_.ProcessId -Timeout 15 -ErrorAction SilentlyContinue }"`
-  Pop $0
-  Sleep 500
-
   StrCpy $R7 "0"
 
   IfSilent transcriber_preuninstall_silent transcriber_preuninstall_interactive

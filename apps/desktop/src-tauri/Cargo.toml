@@ -1,9 +1,9 @@
-﻿[package]
+[package]
 name = "transcriber-desktop"
 version = "0.9.0"
 edition = "2021"
 rust-version = "1.98"
-description = "Transcriber desktop app â€” drag-and-drop meeting ingest and transcription status"
+description = "Transcriber desktop app — drag-and-drop meeting ingest and transcription status"
 authors = ["Transcriber"]
 
 [lib]
@@ -21,7 +21,6 @@ serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "io-util", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
 async-trait = "0.1"
 vault = { path = "../../../crates/vault" }
 # The in-process engine that replaces the Python sidecar. It knows nothing
@@ -39,4 +38,6 @@ base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
-wiremock = "0.6"
+# `#[tokio::test]` only. This used to arrive transitively through wiremock,
+# which went away with the HTTP binding it existed to fake.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -3,29 +3,23 @@
 //! Builds a real [`transcriber_desktop_lib::commands::AppState`] wired
 //! exactly the way `lib.rs` wires it in production — a real `JobRegistry`
 //! (T10), real `ingest`/`paths` (T4/T9) against a `tempfile` vault root, and
-//! a real `service::fake::FakeService` (T5) standing in for F2 — so these
+//! a real `service::fake::FakeService` (T5) standing in for the engine — so these
 //! tests exercise the crate's public surface end to end (`commands` +
-//! `jobs` + `ingest`), never a raw F2 process (plan.md: "no test spawns the
-//! real sidecar"). The only pieces swapped out are the two collaborators
-//! that would otherwise touch the OS shell: `SidecarController` (never
-//! spawns a real process) and `Revealer` (never opens a visible Explorer
-//! window).
+//! `jobs` + `ingest`) with no model loaded and no inference run. The only
+//! piece swapped out is the collaborator that would otherwise touch the OS
+//! shell: `Revealer` (never opens a visible Explorer window).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use tempfile::tempdir;
 
-use transcriber_desktop_lib::commands::{
-    AppState, Revealer, ServiceStatusSink, ServiceStatusView, SidecarController,
-};
+use transcriber_desktop_lib::commands::{AppState, Revealer, ServiceStatusSink, ServiceStatusView};
 use transcriber_desktop_lib::config::Settings;
 use transcriber_desktop_lib::error::AppError;
 use transcriber_desktop_lib::jobs::{EventSink, JobSnapshot, JobState};
 use transcriber_desktop_lib::service::TranscriptionService;
-use transcriber_desktop_lib::sidecar::{ReadyLine, SidecarError, SidecarSpawnConfig};
 
 /// Records every emitted `jobs://updated` snapshot, standing in for the
 /// Tauri `AppHandle` emitter this crate uses in production.
@@ -56,28 +50,6 @@ impl ServiceStatusSink for RecordingStatusSink {
             .expect("status sink mutex poisoned")
             .push(status.clone());
     }
-}
-
-/// A `SidecarController` that never spawns a real process. These tests
-/// never exercise the sidecar lifecycle (they run entirely against the fake
-/// transcription service already installed on `AppState`), so every call is
-/// a hard failure that would surface immediately as a wrong test outcome.
-#[derive(Default)]
-pub struct NeverSpawnSidecarController;
-
-#[async_trait]
-impl SidecarController for NeverSpawnSidecarController {
-    async fn spawn_and_await_ready(
-        &self,
-        _config: &SidecarSpawnConfig,
-        _timeout: Duration,
-    ) -> Result<ReadyLine, SidecarError> {
-        Err(SidecarError::Io {
-            message: "test harness never spawns the real F2 sidecar".to_string(),
-        })
-    }
-
-    async fn terminate(&self) {}
 }
 
 /// Records every path Explorer would have been asked to reveal, so a test
@@ -114,7 +86,6 @@ pub fn build_state(root: PathBuf, service: Arc<dyn TranscriptionService>) -> App
         false,
         Arc::new(RecordingSink::default()),
         Arc::new(RecordingStatusSink::default()),
-        Arc::new(NeverSpawnSidecarController),
         Arc::new(RecordingRevealer::default()),
     )
 }

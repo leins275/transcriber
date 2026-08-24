@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use std::fmt;
 
 pub mod fake;
-pub mod http;
 pub mod local;
 
 /// One abstraction over F2, implemented by `http::HttpTranscriptionService`

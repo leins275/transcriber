@@ -122,7 +122,7 @@ jobs:
         run: npm ci --prefix apps/desktop
 
       # Runs the same pipeline as `make installer`: version check, lock check,
-      # pyenv bake, `tauri build --locked`, collect, and the 1.5 GB size gate.
+      # engine payload staging, `tauri build --locked`, collect, and the size gate.
       # Nothing about this build is release-specific — it is exactly what a
       # developer runs locally, which is what makes it worth trusting.
       # The signing key is what makes an update an *update* rather than an

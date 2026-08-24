@@ -10,8 +10,7 @@
 pub mod error;
 
 /// Resolves the application folder and every path that hangs off it: the
-/// bundled Python runtime, the model directory, and `models\`/`logs\`/
-/// `data\` (T9, FR-8, FR-11-as-superseded).
+/// engine's model directory, and `models\`/`logs\`/`data\`.
 pub mod app_paths;
 
 /// `config.json` load/save/validate (FR-16..18).
@@ -23,12 +22,9 @@ pub mod paths;
 /// Wrapper over F1's vault crate, off the UI thread (FR-9, FR-10).
 pub mod ingest;
 
-/// `TranscriptionService` trait, job model, HTTP binding and in-memory fake
-/// (FR-12).
+/// `TranscriptionService` trait, job model, the in-process engine binding and
+/// an in-memory fake (FR-12).
 pub mod service;
-
-/// Spawns F2, parses its ready line, kills it on exit.
-pub mod sidecar;
 
 /// Job registry, sequential pipeline, poll loop (FR-8, FR-14, NFR-4).
 pub mod jobs;
@@ -66,12 +62,13 @@ impl commands::ServiceStatusSink for TauriEventSink {
     }
 }
 
-/// Resolves `app_config_dir()`, loads settings, decides which
-/// `TranscriptionService` to start with, and manages the resulting
-/// [`commands::AppState`]. Spawning F2 (when applicable) is kicked off as a
-/// background task so the window paints before the sidecar is ready
-/// (NFR-3) -- `commands::apply_resolved_service` installs the real service
-/// once (or if) it comes up.
+/// Resolves `app_config_dir()`, loads settings, starts the engine, and
+/// manages the resulting [`commands::AppState`].
+///
+/// Starting the engine is cheap -- it opens the ledger and spawns a worker
+/// thread; models load lazily on the first job -- so unlike the sidecar it
+/// replaced there is nothing to wait for and nothing to resolve in the
+/// background.
 fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     let config_dir = app.path().app_config_dir()?;
@@ -111,33 +108,30 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     let sink: Arc<dyn jobs::EventSink> = sink_impl.clone();
     let status_sink: Arc<dyn commands::ServiceStatusSink> = sink_impl;
 
+    // `--fake-service` / `TRANSCRIBER_FAKE_SERVICE`: run the UI with no
+    // models and no inference, which is how the frontend is developed.
     let fake_requested = commands::fake_service_requested(
         std::env::var("TRANSCRIBER_FAKE_SERVICE").ok(),
         &std::env::args().collect::<Vec<_>>(),
     );
 
-    // The rewrite's migration switch: `TRANSCRIBER_SERVICE=local` runs the
-    // real engine inside this process instead of spawning the Python sidecar.
-    // It defaults off while the engine is still being filled in, and
-    // disappears with the sidecar once it is.
-    let local_requested = !fake_requested
-        && std::env::var("TRANSCRIBER_SERVICE")
-            .map(|v| v.eq_ignore_ascii_case("local"))
-            .unwrap_or(false);
-
-    let local_engine = local_requested
-        .then(|| start_local_engine(&app_dir, &config::config_path(&config_dir)))
-        .flatten();
-    let in_process = fake_requested || local_engine.is_some();
-
-    let initial_service: Arc<dyn TranscriptionService> = if fake_requested {
-        Arc::new(FakeService::new())
-    } else if let Some(engine) = local_engine.clone() {
-        Arc::new(service::local::LocalTranscriptionService::new(engine))
+    let engine = if fake_requested {
+        None
     } else {
-        Arc::new(commands::UnavailableTranscriptionService::new(
-            "service starting".to_string(),
-        ))
+        start_engine(&app_dir, &config::config_path(&config_dir))
+    };
+
+    let initial_service: Arc<dyn TranscriptionService> = match &engine {
+        Some(engine) => Arc::new(service::local::LocalTranscriptionService::new(
+            engine.clone(),
+        )),
+        // Either the fake was asked for, or the engine could not start. The
+        // window still opens: the transcription seam being down has never been
+        // allowed to stop that (FR-13).
+        None if fake_requested => Arc::new(FakeService::new()),
+        None => Arc::new(commands::UnavailableTranscriptionService::new(
+            "the engine could not be started".to_string(),
+        )),
     };
 
     // `AppState::new` builds a `JobRegistry`, which spawns its worker task
@@ -155,7 +149,9 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
             root,
             initial_service,
             None,
-            !in_process,
+            // Nothing is starting in the background any more: the engine is
+            // either up by now or it is not.
+            false,
             sink,
             status_sink,
         )
@@ -165,61 +161,22 @@ fn setup_app_state(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     if let Some(message) = config_load_error {
         state.config_error = tokio::sync::RwLock::new(Some(message));
     }
-    // E20: record whether this session's service already lives in this
-    // process so `commands::resolve_and_apply_meetings_root_service` keeps it
-    // across a later `set_meetings_root` instead of spawning a sidecar the
-    // first time the operator changes the setting.
-    state.in_process_mode = in_process;
-    app.manage(state);
-
-    // An in-process service -- the fake, or the local engine -- already
-    // resolved above; there is nothing to start in the background.
-    if !in_process {
-        tauri::async_runtime::spawn(async move {
-            let state = handle.state::<commands::AppState>();
-            let settings_snapshot = state.settings.read().await.clone();
-            let config_path = config::config_path(&state.config_dir);
-            let plan = sidecar::plan_sidecar(&settings_snapshot, &config_path, &state.app_dir);
-            let (service, base_url) = commands::resolve_service(state.sidecar.as_ref(), plan).await;
-            // E18: re-read `state.settings` *after* the (up to 30s) await
-            // above rather than reusing `settings_snapshot` -- if the
-            // operator called `set_meetings_root` while this task was
-            // still resolving, the root installed here must be whatever
-            // is current now, not the stale pre-await value (which, on
-            // first run, is `state.config_dir`). This does not eliminate
-            // every out-of-order interleaving between this task and
-            // `set_meetings_root`'s own background resolution (that would
-            // need a generation counter or a shared lock across both
-            // paths), but it removes the specific defect of installing a
-            // root nobody asked for.
-            let current_settings = state.settings.read().await.clone();
-            let root = current_settings
-                .meetings_root
-                .clone()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| state.config_dir.clone());
-            commands::apply_resolved_service(&state, service, base_url, root).await;
-        });
+    if let Some(engine) = engine {
+        state.engine = Some(engine);
     }
+    app.manage(state);
 
     Ok(())
 }
 
-/// Starts the in-process engine for `TRANSCRIBER_SERVICE=local`.
+/// Starts the in-process engine.
 ///
 /// Returns `None` if the engine cannot be started -- a config that will not
-/// load, a ledger that will not open. Startup then continues with the
-/// "service starting" placeholder rather than failing: the transcription seam
-/// being down has never been allowed to stop the window from opening (FR-13),
-/// and that holds whether the seam is a sidecar or a thread.
-///
-/// The engine is currently built with [`UnimplementedRunner`], so every job it
-/// accepts fails saying so. That is deliberate: the switch exists to exercise
-/// submission, the ledger, polling and cancellation against the real engine
-/// while the inference paths are still being ported, and a job that silently
-/// *appeared* to succeed while writing nothing would be worse than one that
-/// says it cannot run yet.
-fn start_local_engine(
+/// load, a ledger that will not open. Startup then continues with an
+/// unavailable service rather than failing: the transcription seam being down
+/// has never been allowed to stop the window from opening (FR-13), and that
+/// holds whether the seam is a child process or a thread.
+fn start_engine(
     app_dir: &std::path::Path,
     config_path: &std::path::Path,
 ) -> Option<engine::EngineHandle> {
@@ -234,29 +191,36 @@ fn start_local_engine(
     let config = match engine::Config::load(Some(config_path), &env) {
         Ok(config) => config,
         Err(err) => {
-            eprintln!("[transcriber] local engine: cannot load config: {err}");
+            eprintln!("[transcriber] engine: cannot load config: {err}");
             return None;
         }
     };
     let ledger = match engine::Ledger::open(&config.db_path) {
         Ok(ledger) => ledger,
         Err(err) => {
-            eprintln!("[transcriber] local engine: cannot open the job ledger: {err}");
+            eprintln!("[transcriber] engine: cannot open the job ledger: {err}");
             return None;
         }
     };
 
+    // Each runner is built on the worker thread, so the factory carries a
+    // copy of the configuration rather than a borrow of it.
+    let runner_config = config.clone();
+
     match engine::EngineHandle::start(
         config,
         ledger,
-        Box::new(|| Box::new(engine::jobs::UnimplementedRunner) as Box<dyn engine::JobRunner>),
+        Box::new(move || {
+            Box::new(engine::runner::EngineRunner::new(runner_config.clone()))
+                as Box<dyn engine::JobRunner>
+        }),
     ) {
         Ok(handle) => {
-            eprintln!("[transcriber] local engine started (TRANSCRIBER_SERVICE=local)");
+            eprintln!("[transcriber] engine started");
             Some(handle)
         }
         Err(err) => {
-            eprintln!("[transcriber] local engine: cannot start: {err}");
+            eprintln!("[transcriber] engine: cannot start: {err}");
             None
         }
     }
@@ -264,7 +228,7 @@ fn start_local_engine(
 
 /// Builds and runs the Tauri application: registers the dialog plugin,
 /// wires managed state and the six IPC commands (T11's own `commands.rs`),
-/// and kills any running sidecar child on exit.
+/// and shuts the engine down cleanly on exit.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -315,8 +279,12 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // Stop the worker and let it finish the job in hand rather
+                // than tearing a half-written transcript out from under it.
                 if let Some(state) = app_handle.try_state::<commands::AppState>() {
-                    tauri::async_runtime::block_on(state.sidecar.terminate());
+                    if let Some(engine) = state.engine.as_ref() {
+                        engine.shutdown();
+                    }
                 }
             }
         });

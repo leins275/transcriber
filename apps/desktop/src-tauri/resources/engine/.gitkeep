@@ -1,0 +1,6 @@
+# Kept so a clean checkout has this directory: tauri-build resolves
+# bundle.resources on every cargo build, and a missing source path fails the
+# whole crate compile.
+#
+# The release build (scripts/stage_engine_payload.py, invoked by
+# `make installer`) replaces this directory's contents with the real payload.

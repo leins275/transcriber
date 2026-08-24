@@ -135,6 +135,51 @@ pub const PINS: &[PinnedPayload] = &[
         sha256: "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
         zip_tree: None,
     },
+    // --- installer payload -----------------------------------------------
+    //
+    // These three are staged into the installer at build time rather than
+    // downloaded on a user's machine: they are needed before the app can do
+    // anything, and a first run that has to fetch a decoder before it can
+    // read a file is a worse first run.
+    PinnedPayload {
+        name: "ffmpeg",
+        file_name: "ffmpeg-win64-lgpl.zip",
+        // LGPL rather than GPL, and used across a process boundary, so the
+        // app's own licensing is unaffected. Pinned to a dated build: BtbN's
+        // `latest` tag moves, and a pin that follows a moving tag is not a
+        // pin.
+        url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-23-13-03/ffmpeg-n9.0.1-6-g9d4ca21220-win64-lgpl-9.0.zip",
+        size: 147_007_734,
+        sha256: "96ee3965c8f8ba3210e59374c8b1c58f7c9552ea877d930f3fb63fac94fefcec",
+        zip_tree: Some(("", "ffmpeg")),
+    },
+    PinnedPayload {
+        name: "onnxruntime",
+        file_name: "onnxruntime-win-x64.zip",
+        // The version ort 2.0.0-rc.10 was built against; its `ORT_API_VERSION`
+        // is 22, which is ONNX Runtime 1.22. A mismatched library fails at
+        // load rather than misbehaving, but only if the two are kept in step.
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip",
+        size: 72_368_545,
+        sha256: "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da",
+        zip_tree: Some(("", "onnxruntime")),
+    },
+    PinnedPayload {
+        name: "diarization-segmentation",
+        file_name: "segmentation-3.0.onnx",
+        url: "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/segmentation-3.0.onnx",
+        size: 5_983_836,
+        sha256: "b78fc48113bb46fd247ae6a9aea737079550c647638db961df7e0e1e9f4ba62e",
+        zip_tree: None,
+    },
+    PinnedPayload {
+        name: "diarization-embedding",
+        file_name: "wespeaker_en_voxceleb_CAM++.onnx",
+        url: "https://github.com/thewh1teagle/pyannote-rs/releases/download/v0.1.0/wespeaker_en_voxceleb_CAM%2B%2B.onnx",
+        size: 29_292_684,
+        sha256: "c46fad10b5f81e1aa4a60c162714208577093655076c5450f8c469e522ec54ef",
+        zip_tree: None,
+    },
     PinnedPayload {
         name: "llm-qwen3.6-35b-a3b-q4-k-m",
         file_name: "Qwen3.6-35B-A3B-Q4_K_M.gguf",
@@ -193,6 +238,21 @@ mod tests {
             assert!(
                 crate::allowlist::check(pin.url).is_ok(),
                 "{} points at a host that is not allowlisted: {}",
+                pin.name,
+                pin.url
+            );
+        }
+    }
+
+    #[test]
+    fn no_pinned_url_carries_whitespace() {
+        // A line-continued string literal that loses its backslash leaves the
+        // indentation *inside* the URL. The host check still passes, so
+        // without this the damage only shows up as a 404 in front of a user.
+        for pin in PINS {
+            assert!(
+                !pin.url.chars().any(char::is_whitespace),
+                "{} has whitespace in its url: {}",
                 pin.name,
                 pin.url
             );

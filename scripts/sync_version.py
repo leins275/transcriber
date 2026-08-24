@@ -13,7 +13,7 @@ it into every job row as ``service_version``. Left unsynced, a release
 reports the previous version at runtime and mislabels its own history.
 
 The two lockfiles carry their own copies as well -- ``Cargo.lock`` has one
-``version`` line per workspace member, and ``services/transcription/uv.lock``
+``version`` line per workspace member
 one for the ``transcription`` project -- and both are synced here. That is
 not tidiness. The release build runs ``tauri build --locked`` and
 ``uv export --frozen``, and both tools refuse a lockfile whose recorded
@@ -63,7 +63,6 @@ class LockPackage:
 
 
 CARGO_LOCK = REPO_ROOT / "Cargo.lock"
-UV_LOCK = REPO_ROOT / "services/transcription/uv.lock"
 
 # Only packages this repository owns. Every other entry in either lockfile
 # is a third-party dependency whose version has nothing to do with the
@@ -71,7 +70,6 @@ UV_LOCK = REPO_ROOT / "services/transcription/uv.lock"
 LOCK_PACKAGES: list[LockPackage] = [
     LockPackage(CARGO_LOCK, "transcriber-desktop"),
     LockPackage(CARGO_LOCK, "vault"),
-    LockPackage(UV_LOCK, "transcription"),
 ]
 
 
@@ -80,8 +78,6 @@ MANIFESTS: list[Manifest] = [
     Manifest(REPO_ROOT / "apps/desktop/package.json", "json"),
     Manifest(REPO_ROOT / "apps/desktop/src-tauri/Cargo.toml", "toml", "package"),
     Manifest(REPO_ROOT / "crates/vault/Cargo.toml", "toml", "package"),
-    Manifest(REPO_ROOT / "services/transcription/pyproject.toml", "toml", "project"),
-    Manifest(REPO_ROOT / "services/transcription/src/transcription/__init__.py", "python"),
 ]
 
 _JSON_VERSION_RE = re.compile(r'("version"\s*:\s*)"([^"]*)"')

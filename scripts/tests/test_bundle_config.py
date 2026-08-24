@@ -5,9 +5,9 @@ Self-contained by design: there is deliberately no scripts/tests/conftest.py
 on a shared fixture.
 
 These are config-level checks only. They do not invoke `tauri build` (the
-pyenv resource this config references is baked by T4/orchestrated by T8, and
-running a real bundling build here would require that bake to have already
-happened -- out of scope for this task per its Done-when).
+engine payload this config references is staged by
+scripts/stage_engine_payload.py, and running a real bundling build here would
+require that staging to have already happened).
 """
 
 from __future__ import annotations
@@ -35,38 +35,30 @@ def test_bundle_active_and_single_nsis_target():
     assert bundle["targets"] == ["nsis"], "FR-7: exactly one installer executable, NSIS only"
 
 
-def test_bundle_resources_reference_the_baked_pyenv_tree():
-    """FR-8: the app folder must contain the bundled Python runtime + service tree.
+def test_bundle_resources_reference_the_staged_engine_payload():
+    """The app folder must contain the engine's own runtime files.
 
-    T4 bakes python/, site-packages/ and service/ into a directory tree (its
-    script defaults to repo-root build/pyenv, overridable via --out). T6
-    wires bundle.resources at `resources/pyenv/` -> `pyenv/` so the payload
-    lands under $RESOURCES/pyenv/... in the installed app; T8's release
-    pipeline runs the bake with `--out apps/desktop/src-tauri/resources/pyenv`
-    immediately before `tauri build`, replacing this directory's placeholder
-    with the real payload.
+    `scripts/stage_engine_payload.py` assembles them into
+    `apps/desktop/src-tauri/resources/engine/`, and this maps that directory
+    onto the application folder's root, so `whisper.dll` lands beside the
+    executable and `runtime/`/`models/` land where the engine looks for them.
 
     The source directory must physically exist (even if only as a tracked
     placeholder) because tauri-build's build.rs resolves bundle.resources on
-    *every* `cargo build`/`test`/`clippy`, not only during real bundling --
-    a nonexistent path there hard-errors the whole crate compile. Verified by
-    this task: pointing this at the un-baked repo-root `build/pyenv` broke
-    `cargo build -p transcriber-desktop`.
+    *every* `cargo build`/`test`/`clippy`, not only during real bundling -- a
+    nonexistent path there hard-errors the whole crate compile.
     """
     config = _load_config()
     resources = config["bundle"]["resources"]
     assert resources, "bundle.resources must be declared"
     assert isinstance(resources, dict), "expect a source->target map for fine-grained control"
-    assert resources.get("resources/pyenv/") == "pyenv/"
+    assert resources.get("resources/engine/") == "./"
 
-    resource_dir = SRC_TAURI / "resources" / "pyenv"
-    assert resource_dir.is_dir(), (
-        f"{resource_dir} must exist (even as a placeholder) so a plain cargo build "
-        "does not require T4's bake to have already run"
+    source = REPO_ROOT / "apps" / "desktop" / "src-tauri" / "resources" / "engine"
+    assert source.is_dir(), (
+        f"{source} must exist even before a payload is staged, or every "
+        "cargo build of the app crate fails"
     )
-    assert any(resource_dir.iterdir()), f"{resource_dir} must not be empty (tauri-build errors on an empty dir)"
-
-
 def test_nsis_install_mode_is_current_user():
     config = _load_config()
     nsis = config["bundle"]["windows"]["nsis"]

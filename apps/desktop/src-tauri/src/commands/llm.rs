@@ -741,21 +741,6 @@ mod tests {
         }
     }
 
-    struct NoopSidecar;
-    #[async_trait::async_trait]
-    impl crate::commands::SidecarController for NoopSidecar {
-        async fn spawn_and_await_ready(
-            &self,
-            _config: &crate::sidecar::SidecarSpawnConfig,
-            _timeout: std::time::Duration,
-        ) -> Result<crate::sidecar::ReadyLine, crate::sidecar::SidecarError> {
-            Err(crate::sidecar::SidecarError::Io {
-                message: "no sidecar in tests".to_string(),
-            })
-        }
-        async fn terminate(&self) {}
-    }
-
     fn state_with_root(
         root: PathBuf,
         service: Arc<dyn TranscriptionService>,
@@ -775,7 +760,6 @@ mod tests {
             false,
             Arc::new(NoopEventSink),
             Arc::new(NoopStatusSink),
-            Arc::new(NoopSidecar),
             revealer,
         )
     }

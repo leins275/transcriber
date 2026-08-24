@@ -12,7 +12,7 @@ Instead:
     truly touches nothing (FR-6, NFR-5);
   * `collect()` and `gate_artifact_size()` are pure functions tested
     directly against fixture bytes under `tmp_path`, with no real installer
-    or pyenv bake anywhere nearby (FR-15, NFR-1).
+    or engine payload staging anywhere nearby (FR-15, NFR-1).
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def test_stage_order_matches_the_documented_pipeline() -> None:
     assert [stage.name for stage in build_installer.STAGES] == [
         "version_check",
         "lock_check",
-        "pyenv_bake",
+        "engine_payload",
         "tauri_build",
         "collect",
         "gate",
@@ -110,33 +110,23 @@ def test_dry_run_prints_every_planned_command_and_touches_nothing(
     monkeypatch.setattr(build_installer, "_run", _explode_run)
 
     dist_dir = tmp_path / "dist"
-    pyenv_out = tmp_path / "build" / "pyenv"
 
-    exit_code = build_installer.main(
-        [
-            "--dry-run",
-            "--dist-dir",
-            str(dist_dir),
-            "--pyenv-out",
-            str(pyenv_out),
-        ]
-    )
+    exit_code = build_installer.main(["--dry-run", "--dist-dir", str(dist_dir)])
 
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "sync_version.py --check" in out
     assert "verify_locks.py --check" in out
-    assert "build_pyenv.py" in out
+    assert "stage_engine_payload.py" in out
     assert "npm --prefix" in out
     assert f"tauri -- {' '.join(build_installer._tauri_build_args())} -- --locked" in out, (
         "E5/FR-4: --locked must reach cargo through the tauri build stage, "
         f"not just npm ci/uv export --frozen, got: {out!r}"
     )
     assert "build-manifest.json" in out
-    assert "1.5 GB" in out or str(build_installer.SIZE_LIMIT_BYTES) in out
+    assert str(build_installer.SIZE_LIMIT_BYTES) in out
 
     assert not dist_dir.exists()
-    assert not pyenv_out.exists()
 
 
 def test_run_resolves_the_executable_through_path_before_invoking_subprocess(
@@ -243,48 +233,11 @@ def test_stage_tauri_build_passes_locked_through_to_the_tauri_cli(
     assert ctx.installer_src == fake_installer
 
 
-def test_default_pyenv_out_bakes_straight_into_the_tauri_bundle_resources_dir() -> None:
-    # A plain `make installer` (no --pyenv-out override) must bake into the
-    # directory tauri.conf.json's bundle.resources actually reads at bundle
-    # time (apps/desktop/src-tauri/resources/pyenv/), not build_pyenv's own
-    # generic default (repo-root build/pyenv/) -- otherwise the installer
-    # ships the tracked .gitkeep placeholder instead of the freshly-baked
-    # runtime (T12/T14 "Known gaps").
-    expected = REPO_ROOT / "apps" / "desktop" / "src-tauri" / "resources" / "pyenv"
-    assert build_installer.BuildContext().pyenv_out == expected
-
-
-def test_main_with_no_pyenv_out_flag_dry_runs_against_the_bundle_resources_dir(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code = build_installer.main(["--dry-run"])
-    assert exit_code == 0
-    out = capsys.readouterr().out
-    expected = REPO_ROOT / "apps" / "desktop" / "src-tauri" / "resources" / "pyenv"
-    assert str(expected) in out
-
-
-def test_default_extras_bake_no_cuda_wheels() -> None:
-    # Defect 1 (`docs/verification-installer.md` "Blocker 1"): the vendored
-    # makensis is 32-bit and cannot compile the ~2.3 GiB `--extra cuda`
-    # payload -- a plain `make installer` must never bake it in by default.
-    assert build_installer.BuildContext().extras == ()
-
-
 def test_main_with_no_extra_flag_defaults_to_no_cuda(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = build_installer.main(["--dry-run"])
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "--extra cuda" not in out
-
-
-def test_main_with_explicit_extra_cuda_still_bakes_it_in(capsys: pytest.CaptureFixture[str]) -> None:
-    # A dev/CI build may still opt in explicitly (it just cannot go through
-    # real NSIS packaging today).
-    exit_code = build_installer.main(["--dry-run", "--extra", "cuda"])
-    assert exit_code == 0
-    out = capsys.readouterr().out
-    assert "--extra cuda" in out
 
 
 def test_dry_run_is_noninteractive_and_never_prompts(capsys: pytest.CaptureFixture[str]) -> None:
@@ -365,10 +318,10 @@ def test_find_built_installer_reports_an_empty_bundle_directory(tmp_path: Path) 
 # --- collect() ------------------------------------------------------------
 
 
-def _fake_pyenv_manifest() -> dict:
+def _fake_payload_manifest() -> dict:
     return {
-        "python_version": "3.12.7",
-        "packages": {"faster-whisper": "1.2.0", "ctranslate2": "4.5.0"},
+        "profile": "release",
+        "files": ["whisper.dll", "ffmpeg.exe"],
         "total_bytes": 123_456_789,
     }
 
@@ -384,8 +337,8 @@ def test_collect_writes_installer_checksum_and_manifest(tmp_path: Path) -> None:
         installer_src=installer_src,
         version="1.2.3",
         git_commit="deadbeef",
-        pyenv_manifest=_fake_pyenv_manifest(),
-        payload_versions={"rust": "1.2.3", "node": "1.2.3", "python": "1.2.3"},
+        payload_manifest=_fake_payload_manifest(),
+        payload_versions={"rust": "1.2.3", "node": "1.2.3"},
         dist_dir=dist_dir,
     )
 
@@ -408,7 +361,7 @@ def test_collect_writes_installer_checksum_and_manifest(tmp_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["product_version"] == "1.2.3"
     assert manifest["git_commit"] == "deadbeef"
-    assert manifest["payload_versions"] == {"rust": "1.2.3", "node": "1.2.3", "python": "1.2.3"}
+    assert manifest["payload_versions"] == {"rust": "1.2.3", "node": "1.2.3"}
     assert manifest["artifact"]["sha256"] == actual_digest
     assert manifest["artifact"]["name"] == sync_version.artifact_name("1.2.3")
 
@@ -422,7 +375,7 @@ def test_collect_checksum_fails_verification_if_file_is_tampered(tmp_path: Path)
         installer_src=installer_src,
         version="1.0.0",
         git_commit="abc123",
-        pyenv_manifest=_fake_pyenv_manifest(),
+        payload_manifest=_fake_payload_manifest(),
         payload_versions={},
         dist_dir=dist_dir,
     )
