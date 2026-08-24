@@ -593,7 +593,13 @@ pub async fn read_summary_handler(
 pub async fn transcribe_vault_entry_handler(
     state: &AppState,
     entry_id: &str,
+    language: Option<String>,
 ) -> Result<JobSnapshot, AppError> {
+    // IPC arguments are untrusted, so the language is checked here rather
+    // than left for F2 to reject: the pinned contract is exactly
+    // `"ru" | "en" | null`, and anything else fails before a job exists.
+    let language = validate_language(language)?;
+
     let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
     let meeting_name = meeting_name_of(&meeting_dir);
 
@@ -620,8 +626,28 @@ pub async fn transcribe_vault_entry_handler(
         .registry
         .read()
         .await
-        .enqueue_filed(meeting_dir, source, classification)
+        .enqueue_filed(meeting_dir, source, classification, language)
         .await)
+}
+
+/// The languages a transcribe job may be pinned to. `None` (the UI's Auto
+/// default) is not a language: it hands the choice to F2's constrained
+/// detection, which is why it is deliberately absent from this list rather
+/// than spelled as an empty string.
+const SUPPORTED_LANGUAGES: [&str; 2] = ["ru", "en"];
+
+/// Gate on the pinned IPC contract `{ language: "ru" | "en" | null }`.
+/// Rejects every other value -- including `""` and differently-cased
+/// spellings -- so a malformed argument can never reach the wire.
+fn validate_language(language: Option<String>) -> Result<Option<String>, AppError> {
+    match language {
+        None => Ok(None),
+        Some(value) if SUPPORTED_LANGUAGES.contains(&value.as_str()) => Ok(Some(value)),
+        Some(value) => Err(AppError::invalid_argument(format!(
+            "unsupported transcription language {value:?} (expected one of {} or none)",
+            SUPPORTED_LANGUAGES.join(", ")
+        ))),
+    }
 }
 
 /// The `source.<ext>` file inside a meeting folder, if there is one — the
@@ -664,6 +690,17 @@ pub async fn cancel_job_handler(state: &AppState, job_id: &str) -> Result<bool, 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tempfile::tempdir;
+
+    use crate::commands::{list_vault_handler, Revealer, ServiceStatusSink, ServiceStatusView};
+    use crate::config::Settings;
+    use crate::error::ErrorKind;
+    use crate::service::fake::FakeService;
+    use crate::service::TranscriptionService;
+
     use super::*;
 
     const BODY: &str = r#"{
@@ -983,5 +1020,142 @@ mod tests {
             labels.assignments.get("0").map(String::as_str),
             Some("Maxim")
         );
+    }
+
+    // -- transcribe_vault_entry language (FR-5) ----------------------------
+
+    fn run<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(future)
+    }
+
+    struct NoopStatusSink;
+    impl ServiceStatusSink for NoopStatusSink {
+        fn emit(&self, _status: &ServiceStatusView) {}
+    }
+
+    struct NoopEventSink;
+    impl crate::jobs::EventSink for NoopEventSink {
+        fn emit(&self, _snapshot: &crate::jobs::JobSnapshot) {}
+    }
+
+    struct NoopRevealer;
+    impl Revealer for NoopRevealer {
+        fn reveal(&self, _path: &Path) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    struct NoopSidecar;
+    #[async_trait::async_trait]
+    impl crate::commands::SidecarController for NoopSidecar {
+        async fn spawn_and_await_ready(
+            &self,
+            _config: &crate::sidecar::SidecarSpawnConfig,
+            _timeout: Duration,
+        ) -> Result<crate::sidecar::ReadyLine, crate::sidecar::SidecarError> {
+            Err(crate::sidecar::SidecarError::Io {
+                message: "no sidecar in tests".to_string(),
+            })
+        }
+        async fn terminate(&self) {}
+    }
+
+    fn state_with_root(root: PathBuf, service: Arc<dyn TranscriptionService>) -> AppState {
+        let settings = Settings {
+            meetings_root: Some(root.to_string_lossy().into_owned()),
+            ..Settings::default()
+        };
+        AppState::new_with(
+            root.clone(),
+            root.clone(),
+            settings,
+            root,
+            service,
+            None,
+            false,
+            Arc::new(NoopEventSink),
+            Arc::new(NoopStatusSink),
+            Arc::new(NoopSidecar),
+            Arc::new(NoopRevealer),
+        )
+    }
+
+    fn make_meeting(root: &Path) {
+        let dir = root.join("ELS").join("260812 - Security issue");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("source.mp4"), b"bytes").expect("write source");
+    }
+
+    async fn only_entry_id(state: &AppState) -> String {
+        let entries = list_vault_handler(state).await.expect("list vault");
+        assert_eq!(entries.len(), 1, "expected exactly one vault entry");
+        entries[0].id.clone()
+    }
+
+    #[test]
+    fn transcribe_rejects_a_language_outside_ru_en_and_enqueues_nothing() {
+        // IPC arguments are untrusted: anything but the pinned
+        // `"ru" | "en" | null` contract is refused *before* a job exists,
+        // rather than being forwarded for F2 to reject.
+        run(async {
+            for bogus in ["de", "", "EN", "ru "] {
+                let root = tempdir().expect("tempdir");
+                make_meeting(root.path());
+                let state =
+                    state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+                let id = only_entry_id(&state).await;
+
+                let err = match transcribe_vault_entry_handler(&state, &id, Some(bogus.to_string()))
+                    .await
+                {
+                    Ok(_) => panic!("language {bogus:?} must be refused"),
+                    Err(err) => err,
+                };
+
+                assert_eq!(err.kind(), ErrorKind::InvalidArgument, "language {bogus:?}");
+                assert!(
+                    state.registry.read().await.list().await.is_empty(),
+                    "language {bogus:?} must not enqueue anything"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn transcribe_accepts_ru_en_and_auto_and_carries_the_choice_to_the_service() {
+        run(async {
+            for expected in [Some("ru"), Some("en"), None] {
+                let root = tempdir().expect("tempdir");
+                make_meeting(root.path());
+                let service = Arc::new(FakeService::new());
+                let state = state_with_root(root.path().to_path_buf(), service.clone());
+                let id = only_entry_id(&state).await;
+
+                transcribe_vault_entry_handler(
+                    &state,
+                    &id,
+                    expected.map(std::string::ToString::to_string),
+                )
+                .await
+                .unwrap_or_else(|err| panic!("language {expected:?} must be accepted: {err:?}"));
+
+                let start = std::time::Instant::now();
+                let submission = loop {
+                    if let Some(first) = service.submissions().into_iter().next() {
+                        break first;
+                    }
+                    if start.elapsed() > Duration::from_secs(5) {
+                        panic!("language {expected:?} was never submitted");
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                };
+
+                assert_eq!(submission.language.as_deref(), expected);
+            }
+        });
     }
 }

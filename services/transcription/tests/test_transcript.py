@@ -99,7 +99,7 @@ def test_stats_shape_and_cost_usd_null_for_local() -> None:
     assert stats["currency"] is None
 
 
-def test_stats_cost_usd_present_for_cloud() -> None:
+def test_stats_cost_usd_present_when_a_cost_is_reported() -> None:
     doc = _make_doc(cost_usd=0.006)
     data = json.loads(doc.model_dump_json())
 
@@ -107,12 +107,13 @@ def test_stats_cost_usd_present_for_cloud() -> None:
     assert data["stats"]["currency"] == "USD"
 
 
-def test_cloud_shaped_segment_with_none_confidence_fields_builds_and_writes(
+def test_segment_with_none_confidence_fields_builds_and_writes(
     tmp_path: Path,
 ) -> None:
-    """E2: a cloud provider's `_normalize_segments` shape (confidence fields
-    missing/`None`) must cross the `Segment` -> `build_document` ->
-    `write_atomic` seam without a `ValidationError`."""
+    """E2: a `_normalize_segments` shape whose confidence fields are
+    missing/`None` must cross the `Segment` -> `build_document` ->
+    `write_atomic` seam without a `ValidationError` -- the fields are
+    optional and must never be fabricated."""
     segment = Segment(
         id=0,
         start=0.0,
@@ -125,9 +126,9 @@ def test_cloud_shaped_segment_with_none_confidence_fields_builds_and_writes(
     doc = build_document(
         source_path="C:/vault/ELS/meeting.wav",
         duration_sec=1.0,
-        provider_name="cloud",
-        model="whisper-1",
-        device="cloud",
+        provider_name="local",
+        model="small",
+        device="cpu",
         compute_type="",
         language="en",
         language_probability=None,

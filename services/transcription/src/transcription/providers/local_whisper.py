@@ -24,9 +24,16 @@ from pathlib import Path
 from typing import Any
 
 import ctranslate2  # type: ignore[import-untyped]
+import numpy as np
 from faster_whisper import (  # type: ignore[import-untyped]
     BatchedInferencePipeline,
     WhisperModel,
+    decode_audio,
+)
+from faster_whisper.vad import (  # type: ignore[import-untyped]
+    VadOptions,
+    collect_chunks,
+    get_speech_timestamps,
 )
 
 from transcription.errors import ErrorKind, ServiceError
@@ -99,6 +106,85 @@ def _classify_transcribe_failure(exc: Exception) -> ErrorKind:
     if _looks_like_cuda_runtime_failure(exc):
         return ErrorKind.MODEL_LOAD
     return ErrorKind.AUDIO_DECODE
+
+
+def _decode_failure(exc: Exception, audio_path: Path, device: str) -> ServiceError:
+    """The classified `ServiceError` for a failure raised out of the model --
+    shared by the detection pass, the decode call and the segment iteration,
+    which all fail the same two ways (FR-7, FR-8)."""
+    if _classify_transcribe_failure(exc) is ErrorKind.MODEL_LOAD:
+        return ServiceError(ErrorKind.MODEL_LOAD, f"model runtime failed on {device}: {exc}")
+    return ServiceError(ErrorKind.AUDIO_DECODE, f"failed to decode {audio_path.name}: {exc}")
+
+
+# The operator's language universe (F2 spec: "exactly two"). Auto-detection
+# chooses between these and nothing else, so a mis-detected third language can
+# never reach the decoder.
+_DECODE_LANGUAGES = ("ru", "en")
+# Used only if the model reports a distribution naming neither target -- the
+# decode language must still be exactly one of `_DECODE_LANGUAGES` (FR-1).
+_DEFAULT_LANGUAGE = "en"
+# The probability recorded with that fallback: the model gave the chosen
+# language no weight at all. FR-4 requires `language_probability` to be
+# populated on *every* auto-detected run, so this branch reports "no evidence"
+# as 0.0 rather than a null the F3 consumer would have to special-case.
+_NO_EVIDENCE_PROBABILITY = 0.0
+
+# `decode_audio` resamples to 16 kHz (faster-whisper's fixed model rate), and
+# so does every VAD/feature path below.
+_SAMPLE_RATE = 16_000
+# How much of the recording the detection pass VAD-scans. Detection itself
+# only ever consumes one ~30 s window, but finding the *speech* in a recording
+# means running Silero first, and Silero over a whole file costs a measured
+# ~5.7 s per hour of audio -- on top of the identical pass `transcribe` runs
+# for the decode. Ten minutes bounds that at ~1 s (NFR-1's overhead budget)
+# while still skipping any realistic lead-in of silence, hold music or
+# keyboard noise before the first word.
+_DETECTION_PREFIX_SEC = 600
+
+
+def _constrain_language(all_language_probs: Any) -> tuple[str, float]:
+    """Argmax over `{ru, en}` alone, from faster-whisper's full ~100-language
+    distribution (FR-1). Returns the chosen language and the probability it
+    was chosen on (`0.0` when neither target was reported at all)."""
+    candidates = [
+        (language, probability)
+        for language, probability in (all_language_probs or [])
+        if language in _DECODE_LANGUAGES
+    ]
+    if not candidates:
+        return _DEFAULT_LANGUAGE, _NO_EVIDENCE_PROBABILITY
+    return max(candidates, key=lambda item: item[1])
+
+
+def _detection_audio(waveform: Any, vad_parameters: dict[str, Any]) -> Any:
+    """The audio the language detector should look at: speech only.
+
+    `WhisperModel.transcribe` -- the unconstrained auto path this feature
+    replaced -- VAD-filters the waveform *before* extracting the features it
+    detects the language from, so stock detection never saw silence. A bare
+    `detect_language(audio=waveform)` does (its `vad_filter` defaults to
+    `False`), which on a call that opens with silence, hold music or keyboard
+    noise makes the ru/en choice -- and the probability FR-4 records -- from
+    non-speech audio. So the same tightened VAD settings the decode pass uses
+    are applied here first, over a bounded prefix (`_DETECTION_PREFIX_SEC`).
+
+    `detect_language`'s own `vad_filter=` is deliberately not used: it hands
+    `vad_parameters` straight to `get_speech_timestamps`, which reads
+    attributes off it, so the dict shape `transcribe` accepts raises
+    `AttributeError` there -- and it would scan the entire file.
+
+    Falls back to the raw prefix when the VAD hears nothing at all: that is
+    the pre-fix behaviour, and it beats handing the encoder an empty array
+    (which raises inside faster-whisper), so a hard-to-hear recording still
+    gets a language and a transcript.
+    """
+    prefix = waveform[: _DETECTION_PREFIX_SEC * _SAMPLE_RATE]
+    speech_chunks = get_speech_timestamps(prefix, VadOptions(**vad_parameters))
+    if not speech_chunks:
+        return prefix
+    audio_chunks, _ = collect_chunks(prefix, speech_chunks)
+    return np.concatenate(audio_chunks, axis=0)
 
 
 def _map_segment(segment: Any, new_id: int, *, include_words: bool) -> dict[str, Any]:
@@ -255,19 +341,48 @@ class LocalWhisperProvider:
         cancel.raise_if_cancelled()
         model = self._ensure_model()
 
+        # The tightened VAD: real pauses actually terminate segments instead
+        # of being bridged. Shared with the detection pass below so both agree
+        # on what counts as speech.
+        vad_parameters: dict[str, Any] = {
+            "min_silence_duration_ms": self._vad_min_silence_ms,
+            "speech_pad_ms": 400,
+        }
+
+        # Auto means "pick between Russian and English", never "let the model
+        # roam its full language set" -- unconstrained detection is what
+        # transcribed an English meeting in Russian (FR-1). `detect_language`
+        # takes a waveform rather than a path, so the file is decoded here and
+        # the *same* waveform is handed to the decode call below: one file
+        # read, one extra encoder window, no second decode (NFR-1). Detection
+        # runs on the VAD-filtered speech in that waveform, never on raw
+        # silence (`_detection_audio`); the decode call still gets the
+        # unfiltered waveform, because it runs its own VAD and needs the
+        # original timeline to map segment timestamps back. An explicit
+        # language skips all of it and reaches faster-whisper exactly as
+        # before (FR-2).
+        audio_input: Any = str(audio_path)
+        decode_language = language
+        detected_probability: float | None = None
+        if decode_language is None:
+            try:
+                audio_input = decode_audio(str(audio_path))
+                _, _, all_language_probs = model.detect_language(
+                    audio=_detection_audio(audio_input, vad_parameters)
+                )
+            except Exception as exc:
+                raise _decode_failure(exc, audio_path, self._device) from exc
+            decode_language, detected_probability = _constrain_language(all_language_probs)
+
         # `condition_on_previous_text=False`: each ~30 s window is decoded
         # without being biased by the previous one -- the bias is what
         # produces run-on segments and repetition-loop hallucinations on
-        # conversational audio. The tightened VAD makes real pauses actually
-        # terminate segments instead of being bridged.
+        # conversational audio.
         decode_kwargs: dict[str, Any] = {
-            "language": language,
+            "language": decode_language,
             "beam_size": 5,
             "vad_filter": True,
-            "vad_parameters": {
-                "min_silence_duration_ms": self._vad_min_silence_ms,
-                "speech_pad_ms": 400,
-            },
+            "vad_parameters": vad_parameters,
             "condition_on_previous_text": False,
             "word_timestamps": self._word_timestamps,
         }
@@ -275,20 +390,12 @@ class LocalWhisperProvider:
         try:
             if self._pipeline is not None:
                 segments_iter, info = self._pipeline.transcribe(
-                    str(audio_path), batch_size=self._batch_size, **decode_kwargs
+                    audio_input, batch_size=self._batch_size, **decode_kwargs
                 )
             else:
-                segments_iter, info = model.transcribe(str(audio_path), **decode_kwargs)
+                segments_iter, info = model.transcribe(audio_input, **decode_kwargs)
         except Exception as exc:
-            kind = _classify_transcribe_failure(exc)
-            if kind is ErrorKind.MODEL_LOAD:
-                raise ServiceError(
-                    ErrorKind.MODEL_LOAD, f"model runtime failed on {self._device}: {exc}"
-                ) from exc
-            raise ServiceError(
-                ErrorKind.AUDIO_DECODE,
-                f"failed to decode {audio_path.name}: {exc}",
-            ) from exc
+            raise _decode_failure(exc, audio_path, self._device) from exc
 
         duration = getattr(info, "duration", 0.0) or 0.0
         raw_segments: list[dict[str, Any]] = []
@@ -303,15 +410,7 @@ class LocalWhisperProvider:
             except ServiceError:
                 raise
             except Exception as exc:
-                kind = _classify_transcribe_failure(exc)
-                if kind is ErrorKind.MODEL_LOAD:
-                    raise ServiceError(
-                        ErrorKind.MODEL_LOAD, f"model runtime failed on {self._device}: {exc}"
-                    ) from exc
-                raise ServiceError(
-                    ErrorKind.AUDIO_DECODE,
-                    f"failed to decode {audio_path.name}: {exc}",
-                ) from exc
+                raise _decode_failure(exc, audio_path, self._device) from exc
 
             mapped = _map_segment(segment, len(raw_segments), include_words=self._word_timestamps)
             raw_segments.append(mapped)
@@ -328,8 +427,16 @@ class LocalWhisperProvider:
             segments_out = [dict(segment) for segment in kept]
         text = "".join(str(segment["text"]) for segment in segments_out)
 
-        language_out = getattr(info, "language", None) or language
-        language_probability = getattr(info, "language_probability", None)
+        # The language actually decoded in, not what `info` echoes back: on an
+        # auto run that is the constrained choice above, on a forced run the
+        # requested one (FR-4). `info.language` is only trustworthy as a
+        # probability source on a forced run.
+        language_out = decode_language
+        language_probability = (
+            detected_probability
+            if language is None
+            else getattr(info, "language_probability", None)
+        )
 
         return TranscriptResult(
             segments=segments_out,

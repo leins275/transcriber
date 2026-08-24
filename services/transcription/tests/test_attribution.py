@@ -24,8 +24,11 @@ ADAPTED_FILES = [
 
 # Strings that would tie a non-provider module to a concrete provider library
 # (FR-4): only `providers/`, `llm/` and `config.py` may reference these.
-# (`openai` also catches the `openai_compat` engine name; modules outside
-# `llm/` reach engine names through `transcription.llm`'s constants instead.)
+# `litellm`, `openai` and `groq` are kept in the list as a standing guard
+# after the cloud provider and the external OpenAI-compatible engine were
+# removed -- nothing in the tree may reintroduce a remote model client.
+# Modules outside `llm/` reach engine names through `transcription.llm`'s
+# constants instead of spelling them out.
 _PROVIDER_LIBRARY_STRINGS = ("litellm", "faster_whisper", "openai", "groq", "llama_cpp")
 
 # Real subprocess/shell usage, not incidental prose mentioning the word.

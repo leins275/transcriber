@@ -118,6 +118,36 @@ export function speakerNames(turns: Turn[]): string[] {
 }
 
 /**
+ * Assigns `speaker` to exactly `segmentIds`, returning the new map.
+ *
+ * The segment-granular form of attribution: the operator selects a stretch of
+ * text and only the segments it covers change hands, which is what makes
+ * correcting one sentence in the middle of a paragraph possible. The turn the
+ * selection sat in re-groups on its own — `groupIntoTurns` rule 1 splits at
+ * the change of speaker, so the untouched flanks keep whatever they had,
+ * including nothing.
+ *
+ * Pure: the caller decides when to persist. Passing `null` (or a blank name)
+ * clears those segments' attribution rather than storing an empty name.
+ */
+export function assignSpeakerToSegments(
+  speakers: Record<string, string>,
+  segmentIds: readonly string[],
+  speaker: string | null,
+): Record<string, string> {
+  const name = speaker === null ? "" : speaker.trim();
+  const next = { ...speakers };
+  for (const segmentId of segmentIds) {
+    if (name.length === 0) {
+      delete next[segmentId];
+    } else {
+      next[segmentId] = name;
+    }
+  }
+  return next;
+}
+
+/**
  * Assigns `speaker` to every segment of `turn`, returning the new map.
  *
  * Pure: the caller decides when to persist. Passing `null` clears the
@@ -128,15 +158,7 @@ export function assignSpeaker(
   turn: Turn,
   speaker: string | null,
 ): Record<string, string> {
-  const next = { ...speakers };
-  for (const segmentId of turn.segmentIds) {
-    if (speaker === null || speaker.trim().length === 0) {
-      delete next[segmentId];
-    } else {
-      next[segmentId] = speaker.trim();
-    }
-  }
-  return next;
+  return assignSpeakerToSegments(speakers, turn.segmentIds, speaker);
 }
 
 /**

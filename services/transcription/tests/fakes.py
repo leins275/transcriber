@@ -1,8 +1,8 @@
 """Test doubles for the provider protocol (FR-4).
 
 Owned by T8; imported by T10-T15's tests as the hook that stands in for a
-real model or cloud call, so the default test suite stays model-free,
-GPU-free and network-free (FR-15).
+real model call, so the default test suite stays model-free, GPU-free and
+network-free (FR-15).
 """
 
 from __future__ import annotations
@@ -65,6 +65,7 @@ class FakeProvider:
         segments: list[FakeSegment] | None = None,
         raise_kind: ErrorKind | None = None,
         language: str | None = "en",
+        language_probability: float = 0.99,
         model: str = "fake-model",
         device: str = "cpu",
         compute_type: str | None = "int8",
@@ -72,11 +73,17 @@ class FakeProvider:
         self.config = config
         self._segments = segments if segments is not None else _default_segments()
         self.raise_kind = raise_kind
+        # The language this fake "decodes in" when the job asks for none --
+        # i.e. what a real provider's constrained detection would pick.
         self.language = language
+        self.language_probability = language_probability
         self.model = model
         self.device = device
         self.compute_type = compute_type
         self.model_state: str = "unloaded"
+        # Spy: the `language` kwarg the last `transcribe` call received
+        # (`None` = the caller asked for auto-detection).
+        self.seen_language: str | None = None
 
     def describe(self) -> ProviderInfo:
         return ProviderInfo(
@@ -95,6 +102,7 @@ class FakeProvider:
         on_progress: Callable[[float], None],
         cancel: CancelToken,
     ) -> TranscriptResult:
+        self.seen_language = language
         self.model_state = "loading"
         self.model_state = "loaded"
 
@@ -110,7 +118,7 @@ class FakeProvider:
             segments=[seg.as_dict() for seg in self._segments],
             text=text,
             language=language or self.language,
-            language_probability=0.99,
+            language_probability=self.language_probability,
             duration_sec=1.0,
             model=self.model,
             device=self.device,

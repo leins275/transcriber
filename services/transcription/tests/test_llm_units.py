@@ -7,17 +7,23 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from transcription.artifacts import (
+    ACTION_ITEMS_DIR_NAME,
+    FACTS_DIR_NAME,
+    MAX_PATH_LEN,
+    UNSORTED_DIR_NAME,
     fit_slug,
     list_items,
     parse_front_matter,
     render_front_matter,
     slugify,
+    source_date_from_meeting_name,
     unique_item_dir,
     write_item,
 )
-from transcription.errors import ServiceError
+from transcription.errors import ErrorKind, ServiceError
 from transcription.frames import plan_screenshots, screenshot_name
 from transcription.llm.chunking import chunk_lines, estimate_tokens
 from transcription.llm.extraction import merge_items, snap_timestamps
@@ -38,8 +44,7 @@ from transcription.llm.shapes import (
 
 
 def test_importing_the_llm_package_never_imports_an_llm_library() -> None:
-    for name in ("llama_cpp", "litellm"):
-        sys.modules.pop(name, None)
+    sys.modules.pop("llama_cpp", None)
     import importlib
 
     import transcription.llm
@@ -50,11 +55,28 @@ def test_importing_the_llm_package_never_imports_an_llm_library() -> None:
     from transcription.llm import validate_llm_provider_name
 
     validate_llm_provider_name("llama_cpp")
-    validate_llm_provider_name("openai_compat")
     assert "llama_cpp" not in sys.modules
 
     with pytest.raises(ServiceError):
         validate_llm_provider_name("bogus")
+
+
+def test_the_builtin_llama_cpp_engine_is_the_only_registered_engine() -> None:
+    from transcription.llm import BUILTIN_ENGINE, known_llm_provider_names
+
+    assert known_llm_provider_names() == {BUILTIN_ENGINE}
+    assert BUILTIN_ENGINE == "llama_cpp"
+
+
+def test_the_external_openai_compatible_engine_is_rejected() -> None:
+    from transcription.llm import validate_llm_provider_name
+
+    with pytest.raises(ServiceError) as excinfo:
+        validate_llm_provider_name("openai_compat")
+
+    assert excinfo.value.kind.value == "invalid_request"
+    assert "openai_compat" in str(excinfo.value)
+    assert "llama_cpp" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------- chunking
@@ -254,6 +276,14 @@ def test_transcript_lines_carry_timestamps_and_speaker_overrides() -> None:
 # --------------------------------------------------------------- artifacts
 
 
+def test_artifact_dir_names_pin_the_cross_language_contract() -> None:
+    """The exact directory-name strings are shared with the vault crate
+    (``crates/vault/src/paths.rs``). Their anchor moved to the meeting folder;
+    the strings themselves must never drift on either side."""
+    assert ACTION_ITEMS_DIR_NAME == "action items"
+    assert FACTS_DIR_NAME == "facts"
+
+
 def test_slugify_is_windows_safe_and_keeps_non_latin_text() -> None:
     assert slugify('Fix: the "login" <flow>?') == "fix-the-login-flow"
     assert slugify("Починить вход в систему") == "починить-вход-в-систему"
@@ -307,3 +337,157 @@ def test_fit_slug_trims_against_the_260_char_budget() -> None:
     hopeless = Path("C:/v") / ("b" * 270)
     with pytest.raises(ServiceError):
         fit_slug(hopeless, "slug")
+
+
+def test_fit_slug_fits_a_realistically_deep_meeting_level_parent() -> None:
+    """NFR-1: items now anchor one level deeper -- inside the meeting folder --
+    so the budget is checked against a realistic synced vault path."""
+    # ~170-character OneDrive-style sync root, as the operator's vault lives.
+    synced_root = (
+        Path("C:/Users/operator/OneDrive - Example Corporation")
+        / "Documents"
+        / "Meeting Recordings Vault"
+        / "Shared with the Operations Team"
+        / "2026 Recordings Archive"
+        / "Synced from the Studio Laptop 2026"
+    )
+    assert len(str(synced_root)) == 174
+    kind_dir = synced_root / "ELS" / "260101 - a long meeting title" / ACTION_ITEMS_DIR_NAME
+
+    fitted = fit_slug(kind_dir, slugify("Chase the vendor about the signed statement of work"))
+    assert 0 < len(fitted)
+    # unique_item_dir may append a " (n)" collision suffix to the item folder,
+    # and the longest screenshot sibling is "screenshot-hmmss.png" (20 chars).
+    item_dir = kind_dir / f"{fitted} (2)"
+    longest_sibling = screenshot_name(9 * 3600 + 59 * 60 + 59)
+    assert len(longest_sibling) == 20
+    assert len(str(item_dir / f"{fitted}.md")) <= MAX_PATH_LEN
+    assert len(str(item_dir / longest_sibling)) <= MAX_PATH_LEN
+
+    # A meeting folder too deep to hold even a one-character slug is refused.
+    hopeless_meeting = synced_root / "ELS" / ("m" * 60) / ACTION_ITEMS_DIR_NAME
+    with pytest.raises(ServiceError) as excinfo:
+        fit_slug(hopeless_meeting, "slug")
+    assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
+
+
+# ------------------------------------------- front-matter field contract
+
+
+def test_unsorted_dir_name_mirrors_the_vault_crate() -> None:
+    # crates/vault/src/paths.rs: `pub const UNSORTED_DIR_NAME: &str = "unsorted";`
+    assert UNSORTED_DIR_NAME == "unsorted"
+
+
+def test_source_date_reads_the_meetings_leading_yymmdd_as_20xx() -> None:
+    assert source_date_from_meeting_name("260824 - standup") == "2026-08-24"
+    # The vault contract treats the six chars verbatim: no strptime("%y")
+    # 69-99 -> 19xx pivot.
+    assert source_date_from_meeting_name("990101 - x") == "2099-01-01"
+    # The prefix is what counts; whatever follows it is not our business.
+    assert source_date_from_meeting_name("260824standup") == "2026-08-24"
+
+
+def test_source_date_is_none_when_the_prefix_is_not_a_calendar_date() -> None:
+    assert source_date_from_meeting_name("Planning") is None
+    assert source_date_from_meeting_name("2608 - x") is None
+    assert source_date_from_meeting_name("") is None
+    assert source_date_from_meeting_name("261345 - x") is None  # month 13
+    assert source_date_from_meeting_name("260230 - x") is None  # Feb 30
+    # `str.isdigit()` is True for non-ASCII digits, which `int()` would happily
+    # accept; the vault's naming contract is ASCII.
+    assert source_date_from_meeting_name("\u0662\u0666\u0660\u0668\u0662\u0664 - x") is None
+
+
+def test_list_items_tolerates_obsidian_style_rewritten_front_matter(tmp_path: Path) -> None:
+    # What an external property editor leaves behind: reordered keys, an
+    # unknown key, YAML-quoted strings, `archived` flipped on.
+    item_dir = tmp_path / "action items" / "fix-login"
+    item_dir.mkdir(parents=True)
+    (item_dir / "fix-login.md").write_text(
+        '---\ntags: ["x"]\narchived: true\ntitle: "Quoted"\ntype: "task"\n'
+        "source_project: null\n---\n\n# Quoted\n\nBroken on refresh.\n",
+        encoding="utf-8",
+    )
+
+    (item,) = list_items(tmp_path / "action items")
+    assert item.meta == {
+        "tags": ["x"],
+        "archived": True,
+        "title": "Quoted",
+        "type": "task",
+        "source_project": None,
+    }
+    assert item.meta["archived"] is True  # JSON bool, not the string "true"
+    # Body intact apart from the leading blank line and the trailing newline
+    # that `splitlines()` normalises away.
+    assert item.body == "# Quoted\n\nBroken on refresh."
+
+
+def test_list_items_never_writes_to_the_files_it_reads(tmp_path: Path) -> None:
+    md_path = write_item(
+        tmp_path / "action items",
+        title="Fix login",
+        meta={"type": "task", "title": "Fix login", "archived": False},
+        body_md="Broken on refresh.",
+        images=[("screenshot-0010.png", b"\x89PNGfake")],
+    )
+    before = md_path.read_bytes()
+
+    assert len(list_items(tmp_path / "action items")) == 1
+
+    assert md_path.read_bytes() == before
+
+
+def test_parse_front_matter_never_raises_on_edited_or_garbled_text() -> None:
+    malformed = [
+        "",
+        "---",  # unterminated fence
+        "---\n",
+        "---\n---\n",
+        "---\nkey:\n---\nbody",  # key with no value
+        "---\narchived: yes\n---\n",  # YAML bool that is not JSON
+        "---\n: novalue\n---\n",  # empty key
+        "---\nno colon at all\n---\n",
+        "---\ntags: [x]\n---\n",  # unquoted YAML flow scalar
+        "---\n\x00\xff\x1b[31m\n---\nbody",
+        "not front matter at all",
+    ]
+    for text in malformed:
+        meta, body = parse_front_matter(text)
+        assert isinstance(meta, dict)
+        assert isinstance(body, str)
+
+    # A non-JSON scalar degrades to the raw string; it never fails the read.
+    assert parse_front_matter("---\narchived: yes\n---\n")[0]["archived"] == "yes"
+    assert parse_front_matter("---\nkey:\n---\nbody")[0]["key"] == ""
+    assert parse_front_matter("---\n: novalue\n---\n")[0] == {}
+
+
+def test_written_front_matter_parses_identically_under_a_real_yaml_parser(
+    tmp_path: Path,
+) -> None:
+    meta = {
+        "type": "task",
+        "title": 'A "quoted" title -- с кириллицей',
+        "archived": False,
+        "source_project": None,
+        "source_meeting": "260824 - standup",
+        "source_recording": "source.mp4",
+        "source_date": "2026-08-24",
+        "timestamps": [1.5, 2.0],
+    }
+    md_path = write_item(
+        tmp_path / "action items",
+        title="Fix login",
+        meta=meta,
+        body_md="Broken on refresh.",
+        images=[],
+    )
+    text = md_path.read_text(encoding="utf-8")
+
+    parsed_meta, _ = parse_front_matter(text)
+    lines = text.splitlines()
+    block = "\n".join(lines[1 : lines.index("---", 1)])
+
+    assert yaml.safe_load(block) == parsed_meta == meta

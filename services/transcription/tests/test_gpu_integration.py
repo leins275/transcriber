@@ -1,11 +1,11 @@
-"""Opt-in GPU integration test (FR-3, NFR-2, NFR-3, FR-15).
+"""Opt-in GPU integration tests (FR-3, NFR-2, NFR-3, FR-15; F2 FR-1, FR-4).
 
-The one `@pytest.mark.gpu` test in this suite: a real end-to-end
-transcription against the real model weights on a CUDA device, using the
-real `LocalWhisperProvider` (no fakes, no monkeypatching of the model or the
-CUDA probe). Deselected by default (`addopts = -m "not gpu"`); self-skips
-cleanly here when no sample is configured -- it never downloads a model or
-requires CUDA to be present for the default suite to pass.
+The `@pytest.mark.gpu` tests in this suite: real end-to-end transcriptions
+against the real model weights on a CUDA device, using the real
+`LocalWhisperProvider` (no fakes, no monkeypatching of the model or the CUDA
+probe). Deselected by default (`addopts = -m "not gpu"`); every one of them
+self-skips cleanly here when no sample is configured -- they never download a
+model or require CUDA to be present for the default suite to pass.
 
 Run explicitly with a real sample and a CUDA-capable machine:
 
@@ -48,6 +48,43 @@ def _resolve_sample() -> Path:
         "no GPU sample configured: set TRANSCRIBER_TEST_SAMPLE or drop a short wav at "
         "tests/data/sample.wav -- see tests/data/README.md"
     )
+
+
+def _resolve_language_sample(language: str) -> Path:
+    """A speech sample known to be spoken in ``language`` (F2 FR-1).
+
+    Configured out of band -- ``TRANSCRIBER_TEST_SAMPLE_EN`` /
+    ``TRANSCRIBER_TEST_SAMPLE_RU``, or ``tests/data/sample-<lang>.wav`` -- so
+    no audio is ever committed to the repository.
+    """
+    env_name = f"TRANSCRIBER_TEST_SAMPLE_{language.upper()}"
+    env_sample = os.environ.get(env_name)
+    if env_sample:
+        candidate = Path(env_sample)
+        if not candidate.is_file():
+            pytest.skip(f"{env_name}={env_sample!r} does not point at a file")
+        return candidate
+
+    default = Path(__file__).parent / "data" / f"sample-{language}.wav"
+    if default.is_file():
+        return default
+
+    pytest.skip(
+        f"no {language} speech sample configured: set {env_name} or drop a short wav at "
+        f"tests/data/sample-{language}.wav -- see tests/data/README.md"
+    )
+
+
+def _script_counts(text: str) -> tuple[int, int]:
+    """(latin letters, cyrillic letters) in ``text``.
+
+    A script census is how "English text" / "Russian text" is asserted
+    without pinning the fixture's wording: a Russian decode of English speech
+    (the bug F2 fixes) is overwhelmingly Cyrillic, and vice versa.
+    """
+    latin = sum(1 for char in text if "a" <= char.lower() <= "z")
+    cyrillic = sum(1 for char in text if "а" <= char.lower() <= "я")
+    return latin, cyrillic
 
 
 async def _wait_for_terminal(manager: JobManager, job_id: str, *, timeout_sec: float) -> None:
@@ -125,5 +162,68 @@ async def test_real_local_transcription_end_to_end_on_cuda(tmp_app_dir: Path) ->
         assert construction_count == 1, "second job re-constructed the model"
     finally:
         local_whisper_mod.WhisperModel = real_whisper_model  # type: ignore[misc]
+        await manager.aclose()
+        ledger.close()
+
+
+@pytest.mark.parametrize("expected_language", ["en", "ru"])
+async def test_auto_detection_decodes_in_the_spoken_language_on_cuda(
+    tmp_app_dir: Path, expected_language: str
+) -> None:
+    """Real speech, no requested language: the decode language is the spoken
+    one and it is recorded everywhere (F2 FR-1 acceptance bullet 1, FR-4).
+
+    This is the regression the feature exists for: before the constrained
+    detection pass, an English recording could be -- and was -- decoded as
+    Russian, because faster-whisper free-detected over its full language set.
+    """
+    sample = _resolve_language_sample(expected_language)
+
+    config = Config(
+        app_dir=tmp_app_dir,
+        config_path=tmp_app_dir / "config.json",
+        device="cuda",
+        model=os.environ.get("TRANSCRIBER_TEST_MODEL", "large-v3"),
+        model_path=os.environ.get("TRANSCRIBER_MODEL_PATH", str(tmp_app_dir / "models")),
+        allowed_roots=(str(sample.parent), str(tmp_app_dir)),
+    )
+
+    ledger = Ledger(tmp_app_dir / "data" / "jobs.sqlite3")
+    manager = JobManager(config, ledger)
+    await manager.start()
+
+    try:
+        output_dir = tmp_app_dir / f"out-{expected_language}"
+        output_dir.mkdir()
+        # No `language=`: the request carries nothing, exactly like the
+        # desktop app's default "Auto" control.
+        job_id = await manager.submit(audio_path=str(sample), output_dir=str(output_dir))
+        await _wait_for_terminal(manager, job_id, timeout_sec=600)
+
+        status = manager.status(job_id)
+        assert status.status == "succeeded", status.error_message
+
+        doc = TranscriptDoc.model_validate(
+            json.loads((output_dir / "transcript.json").read_text("utf-8"))
+        )
+        assert doc.language == expected_language
+        # FR-4: a constrained-detection probability, not an empty field.
+        assert doc.language_probability is not None
+        assert doc.language_probability > 0.0
+
+        latin, cyrillic = _script_counts(doc.text)
+        assert latin + cyrillic > 0, "no decoded text to judge the language of"
+        if expected_language == "en":
+            assert latin > cyrillic, f"expected English text, got {doc.text[:200]!r}"
+        else:
+            assert cyrillic > latin, f"expected Russian text, got {doc.text[:200]!r}"
+
+        row = ledger.get_job(job_id)
+        assert row is not None
+        assert row["status"] == "succeeded"
+        # The row went in with NULL (nothing was requested) and must be
+        # updated to the language the decode actually ran in (FR-4).
+        assert row["language"] == expected_language
+    finally:
         await manager.aclose()
         ledger.close()

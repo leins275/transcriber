@@ -44,7 +44,6 @@ from transcription.llm.prompts import (
     repair_messages,
 )
 from transcription.llm.reasoning import split_reasoning
-from transcription.llm.report import collect_project_materials, report_from_materials
 from transcription.llm.shapes import (
     ActionItemsOut,
     FactsOut,
@@ -63,9 +62,7 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently.
-KNOWN_JOB_TYPES = frozenset(
-    {"transcribe", "summarize", "action_items", "facts", "report", "export"}
-)
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "action_items", "facts", "export"})
 
 _logger = logging.getLogger("transcription")
 
@@ -130,7 +127,7 @@ class JobManager:
         self._llm_factory: Callable[[Config], LlmProvider] = (
             llm_factory
             if llm_factory is not None
-            else (lambda config: get_llm_provider(config.llm_provider, config))
+            else (lambda config: get_llm_provider(BUILTIN_ENGINE, config))
         )
         self._frame_extractor: FrameExtractorProtocol | None = None
         self._frame_extractor_factory: Callable[[], FrameExtractorProtocol] = (
@@ -210,19 +207,14 @@ class JobManager:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
 
         Mirrors `provider_info()`: never constructs an engine. `model_present`
-        reports whether the configured GGUF file is on disk (always `True`
-        for the external-server engine, whose model is not this process's
-        concern).
+        reports whether the configured GGUF file is on disk -- the built-in
+        llama.cpp engine is the only one there is, so there is no engine
+        selector to report.
         """
-        if self._config.llm_provider == BUILTIN_ENGINE:
-            model_file = Path(self._config.llm_model_path) / self._config.llm_model_file
-            model_present = model_file.is_file()
-        else:
-            model_present = True
+        model_file = Path(self._config.llm_model_path) / self._config.llm_model_file
         return {
-            "llm_provider": self._config.llm_provider,
             "llm_model": self._config.llm_model,
-            "llm_model_present": model_present,
+            "llm_model_present": model_file.is_file(),
         }
 
     async def submit(
@@ -272,9 +264,7 @@ class JobManager:
                     f"input_path must be a directory: {resolved_source.name}",
                 )
             # The per-meeting derived jobs read the transcript; reject a
-            # meeting that has none before any ledger row exists. A report's
-            # input is a whole project directory, checked in its runner
-            # (some meetings legitimately lack transcripts).
+            # meeting that has none before any ledger row exists.
             if (
                 job_type in ("summarize", "action_items", "facts", "export")
                 and not (resolved_source / "transcript.json").is_file()
@@ -293,7 +283,10 @@ class JobManager:
             provider_name = "none"
             model_name = "none"
         else:
-            provider_name = provider or self._config.llm_provider
+            # The built-in llama.cpp engine is the only shipping one, so an
+            # unnamed LLM job always lands there; there is no config-file
+            # engine selector to consult (FR-3).
+            provider_name = provider or BUILTIN_ENGINE
             model_name = model or self._config.llm_model
             validate_llm_provider_name(provider_name)
 
@@ -597,6 +590,10 @@ class JobManager:
             job.elapsed_sec = elapsed
             job.audio_duration_sec = result.duration_sec
             job.cost_usd = result.cost_usd
+            # FR-4: record the language the decode actually used, not the one
+            # the request asked for -- on an auto job the row went in as NULL
+            # and the provider's constrained detection picked the winner.
+            job.language = result.language
             self._ledger.finish_succeeded(
                 job.job_id,
                 elapsed_sec=elapsed,
@@ -605,6 +602,7 @@ class JobManager:
                 filtered_segment_count=result.filtered_segment_count,
                 cost_usd=result.cost_usd,
                 currency=result.currency,
+                language=result.language,
             )
         except ServiceError as exc:
             elapsed = time.monotonic() - start
@@ -631,7 +629,7 @@ class JobManager:
             )
 
     # ------------------------------------------------------------------
-    # Derived jobs (summarize / action_items / facts / report / export)
+    # Derived jobs (summarize / action_items / facts / export)
     # ------------------------------------------------------------------
 
     def _llm_budget_tokens(self) -> int:
@@ -672,7 +670,14 @@ class JobManager:
                 elif job.job_type in ("action_items", "facts"):
                     body = functools.partial(self._extract_sync, job, provider)
                 else:
-                    body = functools.partial(self._report_sync, job, provider)
+                    # Unreachable in practice -- the pydantic `JobType` literal
+                    # and `KNOWN_JOB_TYPES` both gate the type long before the
+                    # worker sees it. Kept explicit so a future LLM job type
+                    # cannot silently inherit the extraction path.
+                    raise ServiceError(
+                        ErrorKind.INVALID_REQUEST,
+                        f"unsupported llm job type {job.job_type!r}",
+                    )
             else:
                 job.status = "running"
                 self._ledger.mark_running(job.job_id)
@@ -749,9 +754,9 @@ class JobManager:
         """One completion, with the model's chain-of-thought split off.
 
         Reasoning never reaches an artifact or the UI: it lands in
-        `reasoning_sink` when the caller wants to keep it (the summary and
-        report runners write it to a `*.reasoning.md` sidecar) and is
-        discarded otherwise.
+        `reasoning_sink` when the caller wants to keep it (the summary
+        runner writes it to a `*.reasoning.md` sidecar) and is discarded
+        otherwise.
         """
         completion = provider.complete(
             messages,
@@ -768,8 +773,12 @@ class JobManager:
 
     def _summarize_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
-        lines, _ = self._load_transcript_lines(meeting_dir)
+        lines, data = self._load_transcript_lines(meeting_dir)
         chunks = chunk_lines(lines, self._llm_budget_tokens())
+        # The transcript's own language, pinned into the single-chunk call,
+        # every map call and the reduce. Missing, null or unsupported values
+        # are the prompt builder's problem: it falls back to the soft rule.
+        language = data.get("language")
         total_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
         calls_done = 0
         reasoning: list[str] = []
@@ -789,7 +798,7 @@ class JobManager:
             job.progress = min(0.99, calls_done / total_calls)
             return text
 
-        summary = summarize_chunks(chunks, complete)
+        summary = summarize_chunks(chunks, complete, language)
         summary_path = artifacts.write_text_atomic(
             summary + "\n", Path(job.output_path) / "summary.md"
         )
@@ -846,14 +855,20 @@ class JobManager:
         meeting_dir = Path(job.source_path)
         lines, data = self._load_transcript_lines(meeting_dir)
         chunks = chunk_lines(lines, self._llm_budget_tokens())
+        # The transcript's own language, pinned into every chunk's prompt.
+        # Missing, null or unsupported values are the prompt builder's
+        # problem: it falls back to the soft "mirror the transcript" rule.
+        language = data.get("language")
 
         if job.job_type == "action_items":
             wrapper_cls: type[ActionItemsOut] | type[FactsOut] = ActionItemsOut
-            messages_fn: Callable[[str], list[Message]] = action_items_messages
+            messages_fn: Callable[[str], list[Message]] = functools.partial(
+                action_items_messages, language=language
+            )
             type_key = "type"
         else:
             wrapper_cls = FactsOut
-            messages_fn = facts_messages
+            messages_fn = functools.partial(facts_messages, language=language)
             type_key = "kind"
 
         # The LLM owns the first 80% of the progress bar; screenshots and
@@ -892,7 +907,16 @@ class JobManager:
             duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
 
         source_file = self._find_source_file(meeting_dir)
-        project_name = Path(job.output_path).parent.name
+        # Items live inside the meeting folder, so provenance is anchored on
+        # that folder (the job's input), not on where the artifacts happen to
+        # land -- the derivation survives layout moves. The parent is a
+        # project code, or null for meetings under the reserved `unsorted/`
+        # root, which is not a project.
+        parent_name = meeting_dir.parent.name
+        project_name = (
+            None if parent_name.casefold() == artifacts.UNSORTED_DIR_NAME else parent_name
+        )
+        source_date = artifacts.source_date_from_meeting_name(meeting_dir.name)
         created = datetime.now(UTC).isoformat()
 
         md_paths: list[Path] = []
@@ -931,9 +955,13 @@ class JobManager:
             meta: dict[str, Any] = {
                 type_key: getattr(item, type_key),
                 "title": item.title,
+                # Always written false; only external editors flip it, and a
+                # missing key reads as false (see artifacts.py's contract).
+                "archived": False,
                 "source_project": project_name,
                 "source_meeting": meeting_dir.name,
                 "source_recording": source_file.name if source_file is not None else None,
+                "source_date": source_date,
                 "timestamps": snapped,
                 "created": created,
                 "model": job.model,
@@ -955,67 +983,14 @@ class JobManager:
 
         return {"artifacts": [str(path) for path in md_paths], "item_count": len(md_paths)}
 
-    def _report_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
-        project_dir = Path(job.source_path)
-        materials = collect_project_materials(project_dir)
-        if not materials.strip():
-            raise ServiceError(
-                ErrorKind.UNSUPPORTED_INPUT,
-                f"project {project_dir.name} has no transcripts, summaries or items to report on",
-            )
-
-        calls_done = 0
-        reasoning: list[str] = []
-
-        def complete(messages: list[Message]) -> str:
-            nonlocal calls_done
-            text = self._complete_text(
-                job,
-                provider,
-                messages,
-                on_progress=lambda fraction: setattr(
-                    job,
-                    "progress",
-                    min(0.85, 0.05 + (calls_done + fraction) * 0.2),
-                ),
-                reasoning_sink=reasoning,
-            )
-            calls_done += 1
-            return text
-
-        report_md = report_from_materials(
-            materials,
-            project_dir.name,
-            complete,
-            budget_tokens=self._llm_budget_tokens(),
-        )
-
-        out_dir = Path(job.output_path)
-        md_path = artifacts.write_text_atomic(report_md + "\n", out_dir / "report.md")
-        if reasoning:
-            artifacts.write_text_atomic(
-                "\n\n---\n\n".join(reasoning) + "\n", out_dir / "report.reasoning.md"
-            )
-        artifact_paths = [str(md_path)]
-        job.progress = 0.9
-        try:
-            pdf_path = render_pdf(report_md, out_dir / "report.pdf", base_dir=out_dir)
-            artifact_paths.append(str(pdf_path))
-        except PdfRenderError as exc:
-            job.warnings.append(f"PDF render failed: {exc}; report.md was written")
-        return {"artifacts": artifact_paths}
-
     def _export_sync(self, job: JobState) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
         export_dir = Path(job.output_path)
-        parent = meeting_dir.parent
-        project_dir = None if parent.name.casefold() == "unsorted" else parent
 
         job.progress = 0.1
         export_md, warnings = exporting.build_export_md(
             meeting_dir=meeting_dir,
             meeting_name=meeting_dir.name,
-            project_dir=project_dir,
             export_dir=export_dir,
         )
         job.warnings.extend(warnings)
@@ -1024,7 +999,15 @@ class JobManager:
         job.progress = 0.5
         job.cancel_token.raise_if_cancelled()
         try:
-            pdf_path = render_pdf(export_md, export_dir / "export.pdf", base_dir=export_dir)
+            pdf_path = render_pdf(
+                export_md,
+                export_dir / "export.pdf",
+                base_dir=export_dir,
+                # Font degradation (no Cyrillic-capable family) is not an
+                # error, but it makes the PDF unreadable for Russian text --
+                # the operator has to hear about it, not just the log.
+                warnings=job.warnings,
+            )
             artifact_paths.append(str(pdf_path))
         except PdfRenderError as exc:
             job.warnings.append(f"PDF render failed: {exc}; export.md was written")

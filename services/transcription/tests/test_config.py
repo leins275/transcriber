@@ -4,17 +4,35 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import fields
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from transcription.config import Config, ConfigError, load_config
+
+# The cloud-only config surface removed with the cloud STT provider and the
+# external OpenAI-compatible LLM engine (FR-3).
+_REMOVED_KEYS = (
+    "cloud_model",
+    "provider_api_key",
+    "max_cloud_upload_mb",
+    "llm_provider",
+    "llm_base_url",
+    "llm_api_key",
+)
 
 
 def _write_config(app_dir: Path, data: dict[str, object]) -> Path:
     config_path = app_dir / "config.json"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     return config_path
+
+
+def _snapshot(cfg: Config) -> dict[str, Any]:
+    """Every resolved field except the per-run random `token`."""
+    return {f.name: getattr(cfg, f.name) for f in fields(cfg) if f.name != "token"}
 
 
 def test_precedence_override_wins(tmp_app_dir: Path) -> None:
@@ -121,7 +139,7 @@ def test_malformed_json_raises_config_error_naming_file(tmp_app_dir: Path) -> No
 def test_public_contains_no_secrets(tmp_app_dir: Path) -> None:
     env = {
         "TRANSCRIBER_APP_DIR": str(tmp_app_dir),
-        "TRANSCRIBER_PROVIDER_API_KEY": "sk-super-secret-key",
+        "TRANSCRIBER_HF_TOKEN": "hf-super-secret-key",
     }
 
     cfg = load_config(env=env)
@@ -131,15 +149,104 @@ def test_public_contains_no_secrets(tmp_app_dir: Path) -> None:
     assert "model" in public
     assert "device" in public
     assert "token" not in public
+    assert "hf_token" not in public
     assert cfg.token not in json.dumps(public)
-    assert "sk-super-secret-key" not in json.dumps(public)
+    assert "hf-super-secret-key" not in json.dumps(public)
 
 
-def test_api_key_in_overrides_raises_config_error(tmp_app_dir: Path) -> None:
+def test_credentials_in_overrides_raise_config_error(tmp_app_dir: Path) -> None:
+    """NFR-3: `_SECRET_KEYS` shrank to the two surviving credentials, and both
+    are still refused from argv-shaped overrides (FR-9)."""
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 
-    with pytest.raises(ConfigError):
-        load_config(env=env, overrides={"provider_api_key": "sk-from-argv"})
+    for secret_key in ("token", "hf_token"):
+        with pytest.raises(ConfigError):
+            load_config(env=env, overrides={secret_key: "sk-from-argv"})
+
+
+# -- removed cloud surface (FR-3, FR-4) --------------------------------------
+
+
+def test_config_has_no_cloud_fields(tmp_app_dir: Path) -> None:
+    """FR-3: the cloud STT / external-LLM config keys are gone from `Config`."""
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+    field_names = {f.name for f in fields(Config)}
+
+    for key in _REMOVED_KEYS:
+        assert key not in field_names, f"{key} is still a Config field"
+        assert not hasattr(cfg, key)
+
+
+def test_cloud_env_variables_have_no_effect_on_the_loaded_config(tmp_app_dir: Path) -> None:
+    """FR-3 acceptance: the removed `TRANSCRIBER_*` pickups and the
+    `OPENAI_API_KEY`/`GROQ_API_KEY` fallbacks no longer reach `Config`."""
+    baseline = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+    cfg = load_config(
+        env={
+            "TRANSCRIBER_APP_DIR": str(tmp_app_dir),
+            "OPENAI_API_KEY": "sk-openai-secret",
+            "GROQ_API_KEY": "gsk-groq-secret",
+            "TRANSCRIBER_PROVIDER_API_KEY": "sk-provider-secret",
+            "TRANSCRIBER_LLM_API_KEY": "sk-llm-secret",
+            "TRANSCRIBER_LLM_BASE_URL": "http://127.0.0.1:1234/v1",
+            "TRANSCRIBER_LLM_PROVIDER": "openai_compat",
+        }
+    )
+
+    assert _snapshot(cfg) == _snapshot(baseline)
+    rendered = json.dumps(_snapshot(cfg), default=str)
+    for leaked in (
+        "sk-openai-secret",
+        "gsk-groq-secret",
+        "sk-provider-secret",
+        "sk-llm-secret",
+        "http://127.0.0.1:1234/v1",
+        "openai_compat",
+    ):
+        assert leaked not in rendered
+
+
+def test_public_reports_no_removed_cloud_keys(tmp_app_dir: Path) -> None:
+    """FR-3: `/health` and the startup log lose the cloud rows, keeping the
+    surviving local-LLM ones."""
+    public = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}).public()
+
+    for key in _REMOVED_KEYS:
+        assert key not in public
+    assert {"llm_model", "llm_ctx", "llm_gpu_layers"} <= set(public)
+
+
+def test_installed_config_file_with_removed_cloud_keys_still_loads(tmp_app_dir: Path) -> None:
+    """FR-4: an already-installed `config.json` that still carries every removed
+    key loads without error -- the keys fall into the unknown-key-ignored path.
+    A leftover `"provider": "cloud"` survives as a value and is rejected later,
+    per job, by `validate_provider_name` (FR-1) -- never at load time.
+    """
+    _write_config(
+        tmp_app_dir,
+        {
+            "provider": "cloud",
+            "cloud_model": "whisper-large-v3",
+            "provider_api_key": "sk-leftover",
+            "max_cloud_upload_mb": 25,
+            "llm_provider": "openai_compat",
+            "llm_base_url": "http://127.0.0.1:1234/v1",
+            "llm_api_key": "sk-leftover-llm",
+            "model_path": "A",
+        },
+    )
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert isinstance(cfg, Config)
+    # Surviving keys in the very same file still apply.
+    assert cfg.model_path == "A"
+    assert cfg.provider == "cloud"
+    for key in _REMOVED_KEYS:
+        assert not hasattr(cfg, key)
+    assert "sk-leftover" not in json.dumps(_snapshot(cfg), default=str)
 
 
 def test_real_desktop_config_json_model_shape_unpacks_into_flat_fields(
@@ -312,3 +419,88 @@ def test_public_reports_diarization_but_never_the_token(tmp_app_dir: Path) -> No
     assert public["diarize"] is False
     assert public["diarization_model"] == "pyannote/speaker-diarization-3.1"
     assert "hf_secret" not in json.dumps(public)
+
+
+# -- language (FR-3: validation at every entry point) -------------------------
+
+
+def test_language_from_config_file_outside_ru_en_raises_naming_allowed_values(
+    tmp_app_dir: Path,
+) -> None:
+    _write_config(tmp_app_dir, {"language": "de"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env)
+
+    message = str(exc_info.value)
+    assert "de" in message
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_from_env_outside_ru_en_raises_naming_allowed_values(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": "de"}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env)
+
+    message = str(exc_info.value)
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_from_overrides_outside_ru_en_raises_naming_allowed_values(
+    tmp_app_dir: Path,
+) -> None:
+    """The CLI's `--language` flag arrives as an override; a bogus value must
+    fail config loading (which `cli.main` maps to a nonzero exit)."""
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(env=env, overrides={"language": "de"})
+
+    message = str(exc_info.value)
+    assert "ru" in message
+    assert "en" in message
+
+
+def test_language_override_beats_a_valid_config_file_value(tmp_app_dir: Path) -> None:
+    """Validation runs after the layers merge: an invalid file value that a
+    valid override replaces must not fail the load, and vice versa."""
+    _write_config(tmp_app_dir, {"language": "de"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env, overrides={"language": "en"})
+
+    assert cfg.language == "en"
+
+
+def test_language_empty_string_normalizes_to_none(tmp_app_dir: Path) -> None:
+    _write_config(tmp_app_dir, {"language": ""})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language is None
+
+    env_empty = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": ""}
+    assert load_config(env=env_empty).language is None
+
+
+def test_language_is_normalized_to_lowercase(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir), "TRANSCRIBER_LANGUAGE": "EN"}
+
+    assert load_config(env=env).language == "en"
+
+
+@pytest.mark.parametrize("language", ["ru", "en"])
+def test_language_accepts_ru_and_en(tmp_app_dir: Path, language: str) -> None:
+    _write_config(tmp_app_dir, {"language": language})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language == language
+
+
+def test_language_unset_stays_none(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    assert load_config(env=env).language is None

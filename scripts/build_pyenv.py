@@ -234,7 +234,7 @@ def strip_console_script_launchers(site_packages_dir: Path) -> None:
 
     `uv pip install --target` (like pip) still writes a `bin/` of
     distlib-style launcher `.exe` files for every `[project.scripts]` entry
-    point in the resolved set (e.g. `litellm.exe`, `uvicorn.exe`), even
+    point in the resolved set (e.g. `uvicorn.exe`, `huggingface-cli.exe`), even
     though `--target` is not a venv. Those launchers embed the *absolute*
     path of the interpreter used at install time -- exactly R2's "console
     scripts carry absolute paths" failure mode, just surfacing here instead

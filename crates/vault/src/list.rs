@@ -147,10 +147,17 @@ fn collect_meetings(parent: &Path, project: Option<String>, out: &mut Vec<Meetin
         // The reserved artifact directories (`action items/`, `facts/`,
         // `reports/`) live at this level but are not meetings -- without
         // this check every one of them would surface as a bogus, undated
-        // meeting entry the moment an LLM job first writes one. Skipped
-        // case-insensitively (Windows filesystems are), and under
+        // meeting entry. `reports/` is still written here; `action items/`
+        // and `facts/` are legacy at this level (extraction writes them
+        // inside the meeting folder now) but stay on disk unmigrated, so
+        // the exclusion is still load-bearing for any existing vault.
+        // Skipped case-insensitively (Windows filesystems are), and under
         // `unsorted/` too: nothing writes them there, but a hand-created
         // one is junk either way.
+        //
+        // Meeting-level artifact directories need no exclusion at all --
+        // this listing stops one level above them, the same reason
+        // `exports/` never needed one.
         if RESERVED_PROJECT_DIR_NAMES
             .iter()
             .any(|reserved| meeting_name.eq_ignore_ascii_case(reserved))

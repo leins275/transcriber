@@ -12,6 +12,7 @@ import type {
   JobType,
   MeetingUpdate,
   SummaryView,
+  TranscriptLanguage,
   TranscriptView,
   VaultMeetingView,
 } from "../types";
@@ -26,7 +27,9 @@ export type RecordingPageProps = {
   onSaveSpeakers: (entryId: string, assignments: Record<string, string>) => Promise<void>;
   onUpdate: (entryId: string, update: MeetingUpdate) => Promise<void>;
   onDelete: (entryId: string) => Promise<void>;
-  onTranscribe: (entryId: string) => Promise<void>;
+  /** `language` is the operator's per-recording override; `null` is Auto,
+   * which leaves the service on its constrained {ru, en} detection. */
+  onTranscribe: (entryId: string, language: TranscriptLanguage | null) => Promise<void>;
   /** The LLM feature's on-demand jobs over this recording. */
   onSummarize: (entryId: string) => Promise<void>;
   onExtract: (entryId: string, kind: ArtifactKind) => Promise<void>;
@@ -41,6 +44,17 @@ export type RecordingPageProps = {
 
 type Tab = "transcript" | "summary";
 type Panel = "none" | "edit" | "delete";
+/** What the language picker holds. `"auto"` is the default and the only
+ * value that sends no override at all. */
+type LanguageChoice = "auto" | TranscriptLanguage;
+
+/** The languages the app can name. A transcript written before this feature —
+ * or in anything outside the operator's two — carries a code we do not label,
+ * and the indicator then shows nothing rather than a placeholder. */
+const LANGUAGE_NAMES: Record<string, string | undefined> = {
+  ru: "Russian",
+  en: "English",
+};
 
 function messageOf(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -83,6 +97,9 @@ export function RecordingPage({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Local to the page and deliberately not persisted: the choice belongs to
+  // this one transcribe run, not to the recording or the app.
+  const [language, setLanguage] = useState<LanguageChoice>("auto");
 
   useEffect(() => {
     if (!entry.has_transcript) {
@@ -127,13 +144,13 @@ export function RecordingPage({
     setBusy(true);
     setError(null);
     try {
-      await onTranscribe(entry.id);
+      await onTranscribe(entry.id, language === "auto" ? null : language);
     } catch (caught) {
       setError(messageOf(caught));
     } finally {
       setBusy(false);
     }
-  }, [entry.id, onTranscribe]);
+  }, [entry.id, language, onTranscribe]);
 
   const runLlm = useCallback(
     async (action: (entryId: string) => Promise<void>) => {
@@ -165,11 +182,14 @@ export function RecordingPage({
   const meta = [
     parsed ? formatMeetingDate(parsed.date) : null,
     transcript?.duration_sec != null ? formatDuration(transcript.duration_sec) : null,
-    transcript?.language ? transcript.language.toUpperCase() : null,
     speakers.length > 0 ? `${speakers.length} speaker${speakers.length === 1 ? "" : "s"}` : null,
     transcript?.model,
     transcript?.device,
   ].filter((part): part is string => Boolean(part));
+  // The decode language is the one crumb the operator acts on — a wrong one
+  // means "re-transcribe with an override" — so it leaves the run-together
+  // provenance line and gets named in full beside it.
+  const languageName = transcript?.language ? LANGUAGE_NAMES[transcript.language] : undefined;
 
   return (
     <section className={styles.page} aria-label="Recording">
@@ -185,7 +205,14 @@ export function RecordingPage({
         <div className={styles.titleRow}>
           <div className={styles.titleBlock}>
             <h2 className={styles.title}>{parsed ? parsed.title : entry.meeting_name}</h2>
-            <div className={styles.meta}>{meta.join(" · ")}</div>
+            <div className={styles.metaRow}>
+              {languageName && (
+                <span className="pill" aria-label={`Language: ${languageName}`}>
+                  {languageName}
+                </span>
+              )}
+              <span className={styles.meta}>{meta.join(" · ")}</span>
+            </div>
           </div>
           <div className={styles.actions}>
             <button
@@ -197,9 +224,29 @@ export function RecordingPage({
               {copied ? "Copied" : "Copy all"}
             </button>
             {entry.has_source && (
-              <button type="button" className="btn" disabled={busy} onClick={transcribe}>
-                {busy ? "Queueing…" : entry.has_transcript ? "Re-transcribe" : "Transcribe"}
-              </button>
+              // The picker travels with the button it modifies, so the
+              // operator reads "Auto · Re-transcribe" as one sentence. The
+              // visible word is short; the accessible name says which
+              // language it means.
+              <span className={styles.transcribeGroup}>
+                <span className={styles.languageLabel} aria-hidden="true">
+                  Language
+                </span>
+                <select
+                  className={styles.language}
+                  aria-label="Transcript language"
+                  value={language}
+                  disabled={busy}
+                  onChange={(event) => setLanguage(event.target.value as LanguageChoice)}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="ru">Russian</option>
+                  <option value="en">English</option>
+                </select>
+                <button type="button" className="btn" disabled={busy} onClick={transcribe}>
+                  {busy ? "Queueing…" : entry.has_transcript ? "Re-transcribe" : "Transcribe"}
+                </button>
+              </span>
             )}
             {entry.has_transcript && (
               <>
@@ -214,12 +261,7 @@ export function RecordingPage({
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={!entry.project || activeLlmJobs.includes("action_items")}
-                  title={
-                    entry.project
-                      ? undefined
-                      : "File this recording under a project first — action items are stored per project"
-                  }
+                  disabled={activeLlmJobs.includes("action_items")}
                   onClick={() => void runLlm((id) => onExtract(id, "action_items"))}
                 >
                   {activeLlmJobs.includes("action_items") ? "Extracting…" : "Action items"}
@@ -227,12 +269,7 @@ export function RecordingPage({
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  disabled={!entry.project || activeLlmJobs.includes("facts")}
-                  title={
-                    entry.project
-                      ? undefined
-                      : "File this recording under a project first — facts are stored per project"
-                  }
+                  disabled={activeLlmJobs.includes("facts")}
                   onClick={() => void runLlm((id) => onExtract(id, "facts"))}
                 >
                   {activeLlmJobs.includes("facts") ? "Extracting…" : "Facts"}

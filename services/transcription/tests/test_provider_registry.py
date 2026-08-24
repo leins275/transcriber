@@ -2,45 +2,62 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from fakes import FakeProvider
 
+import transcription.providers
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers import (
     get_provider,
-    known_provider_names,
     register,
     validate_provider_name,
 )
 from transcription.providers.base import CancelToken, TranscriptResult
 
 
+def _shipping_registry() -> ModuleType:
+    """Execute `transcription/providers/__init__.py` in a throwaway namespace.
+
+    The `register()` test hook mutates the process-wide registry, and other
+    test modules add fakes (`fake`, `broken`, ...) long before this one runs,
+    so the *shipping* registry content can only be asserted on a freshly
+    executed copy of the module. Deliberately not published to `sys.modules`.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_shipping_providers", Path(transcription.providers.__file__)
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_importing_providers_package_does_not_import_provider_libraries() -> None:
     sys.modules.pop("faster_whisper", None)
-    sys.modules.pop("litellm", None)
 
     import transcription.providers  # noqa: F401 (import is the point of the test)
 
     assert "faster_whisper" not in sys.modules
-    assert "litellm" not in sys.modules
 
 
-def test_known_provider_names_includes_local_and_cloud_without_importing_either() -> None:
-    """E15: checking registry membership must never import a provider
-    library -- callers on the event loop (`JobManager.submit`) rely on this
-    to reject a bogus name cheaply, before deferring real resolution off
-    the event loop."""
+def test_known_provider_names_is_local_only_without_importing_the_model_library() -> None:
+    """FR-1: `local` is the only shipping provider -- the cloud one is gone.
+
+    E15: checking registry membership must never import a provider library --
+    callers on the event loop (`JobManager.submit`) rely on this to reject a
+    bogus name cheaply, before deferring real resolution off the event loop.
+    """
     sys.modules.pop("faster_whisper", None)
-    sys.modules.pop("litellm", None)
 
-    names = known_provider_names()
+    names = _shipping_registry().known_provider_names()
 
-    assert {"local", "cloud"} <= names
+    assert names == frozenset({"local"})
     assert "faster_whisper" not in sys.modules
-    assert "litellm" not in sys.modules
 
 
 def test_validate_provider_name_accepts_known_and_rejects_unknown() -> None:
@@ -51,6 +68,17 @@ def test_validate_provider_name_accepts_known_and_rejects_unknown() -> None:
     assert exc_info.value.kind == ErrorKind.INVALID_REQUEST
 
 
+def test_validate_provider_name_rejects_cloud_naming_the_known_providers() -> None:
+    """FR-1: a leftover `provider: "cloud"` is an explicit invalid_request."""
+    with pytest.raises(ServiceError) as exc_info:
+        _shipping_registry().validate_provider_name("cloud")
+
+    err = exc_info.value
+    assert err.kind == ErrorKind.INVALID_REQUEST
+    assert "cloud" in err.message
+    assert "known providers: local" in err.message
+
+
 def test_get_provider_unknown_name_raises_invalid_request_naming_known_names() -> None:
     with pytest.raises(ServiceError) as exc_info:
         get_provider("nope", None)
@@ -58,7 +86,6 @@ def test_get_provider_unknown_name_raises_invalid_request_naming_known_names() -
     err = exc_info.value
     assert err.kind == ErrorKind.INVALID_REQUEST
     assert "local" in err.message
-    assert "cloud" in err.message
 
 
 def test_register_then_get_provider_returns_the_registered_fake() -> None:

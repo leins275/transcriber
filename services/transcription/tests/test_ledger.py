@@ -175,6 +175,44 @@ def test_local_success_leaves_one_succeeded_row(tmp_path: Path) -> None:
         ledger.close()
 
 
+def test_finish_succeeded_records_the_actual_decode_language(tmp_path: Path) -> None:
+    """FR-4: a row inserted with no requested language is corrected to the
+    language the decode actually used."""
+    ledger = Ledger(tmp_path / "jobs.sqlite3")
+    try:
+        _insert(ledger, "job-1", language=None)
+        ledger.mark_running("job-1")
+        ledger.finish_succeeded(
+            "job-1",
+            elapsed_sec=2.5,
+            audio_duration_sec=5.0,
+            segment_count=3,
+            language="en",
+        )
+
+        row = ledger.get_job("job-1")
+        assert row is not None
+        assert row["language"] == "en"
+    finally:
+        ledger.close()
+
+
+def test_finish_succeeded_without_language_leaves_the_inserted_value(tmp_path: Path) -> None:
+    """The LLM job types never pass a language; their rows must not be
+    blanked out by the FR-4 update."""
+    ledger = Ledger(tmp_path / "jobs.sqlite3")
+    try:
+        _insert(ledger, "job-1", language="ru")
+        ledger.mark_running("job-1")
+        ledger.finish_succeeded("job-1", elapsed_sec=1.5, result_json='{"artifacts": []}')
+
+        row = ledger.get_job("job-1")
+        assert row is not None
+        assert row["language"] == "ru"
+    finally:
+        ledger.close()
+
+
 def test_finish_failed_records_error_kind_and_elapsed(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "jobs.sqlite3")
     try:
@@ -212,13 +250,16 @@ def test_finish_cancelled_records_error_kind_cancelled(tmp_path: Path) -> None:
         ledger.close()
 
 
-def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None:
+def test_reported_cost_is_stored_and_an_unreported_one_stays_null(tmp_path: Path) -> None:
+    """The `cost_usd`/`currency` columns are part of the ledger contract the
+    desktop reads. A job that reports a cost stores it; a job that reports
+    none (every local run) leaves the column NULL -- never 0.0."""
     ledger = Ledger(tmp_path / "jobs.sqlite3")
     try:
-        _insert(ledger, "job-cloud", provider="cloud")
-        ledger.mark_running("job-cloud")
+        _insert(ledger, "job-with-cost", provider="local")
+        ledger.mark_running("job-with-cost")
         ledger.finish_succeeded(
-            "job-cloud",
+            "job-with-cost",
             elapsed_sec=1.0,
             audio_duration_sec=2.0,
             segment_count=1,
@@ -226,10 +267,10 @@ def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None
             currency="USD",
         )
 
-        _insert(ledger, "job-local", provider="local")
-        ledger.mark_running("job-local")
+        _insert(ledger, "job-without-cost", provider="local")
+        ledger.mark_running("job-without-cost")
         ledger.finish_succeeded(
-            "job-local",
+            "job-without-cost",
             elapsed_sec=1.0,
             audio_duration_sec=2.0,
             segment_count=1,
@@ -237,15 +278,15 @@ def test_cloud_success_stores_cost_and_local_stores_null(tmp_path: Path) -> None
 
         raw = sqlite3.connect(ledger.db_path)
         try:
-            cloud_row = raw.execute(
-                "SELECT cost_usd, currency FROM jobs WHERE job_id = ?", ("job-cloud",)
+            costed_row = raw.execute(
+                "SELECT cost_usd, currency FROM jobs WHERE job_id = ?", ("job-with-cost",)
             ).fetchone()
-            assert isinstance(cloud_row[0], float)
-            assert cloud_row[0] == pytest.approx(0.006)
-            assert cloud_row[1] == "USD"
+            assert isinstance(costed_row[0], float)
+            assert costed_row[0] == pytest.approx(0.006)
+            assert costed_row[1] == "USD"
 
             (is_null,) = raw.execute(
-                "SELECT cost_usd IS NULL FROM jobs WHERE job_id = ?", ("job-local",)
+                "SELECT cost_usd IS NULL FROM jobs WHERE job_id = ?", ("job-without-cost",)
             ).fetchone()
             assert is_null == 1
         finally:

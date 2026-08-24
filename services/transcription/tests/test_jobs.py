@@ -17,11 +17,13 @@ from typing import ClassVar
 import pytest
 from fakes import FakeProvider
 
+from transcription import jobs as jobs_module
 from transcription import providers
 from transcription.config import Config
 from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import TERMINAL_STATUSES, JobManager, JobNotFoundError
 from transcription.ledger import Ledger
+from transcription.llm import BUILTIN_ENGINE
 from transcription.providers.base import CancelToken, TranscriptResult
 
 
@@ -308,6 +310,70 @@ async def test_success_writes_transcript_and_succeeded_ledger_row(
     assert row["cost_usd"] is None
 
 
+@pytest.mark.parametrize(("requested", "would_detect"), [("en", "ru"), ("ru", "en")])
+async def test_explicit_language_reaches_the_provider_and_is_recorded(
+    manager: JobManager,
+    ledger: Ledger,
+    audio_file: Path,
+    output_dir: Path,
+    requested: str,
+    would_detect: str,
+) -> None:
+    """FR-2/FR-4: an explicit language is handed to the provider, and both
+    `transcript.json` and the ledger row record it."""
+    # The fake would "detect" the *other* language if left to itself, so a
+    # passing assertion can only come from the explicit request winning.
+    provider = FakeProvider(language=would_detect)
+    providers.register("fake", lambda config: provider)
+
+    job_id = await manager.submit(
+        audio_path=str(audio_file),
+        output_dir=str(output_dir),
+        provider="fake",
+        language=requested,
+    )
+    await _wait_until_terminal(manager, job_id)
+
+    assert provider.seen_language == requested
+
+    doc = json.loads((output_dir / "transcript.json").read_text(encoding="utf-8"))
+    assert doc["language"] == requested
+
+    row = ledger.get_job(job_id)
+    assert row is not None
+    assert row["language"] == requested
+
+
+async def test_auto_language_job_records_the_decoded_language(
+    manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    """FR-4: with no requested language the ledger row is inserted `NULL` and
+    then corrected to the language the decode actually used."""
+    provider = FakeProvider(language="ru", language_probability=0.9)
+    providers.register("fake", lambda config: provider)
+
+    job_id = await manager.submit(
+        audio_path=str(audio_file), output_dir=str(output_dir), provider="fake"
+    )
+    # No await between submit and here: the worker cannot have run yet.
+    queued_row = ledger.get_job(job_id)
+    assert queued_row is not None
+    assert queued_row["language"] is None
+
+    await _wait_until_terminal(manager, job_id)
+
+    assert provider.seen_language is None
+
+    doc = json.loads((output_dir / "transcript.json").read_text(encoding="utf-8"))
+    assert doc["language"] == "ru"
+    assert doc["language_probability"] == pytest.approx(0.9)
+
+    row = ledger.get_job(job_id)
+    assert row is not None
+    assert row["language"] == "ru"
+    assert manager.status(job_id).language == "ru"
+
+
 async def test_provider_failure_produces_failed_row_and_no_transcript(
     manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:
@@ -482,6 +548,80 @@ async def test_submit_with_unknown_provider_raises_invalid_request_and_creates_n
     assert ledger.list_jobs() == []
 
 
+def _stray_engine_selector(config: Config, value: str) -> None:
+    """Put a leftover `llm_provider` value on a (frozen) `Config`.
+
+    Stands in for an installed `config.json` that still carries the removed
+    key: the job manager must ignore it entirely and run the built-in engine
+    (FR-3). `object.__setattr__` because `Config` is frozen.
+    """
+    object.__setattr__(config, "llm_provider", value)
+
+
+async def test_llm_job_without_a_provider_resolves_to_the_builtin_engine(
+    config: Config, ledger: Ledger, tmp_app_dir: Path, output_dir: Path
+) -> None:
+    """FR-3: a derived job with no explicit provider runs on `BUILTIN_ENGINE`,
+    with no config-file engine selector anywhere in the resolution."""
+    _stray_engine_selector(config, "openai_compat")
+    meeting = tmp_app_dir / "vault" / "PRJ" / "260101 - Planning"
+    meeting.mkdir(parents=True)
+    (meeting / "transcript.json").write_text(
+        json.dumps({"schema_version": 1, "text": "hi", "segments": []}), encoding="utf-8"
+    )
+    # No `start()`: `submit()` only validates and enqueues, so nothing here
+    # ever resolves (or imports) a real LLM engine.
+    manager = JobManager(config, ledger)
+    try:
+        job_id = await manager.submit(
+            job_type="summarize", input_path=str(meeting), output_dir=str(output_dir)
+        )
+    finally:
+        await manager.aclose()
+
+    assert manager.status(job_id).provider == BUILTIN_ENGINE
+    row = ledger.get_job(job_id)
+    assert row is not None
+    assert row["provider"] == BUILTIN_ENGINE
+
+
+async def test_the_default_llm_factory_asks_the_registry_for_the_builtin_engine(
+    config: Config, ledger: Ledger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-3: the engine factory names `BUILTIN_ENGINE` itself instead of
+    reading a selector off the config."""
+    _stray_engine_selector(config, "openai_compat")
+    requested: list[str] = []
+    sentinel = object()
+
+    def fake_get_llm_provider(name: str, cfg: Config) -> object:
+        requested.append(name)
+        return sentinel
+
+    monkeypatch.setattr(jobs_module, "get_llm_provider", fake_get_llm_provider)
+    manager = JobManager(config, ledger)
+    try:
+        engine = manager._get_llm()
+    finally:
+        await manager.aclose()
+
+    assert requested == [BUILTIN_ENGINE]
+    assert engine is sentinel
+
+
+def test_llm_info_reports_the_builtin_gguf_presence_and_no_engine_selector(
+    config: Config, ledger: Ledger
+) -> None:
+    """FR-3: `/health`'s LLM block drops the `llm_provider` key and always
+    answers `llm_model_present` from the configured GGUF file on disk."""
+    _stray_engine_selector(config, "openai_compat")
+    # `llm_info()` is the cheap `/health` snapshot: it never constructs an
+    # engine, so this manager needs neither a worker nor a teardown.
+    info = JobManager(config, ledger).llm_info()
+
+    assert info == {"llm_model": config.llm_model, "llm_model_present": False}
+
+
 async def test_worker_loop_survives_run_job_raising_and_keeps_draining_queue(
     manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:
@@ -522,9 +662,9 @@ async def test_worker_loop_survives_run_job_raising_and_keeps_draining_queue(
     assert crash_row["error_kind"] == "internal"
 
 
-class CloudShapedProvider(FakeProvider):
-    """Emits segments with a cloud provider's shape (E2): confidence fields
-    missing/`None` when the upstream API doesn't return them."""
+class NoConfidenceProvider(FakeProvider):
+    """Emits segments with the confidence fields missing/`None` (E2) -- the
+    shape of any provider that does not report them."""
 
     def transcribe(
         self,
@@ -558,13 +698,13 @@ class CloudShapedProvider(FakeProvider):
         )
 
 
-async def test_cloud_shaped_none_confidence_segments_reach_succeeded_not_stuck_running(
+async def test_none_confidence_segments_reach_succeeded_not_stuck_running(
     manager: JobManager, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:
-    """E2: a provider that legitimately omits confidence fields (the cloud
-    provider's real shape) must not hang the job in `running` -- `Segment`
-    must accept `None` for those three fields."""
-    providers.register("fake", CloudShapedProvider)
+    """E2: a provider that legitimately omits the confidence fields must not
+    hang the job in `running` -- `Segment` must accept `None` for those
+    three fields."""
+    providers.register("fake", NoConfidenceProvider)
 
     job_id = await manager.submit(
         audio_path=str(audio_file), output_dir=str(output_dir), provider="fake"

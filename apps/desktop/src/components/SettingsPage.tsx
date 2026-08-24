@@ -144,7 +144,7 @@ export function SettingsPage({
                   ? "Summaries currently run on CPU. Enabling GPU acceleration downloads the " +
                     "CUDA build of the local runtime and offloads as much of the model as " +
                     "fits in your GPU's memory."
-                  : "Summaries, action items, facts and project reports run on this machine."}
+                  : "Summaries, action items and facts run on this machine."}
               </p>
             </>
           ) : llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying" ? (
@@ -168,8 +168,8 @@ export function SettingsPage({
                 <p className={styles.warning}>{llmModelStatus.error_message}</p>
               )}
               <p className={styles.hint}>
-                Needed for summaries, action items, facts and project reports. Everything runs
-                locally; nothing leaves this machine.
+                Needed for summaries, action items and facts. Everything runs locally; nothing
+                leaves this machine.
               </p>
             </>
           )}

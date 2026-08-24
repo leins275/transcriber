@@ -18,18 +18,18 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # The job-type discriminator. `transcribe` is the original (and default) job;
 # the rest are the derived-knowledge jobs added by the LLM feature:
 # `summarize`/`action_items`/`facts` read a meeting folder's transcript.json,
-# `report` reads a whole project folder, and `export` deterministically
-# assembles one meeting's existing materials into a PDF (no LLM call).
-JobType = Literal["transcribe", "summarize", "action_items", "facts", "report", "export"]
+# and `export` deterministically assembles one meeting's existing materials
+# into a PDF (no LLM call).
+JobType = Literal["transcribe", "summarize", "action_items", "facts", "export"]
 
 
 class Segment(BaseModel):
     """One transcript segment, in vexa's ``verbose_json`` mapper shape (FR-6).
 
-    The three confidence fields are ``Optional``: the local provider always
-    populates them, but a cloud STT provider legitimately omits them when
-    the upstream API doesn't return them -- they must never be fabricated
-    (FR-6, FR-4 acceptance: cloud and local jobs share one schema).
+    The three confidence fields are ``Optional``: the local provider
+    populates them, but a provider that does not report per-segment
+    confidence legitimately leaves them unset -- they must never be
+    fabricated (FR-6, FR-4 acceptance: every provider shares one schema).
     """
 
     id: int
@@ -123,16 +123,19 @@ class JobCreate(BaseModel):
 
     A ``transcribe`` job (the default, so pre-feature clients are untouched)
     takes ``audio_path``; every other job type takes ``input_path`` -- the
-    meeting folder (``summarize``/``action_items``/``facts``/``export``) or
-    the project folder (``report``) it reads. Exactly one of the two must be
-    supplied, matching the job type.
+    meeting folder (``summarize``/``action_items``/``facts``/``export``) it
+    reads. Exactly one of the two must be supplied, matching the job type.
     """
 
     job_type: JobType = "transcribe"
     audio_path: str | None = Field(default=None, min_length=1)
     input_path: str | None = Field(default=None, min_length=1)
     output_dir: str = Field(min_length=1)
-    language: str | None = None
+    # The operator's language universe is exactly {ru, en} (FR-3); anything
+    # else -- including `""` -- is rejected here, before `JobManager.submit`,
+    # so an invalid request never leaves a ledger row behind (NFR-3).
+    # `None` (or an omitted field) means constrained auto-detection (FR-1).
+    language: Literal["ru", "en"] | None = None
     provider: str | None = None
     model: str | None = None
     meeting: dict[str, Any] | None = None

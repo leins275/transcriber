@@ -20,7 +20,7 @@ from typing import Any
 
 # Keys that must never be settable from an argv-shaped override (FR-9): credentials
 # come from the environment or the config file only, never from a CLI flag.
-_SECRET_KEYS = frozenset({"provider_api_key", "token", "hf_token", "llm_api_key"})
+_SECRET_KEYS = frozenset({"token", "hf_token"})
 
 _TRUE_STRINGS = frozenset({"1", "true", "yes"})
 
@@ -42,6 +42,11 @@ _VAULT_ROOT_KEY = "vault_root"
 # being copied through the generic loop.
 _MODEL_KEY = "model"
 
+# The operator's language universe is exactly these two (F2 FR-3); anything
+# else -- from the config file, `TRANSCRIBER_LANGUAGE`, or `--language` -- is
+# a configuration error rather than a value handed to the decoder.
+_ALLOWED_LANGUAGES = ("ru", "en")
+
 
 class ConfigError(Exception):
     """Raised when configuration cannot be loaded (e.g. malformed config file)."""
@@ -58,8 +63,6 @@ class Config:
     device: str = "auto"
     compute_type: str | None = None
     provider: str = "local"
-    cloud_model: str | None = None
-    provider_api_key: str | None = None
     db_path: str = ""
     allowed_roots: tuple[str, ...] = field(default_factory=tuple)
     # Hard-pinned (FR-9): `load_config` excludes this key from the config
@@ -100,16 +103,11 @@ class Config:
     # only (TRANSCRIBER_HF_TOKEN, else HF_TOKEN/HUGGING_FACE_HUB_TOKEN),
     # never argv (FR-9).
     hf_token: str | None = None
-    max_cloud_upload_mb: int = 25
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
-    # --- Local LLM (summaries / action items / facts / reports) ---
-    # Which LLM engine runs the derived-knowledge jobs: "llama_cpp" (built-in,
-    # the default) or "openai_compat" (an external OpenAI-compatible server
-    # such as LM Studio or Ollama, reached via `llm_base_url`).
-    llm_provider: str = "llama_cpp"
-    # Display/model id. For `llama_cpp` this names the local GGUF snapshot;
-    # for `openai_compat` it is the model name sent to the server.
+    # --- Local LLM (summaries / action items / facts) ---
+    # Display/model id: it names the local GGUF snapshot the built-in
+    # llama.cpp engine loads.
     llm_model: str = "qwen3.6-35b-a3b"
     # Where GGUF snapshots live; empty means `<app_dir>/models/llm`.
     llm_model_path: str = ""
@@ -134,37 +132,28 @@ class Config:
     llm_threads: int | None = None
     llm_temperature: float = 0.3
     llm_max_output_tokens: int = 4096
-    # openai_compat only: the server to call, e.g. "http://127.0.0.1:1234/v1".
-    llm_base_url: str | None = None
-    # openai_compat only; env (TRANSCRIBER_LLM_API_KEY) or config file, never
-    # argv (FR-9). Local servers usually accept any value.
-    llm_api_key: str | None = None
     # Keep the GGUF model resident between LLM jobs. Off by default so the
     # ~20 GB working set is released and never sits next to a loaded whisper
     # model; reloading is mmap-fast.
     llm_keep_loaded: bool = False
 
     def public(self) -> dict[str, Any]:
-        """What ``/health`` and logs may show: no token, no API key (FR-9)."""
+        """What ``/health`` and logs may show: no token (FR-9)."""
         return {
             "provider": self.provider,
             "model": self.model,
             "device": self.device,
             "compute_type": self.compute_type,
-            "cloud_model": self.cloud_model,
             "language": self.language,
             "filter_hallucinations": self.filter_hallucinations,
             "word_timestamps": self.word_timestamps,
             "diarize": self.diarize,
             "diarization_model": self.diarization_model,
             "batch_size": self.batch_size,
-            "max_cloud_upload_mb": self.max_cloud_upload_mb,
             "log_level": self.log_level,
-            "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
             "llm_ctx": self.llm_ctx,
             "llm_gpu_layers": self.llm_gpu_layers,
-            "llm_base_url": self.llm_base_url,
         }
 
 
@@ -192,6 +181,26 @@ def _parse_bool(value: object) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in _TRUE_STRINGS
+
+
+def _normalize_language(value: object) -> str | None:
+    """Normalize a layered ``language`` value, rejecting anything but ru/en.
+
+    Unset and empty (``None``, ``""``, whitespace) mean "no explicit language"
+    -- constrained auto-detection, not an error (FR-3).
+    """
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _ALLOWED_LANGUAGES:
+        allowed = ", ".join(repr(code) for code in _ALLOWED_LANGUAGES)
+        raise ConfigError(
+            f"invalid language {str(value)!r}: allowed values are {allowed}, or unset for "
+            f"automatic detection"
+        )
+    return normalized
 
 
 def _env_value(env: Mapping[str, str], key: str) -> str | None:
@@ -284,19 +293,9 @@ def load_config(
     if "TRANSCRIBER_ALLOWED_ROOTS" in env:
         allowed_roots = env["TRANSCRIBER_ALLOWED_ROOTS"].split(os.pathsep)
 
-    # provider_api_key: env only (TRANSCRIBER_PROVIDER_API_KEY, else the provider's
-    # own conventional env var), never the config file.
-    provider_api_key = (
-        env.get("TRANSCRIBER_PROVIDER_API_KEY")
-        or env.get("OPENAI_API_KEY")
-        or env.get("GROQ_API_KEY")
-    )
-    if provider_api_key is not None:
-        values["provider_api_key"] = provider_api_key
-
-    # hf_token: env only, same rule as provider_api_key -- the generic
-    # TRANSCRIBER_HF_TOKEN pickup above already applied; this adds the
-    # huggingface_hub-conventional variables as fallbacks.
+    # hf_token: env only, never argv (FR-9) -- the generic TRANSCRIBER_HF_TOKEN
+    # pickup above already applied; this adds the huggingface_hub-conventional
+    # variables as fallbacks.
     if not values.get("hf_token"):
         hf_token = env.get("HF_TOKEN") or env.get("HUGGING_FACE_HUB_TOKEN")
         if hf_token:
@@ -311,11 +310,6 @@ def load_config(
 
     values["allowed_roots"] = tuple(allowed_roots)
 
-    # llm_api_key: env only as far as ambient variables go (the generic
-    # TRANSCRIBER_LLM_API_KEY pickup above already applied); the config file
-    # may also carry it, like provider_api_key. No extra fallbacks: local
-    # OpenAI-compatible servers rarely check the key at all.
-
     if "db_path" not in values or not values["db_path"]:
         values["db_path"] = str(app_dir / "data" / "jobs.sqlite3")
     if "model_path" not in values or not values["model_path"]:
@@ -326,10 +320,13 @@ def load_config(
     if "compute_type" in values and values["compute_type"] in (None, ""):
         values["compute_type"] = None
 
+    # Validated after every layer has merged, so a valid override can replace
+    # an invalid config-file/env value (and an invalid override always loses).
+    if "language" in values:
+        values["language"] = _normalize_language(values["language"])
+
     if "port" in values:
         values["port"] = int(values["port"])
-    if "max_cloud_upload_mb" in values:
-        values["max_cloud_upload_mb"] = int(values["max_cloud_upload_mb"])
     if "job_timeout_sec" in values and values["job_timeout_sec"] is not None:
         values["job_timeout_sec"] = int(values["job_timeout_sec"])
     if "filter_hallucinations" in values:
@@ -360,8 +357,6 @@ def load_config(
         values["llm_temperature"] = float(values["llm_temperature"])
     if "llm_keep_loaded" in values:
         values["llm_keep_loaded"] = _parse_bool(values["llm_keep_loaded"])
-    if "llm_base_url" in values and values["llm_base_url"] in (None, ""):
-        values["llm_base_url"] = None
 
     token = values.get("token") or secrets.token_hex(32)
     values["token"] = token

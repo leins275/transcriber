@@ -1,7 +1,7 @@
 [project]
 name = "transcription"
 version = "0.9.0"
-description = "Standalone transcription microservice: local faster-whisper + litellm cloud providers, over localhost HTTP and a one-shot CLI."
+description = "Standalone transcription microservice: local faster-whisper + built-in llama.cpp LLM, over localhost HTTP and a one-shot CLI."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,7 +9,6 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   "pydantic>=2.7",
   "faster-whisper>=1.2,<2",
-  "litellm>=1.60",
   "h11>=0.16",
   "huggingface_hub>=0.35",
   # Markdown -> HTML -> PDF for reports and exports (pure-python stack).
@@ -67,6 +66,14 @@ dev = [
   "httpx>=0.27,<1",
   "ruff>=0.6",
   "mypy>=1.11",
+  # Reads rendered PDFs back in tests/pdf_asserts.py (which fonts a page
+  # embeds, what text extracts). Already in the tree as xhtml2pdf's own
+  # dependency; declared here because the tests import it directly.
+  "pypdf>=3",
+  # Dev-only: the front-matter contract test round-trips a written artifact
+  # through a REAL YAML parser (NFR-1), proving the `key: <json>` block is a
+  # strict YAML subset. Production code stays YAML-dependency-free.
+  "pyyaml>=6",
 ]
 
 [tool.uv]

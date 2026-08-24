@@ -17,17 +17,15 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AppError,
-  ArtifactContentView,
   ArtifactKind,
-  ArtifactView,
   JobSnapshot,
   LedgerJobView,
   LlmModelDownloadStatus,
   MeetingUpdate,
-  ReportView,
   ServiceStatusView,
   SettingsView,
   SummaryView,
+  TranscriptLanguage,
   TranscriptView,
   VaultMeetingView,
 } from "./types";
@@ -93,9 +91,12 @@ export const api = {
     call<SummaryView>("read_summary", { entryId }),
   /** Re-runs transcription over a recording already filed in the vault --
    * never a second ingest, which would file a duplicate under a suffixed
-   * name. */
-  transcribeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
-    call<JobSnapshot>("transcribe_vault_entry", { entryId }),
+   * name. `language` is the operator's per-recording override; `null` leaves
+   * the service on its constrained {ru, en} auto-detection. */
+  transcribeVaultEntry: (
+    entryId: string,
+    language: TranscriptLanguage | null,
+  ): Promise<JobSnapshot> => call<JobSnapshot>("transcribe_vault_entry", { entryId, language }),
   /** Resolves `false` when there was nothing left to cancel (the job never
    * reached the service, or already finished) -- information, not an error. */
   cancelJob: (jobId: string): Promise<boolean> => call<boolean>("cancel_job", { jobId }),
@@ -119,29 +120,15 @@ export const api = {
   cancelModelDownload: (): Promise<ModelDownloadStatus> =>
     call<ModelDownloadStatus>("cancel_model_download"),
   // LLM feature (additive): derived jobs over already-transcribed material,
-  // project-artifact browsing, and the GGUF model-download trio. Meetings
-  // are named by their vault-entry id, projects by their validated code --
-  // never by a path.
+  // plus the GGUF model-download trio. Meetings are named by their
+  // vault-entry id -- never by a path. What those jobs write is read in the
+  // vault folder itself; the app browses none of it.
   summarizeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("summarize_vault_entry", { entryId }),
   extractVaultEntry: (entryId: string, kind: ArtifactKind): Promise<JobSnapshot> =>
     call<JobSnapshot>("extract_vault_entry", { entryId, kind }),
   exportRecording: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("export_recording", { entryId }),
-  exportProjectEssence: (project: string): Promise<JobSnapshot> =>
-    call<JobSnapshot>("export_project_essence", { project }),
-  listProjectArtifacts: (project: string, kind: ArtifactKind): Promise<ArtifactView[]> =>
-    call<ArtifactView[]>("list_project_artifacts", { project, kind }),
-  readArtifact: (project: string, kind: ArtifactKind, slug: string): Promise<ArtifactContentView> =>
-    call<ArtifactContentView>("read_artifact", { project, kind, slug }),
-  revealArtifact: (project: string, kind: ArtifactKind, slug: string): Promise<void> =>
-    call<void>("reveal_artifact", { project, kind, slug }),
-  listProjectReports: (project: string): Promise<ReportView[]> =>
-    call<ReportView[]>("list_project_reports", { project }),
-  readReport: (project: string, name: string): Promise<string> =>
-    call<string>("read_report", { project, name }),
-  revealReport: (project: string, name: string): Promise<void> =>
-    call<void>("reveal_report", { project, name }),
   llmModelDownloadStatus: (): Promise<LlmModelDownloadStatus> =>
     call<LlmModelDownloadStatus>("llm_model_download_status"),
   startLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>

@@ -310,6 +310,66 @@ def test_get_job_status_hydrates_from_ledger_after_restart(tmp_app_dir: Path) ->
     assert body["provider"] == "fake"
 
 
+@pytest.mark.parametrize("language", ["de", ""])
+def test_post_job_with_an_unsupported_language_is_rejected_before_any_ledger_row(
+    config: Config, audio_file: Path, tmp_app_dir: Path, language: str
+) -> None:
+    """FR-3/NFR-3: only `ru`, `en` or unset are accepted; anything else is an
+    `invalid_request` rejected *before* `JobManager.submit`, so no ledger row
+    and no job exist afterwards."""
+    providers.register("fake", FakeProvider)
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "audio_path": str(audio_file),
+                "output_dir": str(tmp_app_dir / "out"),
+                "language": language,
+            },
+            headers=AUTH,
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error_kind"] == "invalid_request"
+
+        listed = client.get("/v1/jobs", headers=AUTH)
+        assert listed.status_code == 200
+        assert listed.json() == []
+
+    ledger = Ledger(config.db_path)
+    try:
+        assert ledger.list_jobs() == []
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize("language", ["ru", "en", None])
+def test_post_job_accepts_the_supported_languages_and_omission(
+    config: Config, audio_file: Path, tmp_app_dir: Path, language: str | None
+) -> None:
+    """FR-3: `ru`, `en` and an omitted field all create a job."""
+    providers.register("fake", FakeProvider)
+    app = create_app(config)
+
+    with TestClient(app) as client:
+        body: dict[str, str] = {
+            "audio_path": str(audio_file),
+            "output_dir": str(tmp_app_dir / "out"),
+        }
+        if language is not None:
+            body["language"] = language
+
+        response = client.post("/v1/jobs", json=body, headers=AUTH)
+
+        assert response.status_code == 202, response.text
+        job_id = response.json()["job_id"]
+        assert client.get(f"/v1/jobs/{job_id}", headers=AUTH).status_code == 200
+
+        _poll_until_terminal(client, job_id)
+
+
 def test_startup_reconciles_a_pre_seeded_running_row_to_failed(tmp_app_dir: Path) -> None:
     db_path = tmp_app_dir / "data" / "jobs.sqlite3"
     seed_ledger = Ledger(str(db_path))

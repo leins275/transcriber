@@ -49,8 +49,8 @@ EXIT_CODES: dict[ErrorKind, int] = {
     ErrorKind.INTERNAL: 1,
 }
 
-# Config fields settable from a shared CLI flag; deliberately excludes
-# `token`/`provider_api_key` -- credentials never come from argv (FR-9).
+# Config fields settable from a shared CLI flag; deliberately excludes the
+# credentials `token`/`hf_token` -- those never come from argv (FR-9).
 _OVERRIDE_FIELDS = (
     "provider",
     "model",

@@ -1,8 +1,8 @@
 """LLM engine registry: name -> "module:Class" strings, resolved lazily.
 
 The exact shape of ``providers/__init__.py`` (FR-4, NFR-1, NFR-6): importing
-this package alone never pulls in ``llama_cpp`` or ``litellm`` -- the
-concrete engine module is imported only inside :func:`get_llm_provider`.
+this package alone never pulls in ``llama_cpp`` -- the concrete engine module
+is imported only inside :func:`get_llm_provider`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ BUILTIN_ENGINE = "llama_cpp"
 
 _REGISTRY: dict[str, str | type] = {
     BUILTIN_ENGINE: "transcription.llm.llama_cpp_local:LlamaCppProvider",
-    "openai_compat": "transcription.llm.openai_compat:OpenAICompatProvider",
 }
 
 
@@ -41,7 +40,7 @@ def validate_llm_provider_name(name: str) -> None:
 
     Membership in ``_REGISTRY`` never imports an engine module, so a bogus
     name is rejected before any job/ledger row exists without paying for a
-    ``llama_cpp``/``litellm`` import on the request path (E1, E15).
+    ``llama_cpp`` import on the request path (E1, E15).
     """
     if name not in _REGISTRY:
         known = ", ".join(sorted(_REGISTRY))

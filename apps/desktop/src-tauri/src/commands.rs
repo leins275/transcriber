@@ -50,8 +50,8 @@ pub mod ledger;
 pub mod meetings;
 
 /// The LLM feature's commands (`src/commands/llm.rs`): derived jobs
-/// (summary, action items, facts, exports, reports), artifact browsing and
-/// the GGUF model-download trio.
+/// (summary, action items, facts, per-recording exports) and the GGUF
+/// model-download trio.
 pub mod llm;
 
 /// A defensive upper bound on a single dropped-path argument's length
@@ -1048,8 +1048,9 @@ pub async fn read_summary(
 pub async fn transcribe_vault_entry(
     state: tauri::State<'_, AppState>,
     entry_id: String,
+    language: Option<String>,
 ) -> Result<JobSnapshot, AppError> {
-    meetings::transcribe_vault_entry_handler(&state, &entry_id).await
+    meetings::transcribe_vault_entry_handler(&state, &entry_id, language).await
 }
 
 #[tauri::command]

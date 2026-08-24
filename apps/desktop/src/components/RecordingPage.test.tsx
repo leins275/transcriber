@@ -72,11 +72,38 @@ describe("RecordingPage", () => {
     renderPage();
 
     expect(await screen.findByText(/может еще/)).toBeInTheDocument();
-    // Date, duration, language, speaker count, model and device on one line.
+    // Date, duration, speaker count, model and device on one line; the
+    // language gets its own badge (below).
     expect(screen.getByText(/8m 11s/)).toBeInTheDocument();
-    expect(screen.getByText(/RU/)).toBeInTheDocument();
     expect(screen.getByText(/1 speaker/)).toBeInTheDocument();
     expect(screen.getByText(/large-v3/)).toBeInTheDocument();
+  });
+
+  it("names the language a transcript was decoded in", async () => {
+    renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "en" })) });
+
+    expect(await screen.findByLabelText("Language: English")).toHaveTextContent("English");
+  });
+
+  it("names a Russian transcript as Russian", async () => {
+    renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "ru" })) });
+
+    expect(await screen.findByLabelText("Language: Russian")).toHaveTextContent("Russian");
+  });
+
+  it("shows no language indicator and no placeholder for a legacy transcript that recorded none", async () => {
+    renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: null })) });
+    await screen.findByText(/может еще/);
+
+    expect(screen.queryByLabelText(/^Language:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/unknown|—/i)).not.toBeInTheDocument();
+  });
+
+  it("shows no indicator for a transcript in a language the app does not name", async () => {
+    renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "de" })) });
+    await screen.findByText(/может еще/);
+
+    expect(screen.queryByLabelText(/^Language:/)).not.toBeInTheDocument();
   });
 
   it("goes back to the library", async () => {
@@ -114,12 +141,52 @@ describe("RecordingPage", () => {
     renderPage({ entry: buildEntry({ id: "v-9", has_transcript: false }), onTranscribe });
     await user.click(screen.getByRole("button", { name: "Transcribe" }));
 
-    expect(onTranscribe).toHaveBeenCalledWith("v-9");
+    expect(onTranscribe).toHaveBeenCalledWith("v-9", null);
   });
 
   it("offers no transcription for a meeting whose recording is gone", () => {
     renderPage({ entry: buildEntry({ has_source: false }) });
     expect(screen.queryByRole("button", { name: /transcribe/i })).not.toBeInTheDocument();
+  });
+
+  it("transcribes in Auto by default, sending no language override", async () => {
+    const onTranscribe = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
+
+    const control = screen.getByLabelText(/transcript language/i);
+    expect(control).toHaveValue("auto");
+
+    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+
+    expect(onTranscribe).toHaveBeenCalledWith("v-9", null);
+  });
+
+  it("re-transcribes in English when the operator picks English", async () => {
+    const onTranscribe = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
+
+    await user.selectOptions(screen.getByLabelText(/transcript language/i), "en");
+    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+
+    expect(onTranscribe).toHaveBeenCalledWith("v-9", "en");
+  });
+
+  it("re-transcribes in Russian when the operator picks Russian", async () => {
+    const onTranscribe = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
+
+    await user.selectOptions(screen.getByLabelText(/transcript language/i), "ru");
+    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+
+    expect(onTranscribe).toHaveBeenCalledWith("v-9", "ru");
+  });
+
+  it("offers no language control for a meeting whose recording is gone", () => {
+    renderPage({ entry: buildEntry({ has_source: false }) });
+    expect(screen.queryByLabelText(/transcript language/i)).not.toBeInTheDocument();
   });
 
   it("switches to the summary tab and reports there is none", async () => {
@@ -174,6 +241,40 @@ describe("RecordingPage", () => {
 
     await user.click(screen.getByRole("button", { name: /move to recycle bin/i }));
     expect(onDelete).toHaveBeenCalledWith("v-9");
+  });
+
+  it("extracts action items and facts from an unfiled recording", async () => {
+    const onExtract = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9", project: null }), onExtract });
+
+    const actionItems = screen.getByRole("button", { name: "Action items" });
+    const facts = screen.getByRole("button", { name: "Facts" });
+    expect(actionItems).toBeEnabled();
+    expect(facts).toBeEnabled();
+
+    await user.click(actionItems);
+    await user.click(facts);
+
+    expect(onExtract).toHaveBeenNthCalledWith(1, "v-9", "action_items");
+    expect(onExtract).toHaveBeenNthCalledWith(2, "v-9", "facts");
+  });
+
+  it("no longer tells an unfiled recording to be filed under a project first", () => {
+    renderPage({ entry: buildEntry({ project: null }) });
+
+    expect(screen.getByRole("button", { name: "Action items" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: "Facts" })).not.toHaveAttribute("title");
+    expect(
+      screen.queryByTitle(/file this recording under a project first/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables an extraction button while its own job is in flight", () => {
+    renderPage({ entry: buildEntry({ project: null }), activeLlmJobs: ["action_items"] });
+
+    expect(screen.getByRole("button", { name: "Extracting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Facts" })).toBeEnabled();
   });
 
   it("surfaces a transcript read failure on the page", async () => {

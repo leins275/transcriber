@@ -1,0 +1,3 @@
+{"batch": true, "phase": "done", "source": "specs/_intake/various-improvements/source.md", "batch_base_ref": "4098ac7a2057b86f72fe89b7e96aa5b335e7df56", "features": [],
+ "tier": "ultra", "strict_skills": {"planning": [], "development": []},
+ "mode": "fast", "deferred_qa": ["test"]}
