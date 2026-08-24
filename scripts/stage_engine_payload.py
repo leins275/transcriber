@@ -59,6 +59,14 @@ BACKENDS_SUBDIR = "runtime/engine/backends"
 ONNX_SUBDIR = "runtime/onnx"
 MODELS_SUBDIR = "models/diarization"
 
+# The tracked placeholder that keeps the resources directory present on a
+# clean checkout. Staging replaces the directory wholesale, which is right for
+# a build artifact -- but this one file is *tracked*, and removing it leaves
+# `git status` reporting a deletion nobody made and breaks the next
+# `cargo build` (tauri-build resolves bundle.resources on every build, and a
+# missing source path fails the crate compile).
+GITKEEP = ".gitkeep"
+
 
 class StageError(RuntimeError):
     """Aborts the stage with an operator-facing message."""
@@ -194,6 +202,9 @@ def stage(profile: str, cache: Path, resources: Path = RESOURCES) -> dict[str, o
     pins = read_pins()
     profile_dir, backends_src = find_build_outputs(profile)
 
+    placeholder = None
+    if (resources / GITKEEP).is_file():
+        placeholder = (resources / GITKEEP).read_bytes()
     if resources.exists():
         shutil.rmtree(resources)
     (resources / BACKENDS_SUBDIR).mkdir(parents=True)
@@ -227,6 +238,9 @@ def stage(profile: str, cache: Path, resources: Path = RESOURCES) -> dict[str, o
         target = resources / MODELS_SUBDIR / pin.file_name
         shutil.copy2(fetch(pin, cache), target)
         staged.append(f"{MODELS_SUBDIR}/{pin.file_name}")
+
+    if placeholder is not None:
+        (resources / GITKEEP).write_bytes(placeholder)
 
     total = sum(path.stat().st_size for path in resources.rglob("*") if path.is_file())
     manifest = {
