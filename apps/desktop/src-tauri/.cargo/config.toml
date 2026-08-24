@@ -9,3 +9,11 @@
 # no fallback is in effect.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# `knf-rs-sys` (pulled in by pyannote-rs) picks its MSVC runtime from its own
+# `KNF_STATIC_CRT`, not from `target-feature=+crt-static` above -- it defaults
+# to the dynamic CRT, and then its objects import `__imp_rand` while the rest
+# of the link uses `libcmt`, so linking the debug cdylib fails with LNK2019.
+# This has to stay in the same file as the flag it is matching.
+[env]
+KNF_STATIC_CRT = "1"

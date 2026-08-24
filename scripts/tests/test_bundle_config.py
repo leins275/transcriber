@@ -128,3 +128,18 @@ def test_cargo_config_sets_static_crt_for_msvc_target():
     text = CARGO_CONFIG_PATH.read_text(encoding="utf-8")
     assert re.search(r"\[target\.x86_64-pc-windows-msvc\]", text)
     assert "target-feature=+crt-static" in text
+
+
+def test_cargo_config_also_forces_the_static_crt_on_knf_rs_sys():
+    """`knf-rs-sys` (via pyannote-rs) picks its MSVC runtime from its own
+    `KNF_STATIC_CRT`, never from `target-feature=+crt-static`. Left at its
+    default it compiles against the dynamic CRT while the rest of the link
+    uses `libcmt`, and the link fails on `__imp_rand` / `__imp_sqrtf`.
+
+    The two settings have to travel together: dropping either one alone
+    either breaks the link or silently ships a binary that needs
+    VCRUNTIME140.dll, which is exactly what FR-9's crt-static is there to
+    avoid."""
+    text = CARGO_CONFIG_PATH.read_text(encoding="utf-8")
+    assert re.search(r"^\[env\]", text, re.MULTILINE)
+    assert re.search(r'^KNF_STATIC_CRT\s*=\s*"1"', text, re.MULTILINE)
