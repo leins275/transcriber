@@ -7,13 +7,16 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from transcription.artifacts import (
+    UNSORTED_DIR_NAME,
     fit_slug,
     list_items,
     parse_front_matter,
     render_front_matter,
     slugify,
+    source_date_from_meeting_name,
     unique_item_dir,
     write_item,
 )
@@ -307,3 +310,125 @@ def test_fit_slug_trims_against_the_260_char_budget() -> None:
     hopeless = Path("C:/v") / ("b" * 270)
     with pytest.raises(ServiceError):
         fit_slug(hopeless, "slug")
+
+
+# ------------------------------------------- front-matter field contract
+
+
+def test_unsorted_dir_name_mirrors_the_vault_crate() -> None:
+    # crates/vault/src/paths.rs: `pub const UNSORTED_DIR_NAME: &str = "unsorted";`
+    assert UNSORTED_DIR_NAME == "unsorted"
+
+
+def test_source_date_reads_the_meetings_leading_yymmdd_as_20xx() -> None:
+    assert source_date_from_meeting_name("260824 - standup") == "2026-08-24"
+    # The vault contract treats the six chars verbatim: no strptime("%y")
+    # 69-99 -> 19xx pivot.
+    assert source_date_from_meeting_name("990101 - x") == "2099-01-01"
+    # The prefix is what counts; whatever follows it is not our business.
+    assert source_date_from_meeting_name("260824standup") == "2026-08-24"
+
+
+def test_source_date_is_none_when_the_prefix_is_not_a_calendar_date() -> None:
+    assert source_date_from_meeting_name("Planning") is None
+    assert source_date_from_meeting_name("2608 - x") is None
+    assert source_date_from_meeting_name("") is None
+    assert source_date_from_meeting_name("261345 - x") is None  # month 13
+    assert source_date_from_meeting_name("260230 - x") is None  # Feb 30
+    # `str.isdigit()` is True for non-ASCII digits, which `int()` would happily
+    # accept; the vault's naming contract is ASCII.
+    assert source_date_from_meeting_name("\u0662\u0666\u0660\u0668\u0662\u0664 - x") is None
+
+
+def test_list_items_tolerates_obsidian_style_rewritten_front_matter(tmp_path: Path) -> None:
+    # What an external property editor leaves behind: reordered keys, an
+    # unknown key, YAML-quoted strings, `archived` flipped on.
+    item_dir = tmp_path / "action items" / "fix-login"
+    item_dir.mkdir(parents=True)
+    (item_dir / "fix-login.md").write_text(
+        '---\ntags: ["x"]\narchived: true\ntitle: "Quoted"\ntype: "task"\n'
+        "source_project: null\n---\n\n# Quoted\n\nBroken on refresh.\n",
+        encoding="utf-8",
+    )
+
+    (item,) = list_items(tmp_path / "action items")
+    assert item.meta == {
+        "tags": ["x"],
+        "archived": True,
+        "title": "Quoted",
+        "type": "task",
+        "source_project": None,
+    }
+    assert item.meta["archived"] is True  # JSON bool, not the string "true"
+    # Body intact apart from the leading blank line and the trailing newline
+    # that `splitlines()` normalises away.
+    assert item.body == "# Quoted\n\nBroken on refresh."
+
+
+def test_list_items_never_writes_to_the_files_it_reads(tmp_path: Path) -> None:
+    md_path = write_item(
+        tmp_path / "action items",
+        title="Fix login",
+        meta={"type": "task", "title": "Fix login", "archived": False},
+        body_md="Broken on refresh.",
+        images=[("screenshot-0010.png", b"\x89PNGfake")],
+    )
+    before = md_path.read_bytes()
+
+    assert len(list_items(tmp_path / "action items")) == 1
+
+    assert md_path.read_bytes() == before
+
+
+def test_parse_front_matter_never_raises_on_edited_or_garbled_text() -> None:
+    malformed = [
+        "",
+        "---",  # unterminated fence
+        "---\n",
+        "---\n---\n",
+        "---\nkey:\n---\nbody",  # key with no value
+        "---\narchived: yes\n---\n",  # YAML bool that is not JSON
+        "---\n: novalue\n---\n",  # empty key
+        "---\nno colon at all\n---\n",
+        "---\ntags: [x]\n---\n",  # unquoted YAML flow scalar
+        "---\n\x00\xff\x1b[31m\n---\nbody",
+        "not front matter at all",
+    ]
+    for text in malformed:
+        meta, body = parse_front_matter(text)
+        assert isinstance(meta, dict)
+        assert isinstance(body, str)
+
+    # A non-JSON scalar degrades to the raw string; it never fails the read.
+    assert parse_front_matter("---\narchived: yes\n---\n")[0]["archived"] == "yes"
+    assert parse_front_matter("---\nkey:\n---\nbody")[0]["key"] == ""
+    assert parse_front_matter("---\n: novalue\n---\n")[0] == {}
+
+
+def test_written_front_matter_parses_identically_under_a_real_yaml_parser(
+    tmp_path: Path,
+) -> None:
+    meta = {
+        "type": "task",
+        "title": 'A "quoted" title -- с кириллицей',
+        "archived": False,
+        "source_project": None,
+        "source_meeting": "260824 - standup",
+        "source_recording": "source.mp4",
+        "source_date": "2026-08-24",
+        "timestamps": [1.5, 2.0],
+    }
+    md_path = write_item(
+        tmp_path / "action items",
+        title="Fix login",
+        meta=meta,
+        body_md="Broken on refresh.",
+        images=[],
+    )
+    text = md_path.read_text(encoding="utf-8")
+
+    parsed_meta, _ = parse_front_matter(text)
+    lines = text.splitlines()
+    block = "\n".join(lines[1 : lines.index("---", 1)])
+
+    assert yaml.safe_load(block) == parsed_meta == meta

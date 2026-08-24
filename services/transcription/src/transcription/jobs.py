@@ -892,7 +892,15 @@ class JobManager:
             duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
 
         source_file = self._find_source_file(meeting_dir)
-        project_name = Path(job.output_path).parent.name
+        # Anchored on the meeting folder (the job's input), not on where the
+        # artifacts happen to land, so the derivation survives layout moves --
+        # the same rule `_export_sync` uses. `unsorted/` is a reserved root,
+        # not a project, so it reports as null.
+        parent = meeting_dir.parent
+        project_name = (
+            None if parent.name.casefold() == artifacts.UNSORTED_DIR_NAME else parent.name
+        )
+        source_date = artifacts.source_date_from_meeting_name(meeting_dir.name)
         created = datetime.now(UTC).isoformat()
 
         md_paths: list[Path] = []
@@ -931,9 +939,13 @@ class JobManager:
             meta: dict[str, Any] = {
                 type_key: getattr(item, type_key),
                 "title": item.title,
+                # Always written false; only external editors flip it, and a
+                # missing key reads as false (see artifacts.py's contract).
+                "archived": False,
                 "source_project": project_name,
                 "source_meeting": meeting_dir.name,
                 "source_recording": source_file.name if source_file is not None else None,
+                "source_date": source_date,
                 "timestamps": snapped,
                 "created": created,
                 "model": job.model,
@@ -1009,7 +1021,7 @@ class JobManager:
         meeting_dir = Path(job.source_path)
         export_dir = Path(job.output_path)
         parent = meeting_dir.parent
-        project_dir = None if parent.name.casefold() == "unsorted" else parent
+        project_dir = None if parent.name.casefold() == artifacts.UNSORTED_DIR_NAME else parent
 
         job.progress = 0.1
         export_md, warnings = exporting.build_export_md(

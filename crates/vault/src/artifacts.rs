@@ -7,6 +7,67 @@
 //! creates, writes, renames or deletes anything, and nothing reads more
 //! than one `.md` file's presence per item — content stays with the caller
 //! (F3 reads it behind size caps).
+//!
+//! # Front-matter field contract (mirror)
+//!
+//! Item `.md` files open with a `---` fenced block of `key: <json value>`
+//! lines — JSON is a YAML subset, so external property editors (Obsidian
+//! and friends) read it as ordinary YAML front matter. The field set is a
+//! cross-language contract, exactly like the directory names in
+//! [`crate::paths`].
+//!
+//! **The Python side owns it.** The source of truth is the module docstring
+//! of `services/transcription/src/transcription/artifacts.py` together with
+//! the key-set test in `services/transcription/tests/test_llm_jobs.py`,
+//! which fails CI on any drift. What follows is a mirror kept in sync by
+//! hand; if the two ever disagree, Python wins. Nothing in this crate parses
+//! front matter today, but any Rust code that later reads or writes it must
+//! use these names verbatim.
+//!
+//! Every key below is written on every extraction item (action items and
+//! facts share one writer, `jobs._extract_sync`):
+//!
+//! - `type` / `kind` — string, non-null. `type` for action items, `kind`
+//!   for facts; the only difference between the two key sets.
+//! - `title` — string, non-null.
+//! - `archived` — boolean, non-null. Always written `false`; flipped only
+//!   by an external editor. An absent key reads as false.
+//! - `source_project` — string, nullable. The vault project folder holding
+//!   the meeting; `null` when the meeting lives under the reserved
+//!   [`crate::paths::UNSORTED_DIR_NAME`] root — never the literal string
+//!   `"unsorted"` posing as a project.
+//! - `source_meeting` — string, non-null. The meeting folder's name.
+//! - `source_recording` — string, nullable. The stored `source.<ext>`
+//!   filename; `null` when the meeting folder has none.
+//! - `source_date` — string `YYYY-MM-DD`, nullable. Parsed from the
+//!   meeting folder's leading `YYMMDD` (the naming contract in
+//!   [`crate::paths`]), century fixed at 20xx; `null` when unparseable.
+//! - `timestamps` — number array, non-null. Transcript offsets in seconds.
+//! - `created` — string, non-null. ISO datetime, UTC.
+//! - `model` — string, non-null.
+//! - `job_id` — string, non-null.
+//! - `screenshots` — string, non-null. The screenshot-capture status value.
+//!
+//! Two clauses are behaviour rather than fields:
+//!
+//! - **Unknown keys survive.** Hand-edited front matter — reordered keys,
+//!   YAML-quoted strings, extra keys, `archived` flipped to `true` — round-
+//!   trips through the Python reader; a non-JSON value degrades to its raw
+//!   string and parsing never fails.
+//! - **No code path rewrites an existing artifact `.md`.** After its atomic
+//!   creation an item file is read-only to this app — this module included,
+//!   which reads only a file's *presence*. A future mutation feature must
+//!   round-trip unknown keys and the body byte-exactly outside the keys it
+//!   changes.
+//!
+//! Neither side acts on `archived`: listings and exports include archived
+//! items exactly like unarchived ones. It exists for the operator's
+//! external tools.
+//!
+//! Sibling features may relocate or delete this module (artifacts moving
+//! into the per-meeting folder; the project-view artifact UI going away).
+//! If it is deleted, the contract's single home is the Python side named
+//! above — this mirror is a convenience, never the authority.
 
 use std::fs;
 use std::path::{Path, PathBuf};

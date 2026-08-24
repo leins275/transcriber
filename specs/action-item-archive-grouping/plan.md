@@ -1,7 +1,7 @@
 ---
 slug: action-item-archive-grouping
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Archive status and source grouping for action items
@@ -79,7 +79,7 @@ Plus two contract clauses that are behavior, not fields: unknown keys survive in
 
 ## Tasks
 
-### [ ] T1: Front-matter tolerance contract: helpers, docs, and pinning tests in artifacts.py  [deps: —]
+### [x] T1: Front-matter tolerance contract: helpers, docs, and pinning tests in artifacts.py  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/artifacts.py`, `services/transcription/tests/test_llm_units.py`, `services/transcription/pyproject.toml`, `services/transcription/uv.lock`
 - **Test first**: `services/transcription/tests/test_llm_units.py` — cases:
@@ -92,7 +92,7 @@ Plus two contract clauses that are behavior, not fields: unknown keys survive in
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: new tests pass; `make format lint type test` pass (lint includes `verify_locks.py --check`, so the lock must be consistent); `artifacts.py` docstring contains the complete field table.
 
-### [ ] T2: Pin FR-5: export output ignores `archived`  [deps: —]
+### [x] T2: Pin FR-5: export output ignores `archived`  [deps: —]
 
 - **Files**: `services/transcription/tests/test_exporting.py` (new)
 - **Test first**: `services/transcription/tests/test_exporting.py` — cases:
@@ -102,7 +102,7 @@ Plus two contract clauses that are behavior, not fields: unknown keys survive in
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: `uv run --directory services/transcription pytest tests/test_exporting.py -q` passes; `make test` passes.
 
-### [ ] T3: Writer: `archived`, `source_date`, layout-robust `source_project` in `_extract_sync`  [deps: T1]
+### [x] T3: Writer: `archived`, `source_date`, layout-robust `source_project` in `_extract_sync`  [deps: T1]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` — cases:
@@ -114,7 +114,7 @@ Plus two contract clauses that are behavior, not fields: unknown keys survive in
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: all new/extended tests pass; full `make format lint type test` passes (integration-level proof for this data-only feature is the job-level tests driving the real `JobManager` submit→terminal→files-on-disk path — the desktop profile's launch-the-app check has no UI surface to drive here, per the spec's binding no-UI decision).
 
-### [ ] T4: Mirror the field contract in the Rust vault crate docs  [deps: T3]
+### [x] T4: Mirror the field contract in the Rust vault crate docs  [deps: T3]
 
 - **Files**: `crates/vault/src/artifacts.rs`
 - **Test first**: none new — this is a documentation mirror (FR-6); the executable pin lives in T3's Python key-set test, and `cargo test -p vault` must stay green to prove the edit is doc-only.

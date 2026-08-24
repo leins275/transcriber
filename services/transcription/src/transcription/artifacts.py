@@ -17,6 +17,61 @@ Front matter is written as ``key: <json value>`` lines -- JSON is a YAML
 subset, so the block reads as ordinary YAML front matter to humans and
 external tools while staying trivially parseable here without a YAML
 dependency.
+
+Front-matter field contract
+---------------------------
+
+The field set below is a cross-language contract, exactly like the directory
+names above. **This docstring plus the pytest that pins the written key set
+(``services/transcription/tests/test_llm_jobs.py``) is the source of truth**;
+the vault crate's ``crates/vault/src/artifacts.rs`` mirrors it in docs. Any
+code -- Python or Rust, now or later -- that reads or writes artifact front
+matter must use these names verbatim.
+
+Every key is written on every extraction item by ``jobs._extract_sync``:
+
+===================  ==================  =====  =================================
+key                  JSON type           null?  notes
+===================  ==================  =====  =================================
+``type`` / ``kind``  string              no     ``type`` for action items,
+                                                ``kind`` for facts
+``title``            string              no
+``archived``         boolean             no     always written ``false``; flipped
+                                                only by external editors; an
+                                                absent key reads as false
+``source_project``   string              yes    the vault project folder holding
+                                                the meeting; ``null`` when the
+                                                meeting lives under
+                                                ``unsorted/`` -- never the
+                                                literal string ``"unsorted"``
+``source_meeting``   string              no     the meeting folder's name
+``source_recording`` string              yes    the stored ``source.<ext>``
+                                                filename; ``null`` when absent
+``source_date``      string YYYY-MM-DD   yes    from the meeting's leading
+                                                ``YYMMDD`` (century fixed at
+                                                20xx); ``null`` when unparseable
+``timestamps``       number[]            no     transcript offsets, seconds
+``created``          string (ISO, UTC)   no
+``model``            string              no
+``job_id``           string              no
+``screenshots``      string              no     screenshot-capture status value
+===================  ==================  =====  =================================
+
+Two clauses of the contract are behaviour rather than fields:
+
+- **Unknown keys survive.** Front matter hand-edited by an external property
+  editor (Obsidian and friends) -- reordered keys, YAML-quoted strings, added
+  keys, ``archived`` flipped to ``true`` -- round-trips into
+  ``StoredItem.meta``; a value that is not valid JSON degrades to its raw
+  string, and ``parse_front_matter`` never raises.
+- **Nothing here rewrites an existing artifact ``.md``.** After its atomic
+  creation an item file is read-only to this app; reading never touches bytes.
+  A future mutation feature must round-trip unknown keys and the body
+  byte-exactly outside the keys it changes.
+
+The app never acts on ``archived``: exports and listings include archived
+items exactly like unarchived ones. It exists for the operator's external
+tools.
 """
 
 from __future__ import annotations
@@ -26,6 +81,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -38,8 +94,13 @@ REPORTS_DIR_NAME = "reports"
 # Reserved inside a meeting folder (per-recording exports).
 EXPORTS_DIR_NAME = "exports"
 
+# The reserved vault-root directory for meetings with no project
+# (mirrored from crates/vault/src/paths.rs `UNSORTED_DIR_NAME`).
+UNSORTED_DIR_NAME = "unsorted"
+
 # Windows path budget, matching the vault crate's `paths::check_len`.
 MAX_PATH_LEN = 260
+
 
 # Illegal-in-Windows-filename characters, matching vault's `ILLEGAL_CHARS`.
 _ILLEGAL = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")
@@ -82,6 +143,27 @@ def slugify(title: str, *, fallback: str = "item") -> str:
     cleaned = _DASH_RUNS.sub("-", cleaned).strip("-. ")
     cleaned = cleaned[:_MAX_SLUG_CHARS].rstrip("-. ")
     return cleaned or fallback
+
+
+def source_date_from_meeting_name(name: str) -> str | None:
+    """ISO ``YYYY-MM-DD`` from a meeting folder's leading ``YYMMDD``.
+
+    The vault names meetings ``<YYMMDD> - <stem>`` (``crates/vault/src/paths.rs``)
+    and treats those six characters verbatim, so the century is fixed at
+    ``20``: ``990101`` is 2099, not 1999. (Deliberately not ``strptime("%y")``,
+    whose 69-99 -> 19xx pivot would contradict the vault contract.)
+
+    Returns ``None`` -- never raises -- when the prefix is missing, too short,
+    not ASCII digits, or not a real calendar date.
+    """
+    digits = name[:6]
+    if len(digits) != 6 or not digits.isascii() or not digits.isdigit():
+        return None
+    try:
+        parsed = date(2000 + int(digits[:2]), int(digits[2:4]), int(digits[4:6]))
+    except ValueError:
+        return None
+    return parsed.isoformat()
 
 
 def fit_slug(parent: Path, slug: str) -> str:
