@@ -1,4 +1,4 @@
-{"phase": "implement", "spec_approved": true, "plan_approved": true, "base_ref": "4098ac7a2057b86f72fe89b7e96aa5b335e7df56",
+{"phase": "done", "spec_approved": true, "plan_approved": true, "base_ref": "4098ac7a2057b86f72fe89b7e96aa5b335e7df56",
  "worktree_path": "specs/_intake/various-improvements/worktrees/artifacts-in-sync-folder", "branch": "sdd/artifacts-in-sync-folder",
  "factory_status": "eval_done",
  "tier": "ultra", "strict_skills": {"planning": [], "development": []},

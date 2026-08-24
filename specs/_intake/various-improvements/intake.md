@@ -13,7 +13,7 @@ status: approved
 
 ## Features
 
-### [p] F1: Remove cloud LLM support  (slug: remove-cloud-llm-support)
+### [x] F1: Remove cloud LLM support  (slug: remove-cloud-llm-support)
 
 **Task text** (verbatim from the source):
 
@@ -25,7 +25,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/llm/openai_compat.py`, `llm/__init__.py` (provider registry), `config.py` (`llm_provider`, `llm_base_url`, `llm_api_key`, and the cloud-STT keys `provider`, `cloud_model`, `provider_api_key`, `max_cloud_upload_mb`, `_SECRET_KEYS`), `providers/litellm_cloud.py` + `providers/__init__.py`, `services/transcription/tests/test_provider_cloud.py` / `test_llm_units.py` / `test_config.py`, `services/transcription/pyproject.toml`, `services/transcription/README.md`, `docs/config-contract.md`.
 
-### [p] F2: Follow the recording's language (Russian or English)  (slug: transcript-language-selection)
+### [x] F2: Follow the recording's language (Russian or English)  (slug: transcript-language-selection)
 
 **Task text** (verbatim from the source):
 
@@ -37,7 +37,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/config.py` (`language: str | None = None`, i.e. today's unconstrained autodetect), `providers/local_whisper.py` (`decode_kwargs["language"]`, `language_out`/`language_probability` at lines ~250–338), `providers/base.py`, `schema.py` (`JobCreate.language`), `cli.py` (`--language`), `apps/desktop/src-tauri/src/service/http.rs` (the `language` field on `POST /v1/jobs`), `apps/desktop/src/components/SettingsPage.tsx` (no language control exists yet).
 
-### [p] F3: Facts & action items follow the transcript language  (slug: artifact-language-follows-transcript)
+### [x] F3: Facts & action items follow the transcript language  (slug: artifact-language-follows-transcript)
 
 **Task text** (verbatim from the source):
 
@@ -49,7 +49,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/llm/prompts.py` (`_LANGUAGE_RULE`, lines 18–21, applied to the summarize/map/reduce/action-item/fact prompts — today a soft instruction only), `llm/extraction.py`, `jobs.py` (`_extract_sync` / `_summarize_sync`, which already load `transcript.json` and its `language` field via `_load_transcript_lines`), `services/transcription/tests/test_llm_jobs.py`.
 
-### [p] F4: Fix PDF rendering and Cyrillic output  (slug: pdf-cyrillic-rendering)
+### [x] F4: Fix PDF rendering and Cyrillic output  (slug: pdf-cyrillic-rendering)
 
 **Task text** (verbatim from the source):
 
@@ -61,7 +61,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/pdf.py` (the whole module: `_register_fonts` Arial-from-`%WINDIR%\Fonts` registration with a Latin-only Helvetica fallback, `_BASE_CSS`, `render_pdf` via `markdown` + `xhtml2pdf`/reportlab, `link_callback`), its consumers `llm/report.py` and `exporting.py`, `services/transcription/pyproject.toml` (PDF backend choice).
 
-### [p] F5: Service log shows the original file name  (slug: service-log-original-file-name)
+### [x] F5: Service log shows the original file name  (slug: service-log-original-file-name)
 
 **Task text** (verbatim from the source):
 
@@ -73,7 +73,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/ledger.py` (the `jobs` table DDL, `SCHEMA_VERSION = 2` and its migration path, `source_path`/`meeting_json` columns), `schema.py` (`JobCreate`), `jobs.py` (job record creation), `apps/desktop/src-tauri/src/service/http.rs` + `service/mod.rs` (`LedgerRow`), `apps/desktop/src/types.ts` (`LedgerJobView`), `apps/desktop/src/components/LedgerPanel.tsx` (`fileNameOf`, which renders `source.<ext>` for every row because the vault stores recordings as `source.<ext>`), `apps/desktop/src-tauri/src/ingest.rs` (where the original file name is still known).
 
-### [p] F6: Store action items and facts under the sync folder  (slug: artifacts-in-sync-folder)
+### [x] F6: Store action items and facts under the sync folder  (slug: artifacts-in-sync-folder)
 
 **Task text** (verbatim from the source):
 
@@ -85,7 +85,7 @@ status: approved
 
 **Code surfaces**: `crates/vault/src/paths.rs` (`ACTION_ITEMS_DIR_NAME = "action items"`, `FACTS_DIR_NAME = "facts"`, `REPORTS_DIR_NAME`, `RESERVED_PROJECT_DIR_NAMES`), `crates/vault/src/artifacts.rs`, `services/transcription/src/transcription/artifacts.py` (the mirrored cross-language directory-name contract, `write_item`, `list_items`), `jobs.py` (`_extract_sync`, which writes to `job.output_path`), `apps/desktop/src-tauri/src/commands/llm.rs` (`require_project_dir`, which today refuses extraction for `unsorted/` meetings because artifacts need a project folder), `apps/desktop/src-tauri/src/config.rs` (`meetings_root`; no "sync folder" setting exists yet), `services/transcription/src/transcription/llm/report.py` + `exporting.py` (readers of the same locations).
 
-### [p] F7: Project view shows recordings only  (slug: project-view-recordings-only)
+### [x] F7: Project view shows recordings only  (slug: project-view-recordings-only)
 
 **Task text** (verbatim from the source):
 
@@ -97,7 +97,7 @@ status: approved
 
 **Code surfaces**: `apps/desktop/src/components/ProjectPage.tsx` + `ProjectPage.module.css` (the action-items/facts/reports tabs and the "Export project essence" button), `apps/desktop/src/App.tsx` (lines ~86, ~428–528: the open-project page state, `essenceBusy`, `handleExportEssence`), `apps/desktop/src/components/VaultPanel.tsx` / `VaultList.tsx` / `lib/vaultGroups.ts` (the recordings listing that stays), `apps/desktop/src-tauri/src/commands/llm.rs` (`list_project_artifacts`, `read_artifact`, `reveal_artifact`, report commands — which of these lose their only caller), `apps/desktop/src/api.ts`, `apps/desktop/src/types.ts` (`ArtifactView`, `ReportView`).
 
-### [p] F8: Archive status and source grouping for action items  (slug: action-item-archive-grouping)
+### [x] F8: Archive status and source grouping for action items  (slug: action-item-archive-grouping)
 
 **Task text** (verbatim from the source):
 
@@ -109,7 +109,7 @@ status: approved
 
 **Code surfaces**: `services/transcription/src/transcription/artifacts.py` (front matter is the only per-item state today — `render_front_matter` / `parse_front_matter` / `StoredItem`; `jobs.py` lines ~931–942 write `source_project`, `source_meeting`, `source_recording`, so the grouping key already exists in the data), `crates/vault/src/artifacts.rs`, `apps/desktop/src-tauri/src/commands/llm.rs` (`ArtifactView` listing; nothing can currently mutate an artifact), `apps/desktop/src/types.ts`, and whichever UI surface survives F7. Nothing named "archive" exists anywhere in the app today.
 
-### [p] F9: Manual speaker markup on a selected part of the transcript  (slug: transcript-manual-speaker-markup)
+### [x] F9: Manual speaker markup on a selected part of the transcript  (slug: transcript-manual-speaker-markup)
 
 **Task text** (verbatim from the source):
 
