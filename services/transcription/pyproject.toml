@@ -66,6 +66,10 @@ dev = [
   "httpx>=0.27,<1",
   "ruff>=0.6",
   "mypy>=1.11",
+  # Reads rendered PDFs back in tests/pdf_asserts.py (which fonts a page
+  # embeds, what text extracts). Already in the tree as xhtml2pdf's own
+  # dependency; declared here because the tests import it directly.
+  "pypdf>=3",
 ]
 
 [tool.uv]

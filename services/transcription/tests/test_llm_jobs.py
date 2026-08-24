@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 
 import pytest
 from fakes import FakeFrameExtractor, FakeLlm
+from pdf_asserts import embedded_base_fonts, extract_text
 
 from transcription.artifacts import parse_front_matter
 from transcription.config import Config
@@ -28,6 +30,13 @@ MEETING_NAME = "260101 - Planning"
 RUSSIAN_DIRECTIVE = "Write your entire answer in Russian."
 ENGLISH_DIRECTIVE = "Write your entire answer in English."
 SOFT_RULE = "same language the transcript is written in"
+
+_FONTS_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+
+requires_arial = pytest.mark.skipif(
+    not (_FONTS_DIR / "arial.ttf").is_file(),
+    reason=r"needs the stock Arial family in %WINDIR%\Fonts",
+)
 
 
 @pytest.fixture
@@ -756,6 +765,111 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
 
         pdf_bytes = (export_dir / "export.pdf").read_bytes()
         assert pdf_bytes.startswith(b"%PDF"), "a real PDF was rendered"
+    finally:
+        await manager.aclose()
+
+
+async def test_export_warns_on_the_job_when_the_pdf_font_degrades(
+    config: Config,
+    ledger: Ledger,
+    meeting_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FR-3: with no Cyrillic-capable font available the export still succeeds,
+    # but the operator must see the degradation on the job -- not only in the
+    # service log.
+    fontless = tmp_path / "nowindows"
+    (fontless / "Fonts").mkdir(parents=True)
+    monkeypatch.setenv("WINDIR", str(fontless))
+    (meeting_dir / "summary.md").write_text("The meeting summary text.", encoding="utf-8")
+
+    manager = _manager(config, ledger, FakeLlm())
+    export_dir = meeting_dir / "exports" / "260103"
+    try:
+        job_id = await _run_job(
+            manager, job_type="export", input_path=meeting_dir, output_dir=export_dir
+        )
+        job = manager.status(job_id)
+
+        assert job.status == "succeeded"
+        assert (export_dir / "export.pdf").read_bytes().startswith(b"%PDF")
+        assert [w for w in job.warnings if "latin" in w.lower()], (
+            f"no font-degradation warning on the job: {job.warnings}"
+        )
+    finally:
+        await manager.aclose()
+
+
+def _russian_transcript_doc() -> dict[str, Any]:
+    """The `meeting_dir` transcript as a real Russian meeting has it."""
+    texts = [
+        "Начали встречу с обзора открытых задач.",
+        "Проверили статус переводов интерфейса.",
+    ]
+    doc = _transcript_doc(segment_count=len(texts))
+    for segment, text in zip(doc["segments"], texts, strict=True):
+        segment["text"] = text
+    doc["text"] = " ".join(texts)
+    return doc
+
+
+@requires_arial
+async def test_export_renders_cyrillic_with_embedded_fonts(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    # FR-1/FR-5: the regression guard for "every Russian character is a black
+    # box". Driven through the real export job (the flow the operator runs),
+    # asserted on the produced `export.pdf` the way a reader opens it: which
+    # fonts it embeds, and what text can be selected out of it.
+    from transcription.artifacts import write_item
+
+    (meeting_dir / "summary.md").write_text(
+        "## Итоги\n\nОбсудили план релиза и распределили задачи.", encoding="utf-8"
+    )
+    (meeting_dir / "transcript.json").write_text(
+        json.dumps(_russian_transcript_doc()), encoding="utf-8"
+    )
+    project_dir = meeting_dir.parent
+    write_item(
+        project_dir / "action items",
+        title="Подготовить сборку",
+        meta={"type": "task", "title": "Подготовить сборку", "source_meeting": MEETING_NAME},
+        body_md="Нужно собрать инсталлятор до пятницы.",
+        images=[],
+    )
+    write_item(
+        project_dir / "facts",
+        title="Сроки согласованы",
+        meta={"kind": "decision", "title": "Сроки согласованы", "source_meeting": MEETING_NAME},
+        body_md="Релиз назначен на конец месяца.",
+        images=[],
+    )
+
+    manager = _manager(config, ledger, FakeLlm())
+    export_dir = meeting_dir / "exports" / "260104"
+    try:
+        job_id = await _run_job(
+            manager, job_type="export", input_path=meeting_dir, output_dir=export_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+
+        pdf_path = export_dir / "export.pdf"
+        base_fonts = embedded_base_fonts(pdf_path)
+        assert any(name.endswith("+ArialMT") for name in base_fonts), (
+            f"the export embeds no Cyrillic-capable Arial subset: {sorted(base_fonts)}"
+        )
+
+        text = " ".join(extract_text(pdf_path).split())
+        for section, needle in (
+            ("Summary", "Обсудили план релиза"),
+            ("Action items", "Нужно собрать инсталлятор"),
+            ("Facts", "Релиз назначен"),
+            ("Transcript", "Проверили статус переводов"),
+        ):
+            assert needle in text, f"{section}: {needle!r} missing from the export text: {text!r}"
+        assert "■" not in text, f"replacement boxes in the export text: {text!r}"
     finally:
         await manager.aclose()
 

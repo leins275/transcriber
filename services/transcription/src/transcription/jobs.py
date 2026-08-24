@@ -1037,7 +1037,15 @@ class JobManager:
         job.progress = 0.5
         job.cancel_token.raise_if_cancelled()
         try:
-            pdf_path = render_pdf(export_md, export_dir / "export.pdf", base_dir=export_dir)
+            pdf_path = render_pdf(
+                export_md,
+                export_dir / "export.pdf",
+                base_dir=export_dir,
+                # Font degradation (no Cyrillic-capable family) is not an
+                # error, but it makes the PDF unreadable for Russian text --
+                # the operator has to hear about it, not just the log.
+                warnings=job.warnings,
+            )
             artifact_paths.append(str(pdf_path))
         except PdfRenderError as exc:
             job.warnings.append(f"PDF render failed: {exc}; export.md was written")
