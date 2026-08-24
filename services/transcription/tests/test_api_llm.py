@@ -150,6 +150,31 @@ def test_mismatched_job_shapes_are_rejected_as_validation_errors(
         assert response.json()["error_kind"] == "invalid_request"
 
 
+def test_a_report_job_type_is_rejected_as_a_validation_error(
+    config: Config, meeting_dir: Path
+) -> None:
+    """FR-2: the project-essence `report` job type no longer exists.
+
+    The paths are deliberately valid (an existing project folder under an
+    allowed root), so the 4xx can only come from the `JobType` literal
+    rejecting `"report"` -- not from path validation.
+    """
+    project_dir = meeting_dir.parent
+    app = _app_with_fake_llm(config, FakeLlm())
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "job_type": "report",
+                "input_path": str(project_dir),
+                "output_dir": str(project_dir),
+            },
+            headers=AUTH,
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error_kind"] == "invalid_request"
+
+
 def _llm_download_factory(config: Config):  # type: ignore[no-untyped-def]
     """A fake GGUF repo holding three quants; the filter must pick exactly one."""
     from test_model_api import FakeHubClient, FakeTransport

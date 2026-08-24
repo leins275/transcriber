@@ -29,7 +29,6 @@ const RUNNING_TEXT: Record<JobType, string> = {
   summarize: "Summarizing",
   action_items: "Extracting action items",
   facts: "Extracting facts",
-  report: "Writing project report",
   export: "Exporting PDF",
 };
 
@@ -41,7 +40,6 @@ const FAILED_TEXT: Record<JobType, string> = {
   summarize: "Summary failed.",
   action_items: "Action-item extraction failed.",
   facts: "Fact extraction failed.",
-  report: "Project report failed.",
   export: "Export failed.",
 };
 

@@ -146,9 +146,9 @@ def render_pdf(
 ) -> Path:
     """Render ``md_text`` to ``out_path``; relative links resolve against ``base_dir``.
 
-    Raises :class:`PdfRenderError` on failure; the caller (the export/report
-    jobs) degrades -- the ``.md`` stays the deliverable and the failure lands
-    in the job's warnings, never failing the job.
+    Raises :class:`PdfRenderError` on failure; the caller (the export job)
+    degrades -- the ``.md`` stays the deliverable and the failure lands in
+    the job's warnings, never failing the job.
 
     ``warnings``, when given, collects non-fatal degradations of the render
     itself -- today the font fallback that leaves Cyrillic text unreadable

@@ -132,18 +132,14 @@ pub mod list;
 /// these the only vault-mutating calls outside ingest.
 pub mod manage;
 
-/// Read-only enumeration of the project-level artifacts (action items,
-/// facts, reports) written by F2's LLM jobs. Same best-effort contract as
-/// [`list`]. Item enumeration here is legacy-only — extraction writes
-/// action items and facts inside the meeting folder now; see the module
-/// docs.
+/// The artifact directories (action items, facts) that F2's LLM extraction
+/// jobs write into, anchored on the meeting folder — a name mapping only,
+/// no I/O.
 pub mod artifacts;
 
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
-pub use artifacts::{
-    list_project_artifacts, list_reports, ArtifactEntry, ArtifactKind, ReportEntry,
-};
+pub use artifacts::ArtifactKind;
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
 pub use list::{list_meetings, MeetingEntry};

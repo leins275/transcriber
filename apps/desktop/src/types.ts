@@ -24,7 +24,7 @@ export type JobState =
 
 /** Which pipeline a job runs. `transcribe` is the original; the rest are
  * the LLM feature's derived jobs (additive to the frozen contract). */
-export type JobType = "transcribe" | "summarize" | "action_items" | "facts" | "report" | "export";
+export type JobType = "transcribe" | "summarize" | "action_items" | "facts" | "export";
 
 export type JobSnapshot = {
   id: string;
@@ -132,38 +132,11 @@ export type MeetingUpdate = {
   title: string;
 };
 
-// LLM-feature extension to the IPC contract (additive): project-level
-// artifacts (action items / facts), dated reports, and the GGUF download.
+// LLM-feature extension to the IPC contract (additive): which artifact an
+// extraction job produces, and the GGUF download. Artifacts are read in the
+// vault folder itself, so the app has no view types for them.
 
 export type ArtifactKind = "action_items" | "facts";
-
-/** One artifact folder as `list_project_artifacts` lists it. */
-export type ArtifactView = {
-  slug: string;
-  screenshot_count: number;
-};
-
-export type ArtifactImageView = {
-  name: string;
-  /** `data:image/png;base64,...` — the webview has no filesystem access. */
-  data_url: string;
-};
-
-/** One artifact opened for reading: markdown (front matter stripped into
- * `meta`) plus its screenshots. */
-export type ArtifactContentView = {
-  slug: string;
-  meta: Record<string, unknown>;
-  markdown: string;
-  images: ArtifactImageView[];
-};
-
-/** One dated report folder under `<project>/reports/`. */
-export type ReportView = {
-  name: string;
-  has_markdown: boolean;
-  has_pdf: boolean;
-};
 
 /** The GGUF (LLM model) download status — the whisper trio's shape minus
  * the CUDA fields. */

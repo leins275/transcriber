@@ -105,7 +105,7 @@ class Config:
     hf_token: str | None = None
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
-    # --- Local LLM (summaries / action items / facts / reports) ---
+    # --- Local LLM (summaries / action items / facts) ---
     # Display/model id: it names the local GGUF snapshot the built-in
     # llama.cpp engine loads.
     llm_model: str = "qwen3.6-35b-a3b"

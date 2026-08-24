@@ -26,7 +26,7 @@ import {
   safeUnlisten,
 } from "./api";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
-import { projectCodes } from "./lib/vaultGroups";
+import { entriesForProject, projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
@@ -84,7 +84,7 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
-  // Which project page is open (action items / facts / reports) -- the same
+  // Which project page is open (that project's recordings) -- the same
   // no-router pattern; opening a project closes any open recording and vice
   // versa.
   const [openProject, setOpenProject] = useState<string | null>(null);
@@ -376,13 +376,6 @@ function App() {
     [upsertJob],
   );
 
-  const handleExportEssence = useCallback(
-    async (project: string) => {
-      upsertJob(await api.exportProjectEssence(project));
-    },
-    [upsertJob],
-  );
-
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
   // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
@@ -401,10 +394,9 @@ function App() {
   // page rendering a stale copy of a meeting that has since moved.
   const openEntry = vaultEntries.find((entry) => entry.id === openEntryId) ?? null;
 
-  // Derived-job bookkeeping for the open pages: which LLM jobs are still in
-  // flight for the open recording (its buttons render busy), how many
-  // summarize jobs have finished for it (the summary tab re-reads), and how
-  // many derived jobs have finished at all (the project page re-lists).
+  // Derived-job bookkeeping for the open recording: which LLM jobs are still
+  // in flight for it (its buttons render busy), and how many summarize jobs
+  // have finished for it (the summary tab re-reads).
   const activeLlmJobs: JobType[] = openEntry
     ? jobs
         .filter(
@@ -423,14 +415,6 @@ function App() {
           job.source_path === openEntry.meeting_dir,
       ).length
     : 0;
-  const projectReloadToken = jobs.filter(
-    (job) => job.job_type !== "transcribe" && job.state === "done",
-  ).length;
-  const essenceBusy = jobs.some(
-    (job) =>
-      job.job_type === "report" &&
-      (job.state === "pending" || job.state === "queued" || job.state === "running"),
-  );
 
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
@@ -518,16 +502,13 @@ function App() {
               ) : openProject ? (
                 <ProjectPage
                   project={openProject}
+                  entries={entriesForProject(vaultEntries, openProject)}
                   onBack={() => setOpenProject(null)}
-                  onListArtifacts={api.listProjectArtifacts}
-                  onReadArtifact={api.readArtifact}
-                  onRevealArtifact={api.revealArtifact}
-                  onListReports={api.listProjectReports}
-                  onReadReport={api.readReport}
-                  onRevealReport={api.revealReport}
-                  onExportEssence={handleExportEssence}
-                  essenceBusy={essenceBusy}
-                  reloadToken={projectReloadToken}
+                  onOpen={(entryId) => {
+                    setOpenProject(null);
+                    setOpenEntryId(entryId);
+                  }}
+                  onReveal={handleRevealVaultEntry}
                 />
               ) : (
                 <>

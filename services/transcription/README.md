@@ -93,15 +93,14 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 ## Derived (LLM) jobs
 
 Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
-`input_path` (a meeting or project directory under the allowed roots)
-instead of `audio_path`:
+`input_path` (a meeting directory under the allowed roots) instead of
+`audio_path`:
 
 | `job_type` | reads | writes |
 |---|---|---|
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` |
 | `action_items` | same | `<project>/action items/<slug>/<slug>.md` + `screenshot-*.png` |
 | `facts` | same | `<project>/facts/<slug>/...` (same shape) |
-| `report` | everything in a project directory | `<project>/reports/<YYMMDD>/report.md` + `report.pdf` |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `export.pdf` |
 
 All of them run on the built-in llama.cpp runtime -- the only LLM engine

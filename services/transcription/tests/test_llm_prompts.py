@@ -108,18 +108,12 @@ def test_omitting_the_language_matches_an_explicit_none(name: str) -> None:
 
 @pytest.mark.parametrize("name", BUILDER_NAMES)
 def test_language_is_a_keyword_parameter_with_a_default(name: str) -> None:
-    """``llm/report.py`` calls ``chunk_summary_messages(chunk, i, len(chunks))``
-    positionally; the new parameter must not break that call shape."""
+    """``llm/summarize.py`` calls ``chunk_summary_messages(chunk, i, len(chunks))``
+    with its non-language arguments positionally; the language parameter must
+    not break that call shape."""
     parameter = inspect.signature(BUILDERS[name][0]).parameters["language"]
     assert parameter.default is None
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
-
-
-def test_report_messages_keeps_the_soft_rule() -> None:
-    """Out of scope (F7 deletes it) -- it must not gain a language parameter."""
-    content = system_content(prompts.report_messages("materials", "proj"))
-    assert prompts._LANGUAGE_RULE in content
-    assert "language" not in inspect.signature(prompts.report_messages).parameters
 
 
 # ------------------------------------------------------------------- FR-4

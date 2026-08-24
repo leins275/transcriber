@@ -5,7 +5,6 @@ Owns the on-disk conventions for derived knowledge:
 - ``<meeting>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
 - ``<meeting>/facts/<slug>/<slug>.md``        (+ ``screenshot-*.png``)
 - ``<meeting>/exports/<YYMMDD>/export.md``    (+ ``export.pdf``)
-- ``<PROJECT>/reports/<YYMMDD>/report.md``    (+ ``report.pdf``)
 
 Extracted items live *inside the recording's own folder*, alongside its
 ``transcript.json``, ``summary.md`` and ``exports/`` -- so they travel with
@@ -46,8 +45,6 @@ from transcription.errors import ErrorKind, ServiceError
 # crates/vault/src/paths.rs; the exact strings are the cross-language contract).
 ACTION_ITEMS_DIR_NAME = "action items"
 FACTS_DIR_NAME = "facts"
-# Reserved at the project level (multi-meeting reports).
-REPORTS_DIR_NAME = "reports"
 # Reserved inside a meeting folder (per-recording exports).
 EXPORTS_DIR_NAME = "exports"
 

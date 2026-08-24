@@ -81,7 +81,7 @@ pub trait TranscriptionService: Send + Sync {
     }
 
     /// `POST /v1/jobs` with a derived (LLM) job type -- summarize / extract
-    /// action items / extract facts / project report / per-recording export.
+    /// action items / extract facts / per-recording export.
     /// Returns F2's `job_id`, polled through the same `status()` as a
     /// transcription. Default: unsupported (the house rule -- pipeline
     /// fakes must not need an edit to keep compiling).
@@ -124,8 +124,6 @@ pub enum LlmJobKind {
     ActionItems,
     /// Extract facts / answered questions into `<project>/facts/`.
     Facts,
-    /// Project-essence status report into `<project>/reports/<date>/`.
-    Report,
     /// Deterministic per-recording export into `<meeting>/exports/<date>/`.
     Export,
 }
@@ -137,14 +135,13 @@ impl LlmJobKind {
             LlmJobKind::Summarize => "summarize",
             LlmJobKind::ActionItems => "action_items",
             LlmJobKind::Facts => "facts",
-            LlmJobKind::Report => "report",
             LlmJobKind::Export => "export",
         }
     }
 }
 
-/// `POST /v1/jobs` request body for a derived job: F2 takes the meeting (or
-/// project) directory as `input_path` and writes its artifacts under
+/// `POST /v1/jobs` request body for a derived job: F2 takes the meeting
+/// directory as `input_path` and writes its artifacts under
 /// `output_dir` -- both computed on this side, both validated against F2's
 /// own allowlist over there.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -44,7 +44,6 @@ from transcription.llm.prompts import (
     repair_messages,
 )
 from transcription.llm.reasoning import split_reasoning
-from transcription.llm.report import collect_project_materials, report_from_materials
 from transcription.llm.shapes import (
     ActionItemsOut,
     FactsOut,
@@ -63,9 +62,7 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently.
-KNOWN_JOB_TYPES = frozenset(
-    {"transcribe", "summarize", "action_items", "facts", "report", "export"}
-)
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "action_items", "facts", "export"})
 
 _logger = logging.getLogger("transcription")
 
@@ -267,9 +264,7 @@ class JobManager:
                     f"input_path must be a directory: {resolved_source.name}",
                 )
             # The per-meeting derived jobs read the transcript; reject a
-            # meeting that has none before any ledger row exists. A report's
-            # input is a whole project directory, checked in its runner
-            # (some meetings legitimately lack transcripts).
+            # meeting that has none before any ledger row exists.
             if (
                 job_type in ("summarize", "action_items", "facts", "export")
                 and not (resolved_source / "transcript.json").is_file()
@@ -634,7 +629,7 @@ class JobManager:
             )
 
     # ------------------------------------------------------------------
-    # Derived jobs (summarize / action_items / facts / report / export)
+    # Derived jobs (summarize / action_items / facts / export)
     # ------------------------------------------------------------------
 
     def _llm_budget_tokens(self) -> int:
@@ -675,7 +670,14 @@ class JobManager:
                 elif job.job_type in ("action_items", "facts"):
                     body = functools.partial(self._extract_sync, job, provider)
                 else:
-                    body = functools.partial(self._report_sync, job, provider)
+                    # Unreachable in practice -- the pydantic `JobType` literal
+                    # and `KNOWN_JOB_TYPES` both gate the type long before the
+                    # worker sees it. Kept explicit so a future LLM job type
+                    # cannot silently inherit the extraction path.
+                    raise ServiceError(
+                        ErrorKind.INVALID_REQUEST,
+                        f"unsupported llm job type {job.job_type!r}",
+                    )
             else:
                 job.status = "running"
                 self._ledger.mark_running(job.job_id)
@@ -752,9 +754,9 @@ class JobManager:
         """One completion, with the model's chain-of-thought split off.
 
         Reasoning never reaches an artifact or the UI: it lands in
-        `reasoning_sink` when the caller wants to keep it (the summary and
-        report runners write it to a `*.reasoning.md` sidecar) and is
-        discarded otherwise.
+        `reasoning_sink` when the caller wants to keep it (the summary
+        runner writes it to a `*.reasoning.md` sidecar) and is discarded
+        otherwise.
         """
         completion = provider.complete(
             messages,
@@ -970,56 +972,6 @@ class JobManager:
             )
 
         return {"artifacts": [str(path) for path in md_paths], "item_count": len(md_paths)}
-
-    def _report_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
-        project_dir = Path(job.source_path)
-        materials = collect_project_materials(project_dir)
-        if not materials.strip():
-            raise ServiceError(
-                ErrorKind.UNSUPPORTED_INPUT,
-                f"project {project_dir.name} has no transcripts, summaries or items to report on",
-            )
-
-        calls_done = 0
-        reasoning: list[str] = []
-
-        def complete(messages: list[Message]) -> str:
-            nonlocal calls_done
-            text = self._complete_text(
-                job,
-                provider,
-                messages,
-                on_progress=lambda fraction: setattr(
-                    job,
-                    "progress",
-                    min(0.85, 0.05 + (calls_done + fraction) * 0.2),
-                ),
-                reasoning_sink=reasoning,
-            )
-            calls_done += 1
-            return text
-
-        report_md = report_from_materials(
-            materials,
-            project_dir.name,
-            complete,
-            budget_tokens=self._llm_budget_tokens(),
-        )
-
-        out_dir = Path(job.output_path)
-        md_path = artifacts.write_text_atomic(report_md + "\n", out_dir / "report.md")
-        if reasoning:
-            artifacts.write_text_atomic(
-                "\n\n---\n\n".join(reasoning) + "\n", out_dir / "report.reasoning.md"
-            )
-        artifact_paths = [str(md_path)]
-        job.progress = 0.9
-        try:
-            pdf_path = render_pdf(report_md, out_dir / "report.pdf", base_dir=out_dir)
-            artifact_paths.append(str(pdf_path))
-        except PdfRenderError as exc:
-            job.warnings.append(f"PDF render failed: {exc}; report.md was written")
-        return {"artifacts": artifact_paths}
 
     def _export_sync(self, job: JobState) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)

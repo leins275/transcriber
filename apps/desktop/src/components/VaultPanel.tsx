@@ -36,7 +36,7 @@ export type VaultPanelProps = {
    * their own -- see the component docs. */
   jobs: JobSnapshot[];
   onOpen: (entryId: string) => void;
-  /** Opens the project page (action items / facts / reports). */
+  /** Opens the project page (that project's recordings, full-window). */
   onOpenProject: (project: string) => void;
   onReveal: (entryId: string) => void;
   onRevealJob: (jobId: string) => void;
