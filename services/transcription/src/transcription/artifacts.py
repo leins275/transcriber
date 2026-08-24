@@ -4,7 +4,6 @@ Owns the on-disk conventions for derived knowledge:
 
 - ``<PROJECT>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
 - ``<PROJECT>/facts/<slug>/<slug>.md``       (+ ``screenshot-*.png``)
-- ``<PROJECT>/reports/<YYMMDD>/report.md``   (+ ``report.pdf``)
 - ``<meeting>/exports/<YYMMDD>/export.md``   (+ ``export.pdf``)
 
 The directory *names* are a cross-language contract shared with the vault
@@ -34,7 +33,6 @@ from transcription.errors import ErrorKind, ServiceError
 # The reserved project-level directory names (mirrored in crates/vault/src/paths.rs).
 ACTION_ITEMS_DIR_NAME = "action items"
 FACTS_DIR_NAME = "facts"
-REPORTS_DIR_NAME = "reports"
 # Reserved inside a meeting folder (per-recording exports).
 EXPORTS_DIR_NAME = "exports"
 

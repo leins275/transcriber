@@ -18,9 +18,9 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # The job-type discriminator. `transcribe` is the original (and default) job;
 # the rest are the derived-knowledge jobs added by the LLM feature:
 # `summarize`/`action_items`/`facts` read a meeting folder's transcript.json,
-# `report` reads a whole project folder, and `export` deterministically
-# assembles one meeting's existing materials into a PDF (no LLM call).
-JobType = Literal["transcribe", "summarize", "action_items", "facts", "report", "export"]
+# and `export` deterministically assembles one meeting's existing materials
+# into a PDF (no LLM call).
+JobType = Literal["transcribe", "summarize", "action_items", "facts", "export"]
 
 
 class Segment(BaseModel):
@@ -123,9 +123,8 @@ class JobCreate(BaseModel):
 
     A ``transcribe`` job (the default, so pre-feature clients are untouched)
     takes ``audio_path``; every other job type takes ``input_path`` -- the
-    meeting folder (``summarize``/``action_items``/``facts``/``export``) or
-    the project folder (``report``) it reads. Exactly one of the two must be
-    supplied, matching the job type.
+    meeting folder (``summarize``/``action_items``/``facts``/``export``) it
+    reads. Exactly one of the two must be supplied, matching the job type.
     """
 
     job_type: JobType = "transcribe"

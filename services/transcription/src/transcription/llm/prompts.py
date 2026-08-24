@@ -204,28 +204,3 @@ def repair_messages(original: list[Message], raw_output: str, error: str) -> lis
             ),
         },
     ]
-
-
-def report_messages(materials_text: str, project: str) -> list[Message]:
-    """The project-essence status report over all collected materials."""
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You are a project analyst. From meeting summaries, action items "
-                "and recorded facts you write a single project status report in "
-                "Markdown. " + _LANGUAGE_RULE
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                f"Write a status report for project {project} based on the "
-                "materials below. Structure: a project overview, current status, "
-                "key decisions, open questions and risks, and a table of action "
-                "items grouped by type (requirement / epic / task / spike). Base "
-                "everything strictly on the materials; do not invent progress."
-                "\n\nMaterials:\n\n" + materials_text
-            ),
-        },
-    ]

@@ -103,7 +103,7 @@ class Config:
     max_cloud_upload_mb: int = 25
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
-    # --- Local LLM (summaries / action items / facts / reports) ---
+    # --- Local LLM (summaries / action items / facts) ---
     # Which LLM engine runs the derived-knowledge jobs: "llama_cpp" (built-in,
     # the default) or "openai_compat" (an external OpenAI-compatible server
     # such as LM Studio or Ollama, reached via `llm_base_url`).

@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 # its meaning (`job_type` backfills to 'transcribe' via the column default).
 _MIGRATIONS: dict[int, tuple[str, ...]] = {
     # v1 -> v2: job-type discriminator + the result manifest for non-transcribe
-    # jobs (LLM summaries/extractions/reports write artifacts, not transcript.json).
+    # jobs (LLM summaries/extractions write artifacts, not transcript.json).
     2: (
         "ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL DEFAULT 'transcribe'",
         "ALTER TABLE jobs ADD COLUMN result_json TEXT",

@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "./SettingsPage";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { ServiceStatusView, SettingsView } from "../types";
+import type { LlmModelDownloadStatus, ServiceStatusView, SettingsView } from "../types";
 
 function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
@@ -29,6 +29,20 @@ function modelStatus(overrides: Partial<ModelDownloadStatus> = {}): ModelDownloa
     model_present: true,
     cuda_warning: null,
     cuda_runtime_present: null,
+    ...overrides,
+  };
+}
+
+function llmStatus(overrides: Partial<LlmModelDownloadStatus> = {}): LlmModelDownloadStatus {
+  return {
+    state: "complete",
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    percent: 100,
+    error_kind: null,
+    error_message: null,
+    model_present: true,
+    gpu_build_present: null,
     ...overrides,
   };
 }
@@ -92,6 +106,21 @@ describe("SettingsPage", () => {
     expect(screen.getByText("(not set)")).toBeInTheDocument();
     expect(screen.queryByText(/^Transcriber v/)).not.toBeInTheDocument();
     expect(screen.queryByText(/no longer exists/i)).not.toBeInTheDocument();
+  });
+
+  // FR-7: the project-report job is gone, so no copy may promise one.
+  it("describes the installed assistant as summaries, action items and facts — not project reports", () => {
+    renderPage({ llmModelStatus: llmStatus() });
+    expect(
+      screen.getByText(/Summaries, action items and facts run on this machine\./),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/project reports/i)).not.toBeInTheDocument();
+  });
+
+  it("describes what the missing assistant is needed for without promising project reports", () => {
+    renderPage({ llmModelStatus: llmStatus({ state: "idle", model_present: false, percent: 0 }) });
+    expect(screen.getByText(/Needed for summaries, action items and facts\./)).toBeInTheDocument();
+    expect(screen.queryByText(/project reports/i)).not.toBeInTheDocument();
   });
 
   it("says filing still works when the service is unavailable", () => {

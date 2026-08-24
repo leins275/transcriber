@@ -479,7 +479,7 @@ async def test_duplicate_titles_get_collision_suffixed_folders(
         await manager.aclose()
 
 
-# ------------------------------------------------------------ export / report
+# --------------------------------------------------------------------- export
 
 
 async def test_export_assembles_sections_in_order_and_renders_a_pdf(
@@ -530,52 +530,5 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
 
         pdf_bytes = (export_dir / "export.pdf").read_bytes()
         assert pdf_bytes.startswith(b"%PDF"), "a real PDF was rendered"
-    finally:
-        await manager.aclose()
-
-
-async def test_report_reads_all_project_materials_and_writes_md_plus_pdf(
-    config: Config, ledger: Ledger, meeting_dir: Path
-) -> None:
-    (meeting_dir / "summary.md").write_text("Planning summary.", encoding="utf-8")
-    project_dir = meeting_dir.parent
-
-    llm = FakeLlm(responses=["# Project status\n\nAll on track."])
-    manager = _manager(config, ledger, llm)
-    report_dir = project_dir / "reports" / "260102"
-    try:
-        job_id = await _run_job(
-            manager, job_type="report", input_path=project_dir, output_dir=report_dir
-        )
-        job = manager.status(job_id)
-        assert job.status == "succeeded"
-
-        report_md = (report_dir / "report.md").read_text(encoding="utf-8")
-        assert "All on track." in report_md
-        assert (report_dir / "report.pdf").read_bytes().startswith(b"%PDF")
-
-        # The materials handed to the model include the meeting summary.
-        materials_prompt = llm.calls[0][-1]["content"]
-        assert "Planning summary." in materials_prompt
-    finally:
-        await manager.aclose()
-
-
-async def test_a_report_over_an_empty_project_fails_as_unsupported_input(
-    config: Config, ledger: Ledger, tmp_app_dir: Path
-) -> None:
-    project_dir = tmp_app_dir / "vault" / "EMPTY"
-    project_dir.mkdir(parents=True)
-    manager = _manager(config, ledger, FakeLlm())
-    try:
-        job_id = await _run_job(
-            manager,
-            job_type="report",
-            input_path=project_dir,
-            output_dir=project_dir / "reports" / "260102",
-        )
-        job = manager.status(job_id)
-        assert job.status == "failed"
-        assert job.error_kind is ErrorKind.UNSUPPORTED_INPUT
     finally:
         await manager.aclose()

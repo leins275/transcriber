@@ -50,8 +50,8 @@ pub mod ledger;
 pub mod meetings;
 
 /// The LLM feature's commands (`src/commands/llm.rs`): derived jobs
-/// (summary, action items, facts, exports, reports), artifact browsing and
-/// the GGUF model-download trio.
+/// (summary, action items, facts, per-recording exports) and the GGUF
+/// model-download trio.
 pub mod llm;
 
 /// A defensive upper bound on a single dropped-path argument's length

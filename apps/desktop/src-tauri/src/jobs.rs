@@ -70,8 +70,8 @@ pub struct JobSnapshot {
     pub file_name: String,
     /// Which pipeline this job runs: `"transcribe"` (the default, so an
     /// older frontend build sees no change) or one of F2's derived job
-    /// types (`"summarize"`, `"action_items"`, `"facts"`, `"report"`,
-    /// `"export"`). Additive to the frozen IPC contract.
+    /// types (`"summarize"`, `"action_items"`, `"facts"`, `"export"`).
+    /// Additive to the frozen IPC contract.
     pub job_type: String,
     pub state: JobState,
     pub classification: Option<String>,
@@ -723,7 +723,7 @@ fn now_rfc3339() -> String {
 }
 
 /// Today's local-agnostic (UTC) date in the vault's `YYMMDD` convention --
-/// used to name dated report/export folders, from the same pure-integer
+/// used to name dated export folders, from the same pure-integer
 /// clock as [`now_rfc3339`].
 pub(crate) fn today_yymmdd() -> String {
     let elapsed = std::time::SystemTime::now()

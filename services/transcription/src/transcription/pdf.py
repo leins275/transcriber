@@ -83,9 +83,9 @@ class PdfRenderError(Exception):
 def render_pdf(md_text: str, out_path: Path, *, base_dir: Path) -> Path:
     """Render ``md_text`` to ``out_path``; relative links resolve against ``base_dir``.
 
-    Raises :class:`PdfRenderError` on failure; the caller (the export/report
-    jobs) degrades -- the ``.md`` stays the deliverable and the failure lands
-    in the job's warnings, never failing the job.
+    Raises :class:`PdfRenderError` on failure; the caller (the export job)
+    degrades -- the ``.md`` stays the deliverable and the failure lands in
+    the job's warnings, never failing the job.
     """
     import markdown  # noqa: PLC0415 - deliberate lazy import (NFR-1)
     from xhtml2pdf import pisa  # noqa: PLC0415 - deliberate lazy import (NFR-1)
