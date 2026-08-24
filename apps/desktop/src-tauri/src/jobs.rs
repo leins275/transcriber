@@ -433,12 +433,17 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
         other => other,
     };
 
-    // Where the recording ends up, however it got there, and which language
-    // (if any) the operator pinned for it.
-    let (meeting_dir, source_dest, language) = match work {
+    // Where the recording ends up, however it got there, which language (if
+    // any) the operator pinned for it, and the name it arrived under -- the
+    // last of which only the ingest path knows (FR-1/FR-5).
+    let (meeting_dir, source_dest, language, original_file_name) = match work {
         PendingWork::Ingest { source_path } => {
             snapshot.state = JobState::Ingesting;
             shared.store_and_emit(snapshot.clone()).await;
+
+            // Captured before the ingest, which is where the dropped name
+            // stops existing: from here on the recording is `source.<ext>`.
+            let original_file_name = file_name_of(&source_path);
 
             let root = shared.root.read().await.clone();
             match ingest::ingest(&root, &source_path).await {
@@ -453,7 +458,12 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
                     }
                     // A dropped file carries no language control (Q1), so
                     // an ingest always submits as Auto.
-                    (outcome.meeting_dir, outcome.source_dest, None)
+                    (
+                        outcome.meeting_dir,
+                        outcome.source_dest,
+                        None,
+                        Some(original_file_name),
+                    )
                 }
                 Err(err) => {
                     // FR-6: a rejected file (bad extension, directory, escapes
@@ -478,8 +488,11 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             // already where it belongs. The job goes straight from Pending
             // to Queued, never showing an "ingesting" step that is not
             // happening.
+            // FR-5: only `source.<ext>` exists on disk here, and that is not
+            // an original file name -- so none is recorded and the ledger row
+            // falls back to its meeting-folder-derived label.
             snapshot.classification = classification;
-            (meeting_dir, source_dest, language)
+            (meeting_dir, source_dest, language, None)
         }
         // Peeled off above; this match only ever sees ingest-shaped work.
         PendingWork::Llm { .. } => unreachable!("llm work is handled before this match"),
@@ -494,6 +507,7 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
         audio_path: path_string(&source_dest),
         output_dir: path_string(&meeting_dir),
         language,
+        original_file_name,
     };
 
     let service = shared.service.read().await.clone();
@@ -867,6 +881,130 @@ mod tests {
         async fn status(&self, job_id: &str) -> Result<JobStatus, ServiceError> {
             self.inner.status(job_id).await
         }
+    }
+
+    /// Wraps a `FakeService`, keeping every `SubmitRequest` it was handed --
+    /// used to assert what the worker actually submits (FR-1/FR-5), not just
+    /// in which order.
+    struct RequestCapturingService {
+        inner: FakeService,
+        requests: Mutex<Vec<SubmitRequest>>,
+    }
+
+    impl RequestCapturingService {
+        fn new() -> Self {
+            RequestCapturingService {
+                inner: FakeService::with_timing(FakeTiming {
+                    queued_polls: 0,
+                    running_polls: 0,
+                }),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<SubmitRequest> {
+            self.requests
+                .lock()
+                .expect("captured requests mutex poisoned")
+                .clone()
+        }
+    }
+
+    #[async_trait]
+    impl TranscriptionService for RequestCapturingService {
+        async fn health(&self) -> Result<ServiceHealth, ServiceError> {
+            self.inner.health().await
+        }
+
+        async fn submit(&self, req: SubmitRequest) -> Result<String, ServiceError> {
+            self.requests
+                .lock()
+                .expect("captured requests mutex poisoned")
+                .push(req.clone());
+            self.inner.submit(req).await
+        }
+
+        async fn status(&self, job_id: &str) -> Result<JobStatus, ServiceError> {
+            self.inner.status(job_id).await
+        }
+    }
+
+    #[test]
+    fn a_dropped_recording_is_submitted_with_its_original_file_name() {
+        // FR-1: the vault renames the recording to `source.<ext>`, so the
+        // dropped file's own name survives only if the submission carries it.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let downloads = tempdir().expect("tempdir");
+            let source = write_recording(downloads.path(), "ELS - 260812 - Security issue.mp4");
+
+            let service = Arc::new(RequestCapturingService::new());
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service.clone(),
+                sink,
+                Duration::from_millis(5),
+            );
+
+            let snapshots = registry.enqueue(vec![source]).await;
+            wait_for(
+                &registry,
+                &snapshots[0].id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let requests = service.requests();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0].audio_path.ends_with("source.mp4"),
+                "the submitted audio path is still the vault's source.<ext>: {:?}",
+                requests[0].audio_path
+            );
+            assert_eq!(
+                requests[0].original_file_name.as_deref(),
+                Some("ELS - 260812 - Security issue.mp4")
+            );
+        });
+    }
+
+    #[test]
+    fn a_retranscribe_of_a_filed_recording_submits_no_original_file_name() {
+        // FR-5: only `source.<ext>` exists on disk for an already-filed
+        // recording; recording that as the "original file name" would be the
+        // log lying, so the field stays absent and the panel falls back.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let meeting_dir = root.path().join("ELS").join("260812 - Security issue");
+            fs::create_dir_all(&meeting_dir).expect("create meeting dir");
+            let source_dest = write_recording(&meeting_dir, "source.mp4");
+
+            let service = Arc::new(RequestCapturingService::new());
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service.clone(),
+                sink,
+                Duration::from_millis(5),
+            );
+
+            let snapshot = registry
+                .enqueue_filed(meeting_dir, source_dest, Some("sorted".to_string()), None)
+                .await;
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let requests = service.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].original_file_name, None);
+        });
     }
 
     async fn wait_for(

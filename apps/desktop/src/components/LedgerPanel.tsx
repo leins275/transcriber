@@ -36,6 +36,35 @@ function fileNameOf(path: string | null): string {
   return parts[parts.length - 1] || path;
 }
 
+/** The vault files every recording as `<meeting folder>/source.<ext>`, so
+ * `fileNameOf` alone labels every transcribe row `source.mp4`. */
+const SOURCE_BASE_NAME = /^source\.([^.\\/]+)$/;
+
+/**
+ * What to call this row's recording.
+ *
+ * 1. The name it was dropped under, when the service recorded one;
+ * 2. else, for a `.../<meeting folder>/source.<ext>` path, the meeting
+ *    folder's name with the source's extension — the vault derived that
+ *    folder from the original name, so it is the closest thing rows that
+ *    predate the recording have to one;
+ * 3. else the last path component, unchanged — derived LLM jobs point at a
+ *    meeting or project directory and read fine as-is.
+ *
+ * The full `source_path` stays in the row's `title` either way.
+ */
+function displayNameOf(row: LedgerJobView): string {
+  if (row.original_file_name) return row.original_file_name;
+  if (!row.source_path) return fileNameOf(row.source_path);
+
+  const parts = row.source_path.split(/[\\/]/);
+  const extension = SOURCE_BASE_NAME.exec(parts[parts.length - 1] ?? "")?.[1];
+  const folder = parts[parts.length - 2];
+  if (extension && folder) return `${folder}.${extension}`;
+
+  return fileNameOf(row.source_path);
+}
+
 /**
  * The service log: F2's own sqlite job ledger, newest first.
  *
@@ -111,7 +140,7 @@ export function LedgerPanel({ onLoad }: LedgerPanelProps) {
             <li key={row.job_id} className={styles.row} data-status={row.status}>
               <div className={styles.head}>
                 <span className={`${styles.file} mono`} title={row.source_path ?? undefined}>
-                  {fileNameOf(row.source_path)}
+                  {displayNameOf(row)}
                 </span>
                 <span className={styles.status} data-status={row.status}>
                   {STATUS_TEXT[row.status] ?? row.status}

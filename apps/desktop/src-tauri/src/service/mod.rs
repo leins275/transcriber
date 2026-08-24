@@ -186,6 +186,15 @@ pub struct LedgerJob {
     pub error_kind: Option<String>,
     pub error_message: Option<String>,
     pub service_version: Option<String>,
+    /// The recording's original file name as recorded at submit time (FR-1),
+    /// read back out of the row's `meeting_json` column. `None` for every
+    /// pre-feature row, for a retranscribe of an already-filed recording
+    /// (FR-5), and for any `meeting_json` this side cannot make sense of
+    /// (NFR-2) -- the UI derives a display name from `source_path` instead.
+    ///
+    /// Parsed once, here on the seam, so the panel stays presentational
+    /// (FR-2).
+    pub original_file_name: Option<String>,
 }
 
 /// `POST /v1/jobs` request body (F2's `JobCreate`, minus the fields this
@@ -195,6 +204,13 @@ pub struct SubmitRequest {
     pub audio_path: String,
     pub output_dir: String,
     pub language: Option<String>,
+    /// The recording's *original* file name, as it was dropped, before the
+    /// vault renamed it to `source.<ext>` (FR-1). `None` whenever no such
+    /// name is known -- notably a retranscribe of an already-filed recording,
+    /// where only `source.<ext>` exists on disk and calling that the
+    /// "original file name" would be a lie (FR-5). Travels in F2's existing
+    /// `meeting` object and is persisted verbatim as `meeting_json`.
+    pub original_file_name: Option<String>,
 }
 
 /// The seam's four job states (FR-12). F2 has five (`queued`, `running`,

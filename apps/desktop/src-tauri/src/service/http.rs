@@ -132,6 +132,19 @@ struct SubmitBody<'a> {
     output_dir: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     language: Option<&'a str>,
+    /// FR-1/FR-5: present only when an original file name is actually known.
+    /// Skipped entirely otherwise, so a submission without one posts a body
+    /// byte-identical to the pre-feature one rather than an empty `meeting`
+    /// object F2 would then persist as a meaningless `meeting_json`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meeting: Option<SubmitMeeting<'a>>,
+}
+
+/// The `meeting` member of F2's `JobCreate` (`schema.py`), which the service
+/// stores verbatim in the ledger's `meeting_json` column.
+#[derive(Serialize)]
+struct SubmitMeeting<'a> {
+    original_file_name: &'a str,
 }
 
 /// `POST /v1/jobs` request body for a derived (LLM) job -- F2's `JobCreate`
@@ -259,6 +272,27 @@ struct LedgerJobResponse {
     error_message: Option<String>,
     #[serde(default)]
     service_version: Option<String>,
+    /// The ledger's `meeting_json` column: a TEXT column holding whatever
+    /// `json.dumps` wrote, so it arrives as a JSON *string*, not an object.
+    /// Absent on every pre-feature row (FR-6), hence the default.
+    #[serde(default)]
+    meeting_json: Option<String>,
+}
+
+/// Pull the original file name out of a raw `meeting_json` value (FR-2).
+///
+/// Deliberately total: anything that is not a JSON object carrying a
+/// non-empty string under `original_file_name` -- unparseable text, a
+/// different shape, a number, an empty name -- is simply "no recorded name"
+/// (NFR-2). A ledger listing must never fail over one odd row's metadata,
+/// because the panel has a perfectly good fallback (FR-3).
+fn original_file_name_from(meeting_json: Option<&str>) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(meeting_json?).ok()?;
+    let name = parsed.get("original_file_name")?.as_str()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 impl From<LedgerJobResponse> for LedgerJob {
@@ -282,6 +316,7 @@ impl From<LedgerJobResponse> for LedgerJob {
             error_kind: row.error_kind,
             error_message: row.error_message,
             service_version: row.service_version,
+            original_file_name: original_file_name_from(row.meeting_json.as_deref()),
         }
     }
 }
@@ -376,6 +411,10 @@ impl TranscriptionService for HttpTranscriptionService {
             audio_path: &req.audio_path,
             output_dir: &req.output_dir,
             language: req.language.as_deref(),
+            meeting: req
+                .original_file_name
+                .as_deref()
+                .map(|original_file_name| SubmitMeeting { original_file_name }),
         };
         let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -573,11 +612,52 @@ mod tests {
             audio_path: "C:\\Meetings\\ELS\\260812\\source.mp4".to_string(),
             output_dir: "C:\\Meetings\\ELS\\260812".to_string(),
             language: None,
+            original_file_name: None,
         }
     }
 
     #[test]
     fn submit_posts_exact_body_keys_and_returns_job_id_from_202() {
+        run(async {
+            let server = MockServer::start().await;
+            // FR-1: an ingest-originated job carries the dropped recording's
+            // original file name in F2's existing `meeting` object, alongside
+            // the paths -- `body_json` is an *exact* match, so this also pins
+            // that nothing else was added to the wire body.
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .and(body_json(serde_json::json!({
+                    "audio_path": "C:\\Meetings\\ELS\\260812\\source.mp4",
+                    "output_dir": "C:\\Meetings\\ELS\\260812",
+                    "meeting": {"original_file_name": "ELS - 260812 - Security issue.mp4"},
+                })))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_json(serde_json::json!({"job_id": "job-1"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let job_id = service
+                .submit(SubmitRequest {
+                    original_file_name: Some("ELS - 260812 - Security issue.mp4".to_string()),
+                    ..request()
+                })
+                .await
+                .expect("submit should succeed");
+            assert_eq!(job_id, "job-1");
+        });
+    }
+
+    #[test]
+    fn submit_omits_the_meeting_key_entirely_when_no_original_file_name_is_known() {
+        // FR-5 at the wire level: a retranscribe of an already-filed
+        // recording has no original name on disk, so the body must be
+        // byte-identical to the pre-feature one -- no `meeting` key at all,
+        // never `source.<ext>` passed off as an "original file name".
         run(async {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -1226,6 +1306,114 @@ mod tests {
                 .await
                 .expect_err("model_download_status should fail on 401");
             assert!(matches!(err, ServiceError::Auth { .. }));
+        });
+    }
+
+    #[test]
+    fn list_ledger_jobs_reads_the_original_file_name_out_of_meeting_json() {
+        run(async {
+            let server = MockServer::start().await;
+            // FR-2: `meeting_json` is a TEXT column holding `json.dumps(...)`,
+            // so it crosses the wire as a JSON *string*, not an object. The
+            // parse happens exactly once, here, so the panel stays
+            // presentational.
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                    "job_id": "job-1",
+                    "status": "succeeded",
+                    "source_path": "C:\\Meetings\\ELS\\260812 - Security issue\\source.mp4",
+                    "meeting_json": "{\"original_file_name\": \"ELS - 260812 - Security issue.mp4\"}",
+                }])))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let rows = service
+                .list_ledger_jobs(50)
+                .await
+                .expect("list_ledger_jobs should succeed");
+            assert_eq!(
+                rows[0].original_file_name.as_deref(),
+                Some("ELS - 260812 - Security issue.mp4")
+            );
+        });
+    }
+
+    #[test]
+    fn list_ledger_jobs_a_row_without_a_meeting_json_key_still_decodes() {
+        run(async {
+            let server = MockServer::start().await;
+            // FR-6/NFR-1: every pre-feature ledger row, and any build of F2
+            // older than the column, omits the key entirely. That is absence,
+            // not a decode failure.
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!([{
+                        "job_id": "job-1",
+                        "status": "queued",
+                        "source_path": "C:\\Meetings\\ELS\\260812 - Security issue\\source.mp4",
+                    }])),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let rows = service
+                .list_ledger_jobs(50)
+                .await
+                .expect("a row without meeting_json must decode, not fail");
+            assert_eq!(rows[0].job_id, "job-1");
+            assert_eq!(rows[0].original_file_name, None);
+        });
+    }
+
+    #[test]
+    fn list_ledger_jobs_a_malformed_meeting_json_yields_no_name_rather_than_an_error() {
+        run(async {
+            let server = MockServer::start().await;
+            // NFR-2: not JSON, right JSON but no key, a non-string name, an
+            // empty name, and JSON that is not even an object. None of these
+            // may break the read path -- each row falls back to no recorded
+            // name and renders via FR-3.
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {"job_id": "not-json", "status": "succeeded", "meeting_json": "not json"},
+                    {"job_id": "empty-object", "status": "succeeded", "meeting_json": "{}"},
+                    {
+                        "job_id": "non-string-name",
+                        "status": "succeeded",
+                        "meeting_json": "{\"original_file_name\": 42}",
+                    },
+                    {
+                        "job_id": "empty-name",
+                        "status": "succeeded",
+                        "meeting_json": "{\"original_file_name\": \"\"}",
+                    },
+                    {"job_id": "json-but-not-an-object", "status": "succeeded", "meeting_json": "[1,2]"},
+                    {"job_id": "null-column", "status": "succeeded", "meeting_json": null},
+                ])))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let rows = service
+                .list_ledger_jobs(50)
+                .await
+                .expect("a malformed meeting_json must never fail the whole listing");
+            assert_eq!(rows.len(), 6);
+            for row in rows {
+                assert_eq!(
+                    row.original_file_name, None,
+                    "row {:?} must have no recorded original name",
+                    row.job_id
+                );
+            }
         });
     }
 

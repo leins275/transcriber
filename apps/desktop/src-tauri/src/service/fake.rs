@@ -499,6 +499,7 @@ mod tests {
             audio_path: "C:\\Meetings\\ELS\\260812\\source.mp4".to_string(),
             output_dir: "C:\\Meetings\\ELS\\260812".to_string(),
             language: None,
+            original_file_name: None,
         }
     }
 
