@@ -1,0 +1,3 @@
+{"phase": "design", "spec_approved": true, "plan_approved": false, "base_ref": null,
+ "tier": "ultra", "strict_skills": {"planning": [], "development": []},
+ "mode": "fast", "deferred_qa": []}

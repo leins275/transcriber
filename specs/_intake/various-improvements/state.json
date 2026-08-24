@@ -1,0 +1,3 @@
+{"batch": true, "phase": "factory", "source": "specs/_intake/various-improvements/source.md", "batch_base_ref": null, "features": [],
+ "tier": "ultra", "strict_skills": {"planning": [], "development": []},
+ "mode": "fast", "deferred_qa": []}
