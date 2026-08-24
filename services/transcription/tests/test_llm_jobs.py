@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fakes import FakeFrameExtractor, FakeLlm
 
-from transcription.artifacts import parse_front_matter
+from transcription.artifacts import parse_front_matter, write_item
 from transcription.config import Config
 from transcription.errors import ErrorKind
 from transcription.jobs import TERMINAL_STATUSES, JobManager
@@ -174,7 +174,7 @@ async def test_extraction_tolerates_a_reasoning_prefix_before_the_json(
     )
     llm = FakeLlm(responses=[f"Let me think about this.\n</think>\n{payload}"])
     manager = _manager(config, ledger, llm)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -311,7 +311,7 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
     llm = FakeLlm(responses=[response])
     extractor = FakeFrameExtractor()
     manager = _manager(config, ledger, llm, extractor)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -341,11 +341,41 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
         assert "![screenshot-0010.png](screenshot-0010.png)" in body
 
         assert (items_dir / "investigate-caching" / "investigate-caching.md").is_file()
+        # Nothing is written to the legacy project-level tree (FR-1, FR-6).
+        assert not (meeting_dir.parent / "action items").exists()
 
         row = ledger.get_job(job_id)
         assert row is not None
         manifest = json.loads(row["result_json"])
         assert manifest["item_count"] == 2
+    finally:
+        await manager.aclose()
+
+
+async def test_extraction_on_an_unsorted_meeting_records_a_null_source_project(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = tmp_app_dir / "vault" / "unsorted" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    (meeting / "source.mp4").write_bytes(b"fake-video-bytes")
+    (meeting / "transcript.json").write_text(json.dumps(_transcript_doc()), encoding="utf-8")
+
+    response = _items_json(
+        [{"type": "task", "title": "Unfiled task", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[response])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        md_text = (items_dir / "unfiled-task" / "unfiled-task.md").read_text(encoding="utf-8")
+        meta, _ = parse_front_matter(md_text)
+        assert meta["source_project"] is None, "unsorted meetings carry a null project"
+        assert meta["source_meeting"] == MEETING_NAME
     finally:
         await manager.aclose()
 
@@ -358,7 +388,7 @@ async def test_extraction_repairs_invalid_json_once(
     )
     llm = FakeLlm(responses=["this is not json", good])
     manager = _manager(config, ledger, llm)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -377,7 +407,7 @@ async def test_persistently_invalid_json_fails_with_llm_output(
 ) -> None:
     llm = FakeLlm(responses=["nope"])  # the single response repeats: repair also fails
     manager = _manager(config, ledger, llm)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -399,7 +429,7 @@ async def test_screenshot_failure_degrades_but_items_are_still_written(
     llm = FakeLlm(responses=[response])
     extractor = FakeFrameExtractor(raise_kind=ErrorKind.AUDIO_DECODE)
     manager = _manager(config, ledger, llm, extractor)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -437,7 +467,7 @@ async def test_facts_use_the_kind_key_and_audio_only_recordings_get_no_screensho
     llm = FakeLlm(responses=[response])
     extractor = FakeFrameExtractor(no_video=True)
     manager = _manager(config, ledger, llm, extractor)
-    facts_dir = meeting.parent / "facts"
+    facts_dir = meeting / "facts"
     try:
         job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
         assert manager.status(job_id).status == "succeeded"
@@ -461,7 +491,7 @@ async def test_duplicate_titles_get_collision_suffixed_folders(
     )
     llm = FakeLlm(responses=[response])
     manager = _manager(config, ledger, llm)
-    items_dir = meeting_dir.parent / "action items"
+    items_dir = meeting_dir / "action items"
     try:
         await _run_job(
             manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
@@ -486,21 +516,20 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
     config: Config, ledger: Ledger, meeting_dir: Path
 ) -> None:
     (meeting_dir / "summary.md").write_text("The meeting summary text.", encoding="utf-8")
-    # One action item from THIS meeting, one from another (must be filtered out).
-    from transcription.artifacts import write_item
-
-    items_dir = meeting_dir.parent / "action items"
+    # This recording's own item lives inside the meeting folder (FR-4).
     write_item(
-        items_dir,
+        meeting_dir / "action items",
         title="Ours",
         meta={"type": "task", "title": "Ours", "source_meeting": MEETING_NAME},
         body_md="belongs here",
         images=[],
     )
-    write_item(
-        items_dir,
-        title="Not ours",
-        meta={"type": "task", "title": "Not ours", "source_meeting": "260202 - Other"},
+    # A legacy project-level item -- even with a matching `source_meeting` -- is
+    # never read; it also stays on disk untouched (FR-6, Q1).
+    legacy_md = write_item(
+        meeting_dir.parent / "action items",
+        title="Legacy leftover",
+        meta={"type": "task", "title": "Legacy leftover", "source_meeting": MEETING_NAME},
         body_md="must not appear",
         images=[],
     )
@@ -517,7 +546,10 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
         export_md = (export_dir / "export.md").read_text(encoding="utf-8")
         assert "The meeting summary text." in export_md
         assert "Ours" in export_md
+        assert "belongs here" in export_md
+        assert "Legacy leftover" not in export_md, "legacy project-level items are unread"
         assert "must not appear" not in export_md
+        assert legacy_md.is_file(), "legacy items are left on disk, never deleted"
         assert "segment 0 discussing the plan" in export_md
         # Fixed section order: Summary -> Action items -> Facts -> Transcript.
         positions = [
@@ -530,6 +562,73 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
 
         pdf_bytes = (export_dir / "export.pdf").read_bytes()
         assert pdf_bytes.startswith(b"%PDF"), "a real PDF was rendered"
+    finally:
+        await manager.aclose()
+
+
+async def test_export_of_an_unsorted_meeting_includes_its_meeting_level_items(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = tmp_app_dir / "vault" / "unsorted" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    (meeting / "transcript.json").write_text(json.dumps(_transcript_doc()), encoding="utf-8")
+    write_item(
+        meeting / "action items",
+        title="Unfiled task",
+        meta={"type": "task", "title": "Unfiled task", "source_meeting": MEETING_NAME},
+        body_md="an unfiled action item",
+        images=[],
+    )
+    write_item(
+        meeting / "facts",
+        title="Unfiled fact",
+        meta={"kind": "answered_question", "title": "Unfiled fact"},
+        body_md="an unfiled fact",
+        images=[],
+    )
+
+    manager = _manager(config, ledger, FakeLlm())
+    export_dir = meeting / "exports" / "260102"
+    try:
+        job_id = await _run_job(
+            manager, job_type="export", input_path=meeting, output_dir=export_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        export_md = (export_dir / "export.md").read_text(encoding="utf-8")
+        assert "an unfiled action item" in export_md
+        assert "an unfiled fact" in export_md
+        assert "_No action items recorded" not in export_md
+        assert "_No facts recorded" not in export_md
+    finally:
+        await manager.aclose()
+
+
+async def test_export_rewrites_item_screenshot_links_relative_to_the_export_dir(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    write_item(
+        meeting_dir / "action items",
+        title="With a shot",
+        meta={"type": "task", "title": "With a shot", "source_meeting": MEETING_NAME},
+        body_md="see the frame",
+        images=[("screenshot-0010.png", b"\x89PNG\r\n\x1a\nfake-png-bytes")],
+    )
+
+    manager = _manager(config, ledger, FakeLlm())
+    export_dir = meeting_dir / "exports" / "260102"
+    try:
+        job_id = await _run_job(
+            manager, job_type="export", input_path=meeting_dir, output_dir=export_dir
+        )
+        assert manager.status(job_id).status == "succeeded"
+
+        export_md = (export_dir / "export.md").read_text(encoding="utf-8")
+        # From <meeting>/exports/<YYMMDD>/ back up to <meeting>/action items/<slug>/.
+        assert "(../../action items/with-a-shot/screenshot-0010.png)" in export_md
+        assert (
+            (export_dir / "../../action items/with-a-shot/screenshot-0010.png").resolve().is_file()
+        )
     finally:
         await manager.aclose()
 

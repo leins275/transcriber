@@ -176,6 +176,40 @@ describe("RecordingPage", () => {
     expect(onDelete).toHaveBeenCalledWith("v-9");
   });
 
+  it("extracts action items and facts from an unfiled recording", async () => {
+    const onExtract = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9", project: null }), onExtract });
+
+    const actionItems = screen.getByRole("button", { name: "Action items" });
+    const facts = screen.getByRole("button", { name: "Facts" });
+    expect(actionItems).toBeEnabled();
+    expect(facts).toBeEnabled();
+
+    await user.click(actionItems);
+    await user.click(facts);
+
+    expect(onExtract).toHaveBeenNthCalledWith(1, "v-9", "action_items");
+    expect(onExtract).toHaveBeenNthCalledWith(2, "v-9", "facts");
+  });
+
+  it("no longer tells an unfiled recording to be filed under a project first", () => {
+    renderPage({ entry: buildEntry({ project: null }) });
+
+    expect(screen.getByRole("button", { name: "Action items" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: "Facts" })).not.toHaveAttribute("title");
+    expect(
+      screen.queryByTitle(/file this recording under a project first/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables an extraction button while its own job is in flight", () => {
+    renderPage({ entry: buildEntry({ project: null }), activeLlmJobs: ["action_items"] });
+
+    expect(screen.getByRole("button", { name: "Extracting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Facts" })).toBeEnabled();
+  });
+
   it("surfaces a transcript read failure on the page", async () => {
     renderPage({
       onReadTranscript: () => Promise.reject({ kind: "vault", message: "transcript unreadable" }),

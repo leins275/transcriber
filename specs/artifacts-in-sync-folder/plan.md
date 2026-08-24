@@ -1,7 +1,7 @@
 ---
 slug: artifacts-in-sync-folder
 status: approved
-base_ref: <git sha, recorded at plan approval>
+base_ref: 4098ac7a2057b86f72fe89b7e96aa5b335e7df56
 ---
 
 # Plan: Store action items and facts under the recording's own folder
@@ -48,7 +48,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 
 ## Tasks
 
-### [ ] T1: Vault crate — move the artifact-dir contract's documented anchor to the meeting folder  [deps: —]
+### [x] T1: Vault crate — move the artifact-dir contract's documented anchor to the meeting folder  [deps: —]
 
 - **Files**: `crates/vault/src/paths.rs`, `crates/vault/src/artifacts.rs`, `crates/vault/src/lib.rs`, `crates/vault/src/list.rs`
 - **Test first**: `crates/vault/src/paths.rs` (`#[cfg(test)]` in-module) — cases: a contract test pinning the exact strings `ACTION_ITEMS_DIR_NAME == "action items"`, `FACTS_DIR_NAME == "facts"`, and `RESERVED_PROJECT_DIR_NAMES` still containing both plus `reports` (FR-1, FR-5). Confirm `list.rs`'s existing reserved-name test (line ~371, `["action items", "Facts", "REPORTS"]` skipped by `list_meetings`) still passes unchanged (FR-5).
@@ -56,7 +56,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: —
 - **Done when**: New contract test passes; all existing vault-crate tests pass untouched; `make format lint test` green on the Rust side.
 
-### [ ] T2: Retarget extraction to `<meeting>/<kind>` and drop the project gate (Tauri command)  [deps: —]
+### [x] T2: Retarget extraction to `<meeting>/<kind>` and drop the project gate (Tauri command)  [deps: —]
 
 - **Files**: `apps/desktop/src-tauri/src/commands/llm.rs`
 - **Test first**: `apps/desktop/src-tauri/src/commands/llm.rs` `mod tests` — cases: (a) replace `extraction_targets_the_project_level_artifact_directory` with a test asserting the fake service's submission `output_dir` ends with `ELS/<meeting>/facts` — i.e. `<meeting>/<kind>`, and that nothing targets `<root>/ELS/facts` (FR-1 crit. 3); (b) replace `extraction_on_an_unsorted_meeting_is_refused_with_an_actionable_message` with `extraction_on_an_unsorted_meeting_enqueues_into_the_meeting_folder`: an `unsorted/` meeting with a transcript enqueues, `output_dir` ends with `unsorted/<meeting>/action items` (FR-2 crit. 1); (c) extraction on a meeting *without* a transcript is still refused with the "transcribe it first" message (FR-2 crit. 3).
@@ -64,7 +64,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: —
 - **Done when**: The three tests pass; the old two test names are gone; `cargo` builds warning-free (no dead `require_project_dir`); `make format lint test` green on the Rust side.
 
-### [ ] T3: Python artifacts module — contract docs and the deeper 260-char budget  [deps: —]
+### [x] T3: Python artifacts module — contract docs and the deeper 260-char budget  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/artifacts.py`, `services/transcription/tests/test_llm_units.py`
 - **Test first**: `services/transcription/tests/test_llm_units.py` — cases: (a) contract test pinning `ACTION_ITEMS_DIR_NAME == "action items"`, `FACTS_DIR_NAME == "facts"` (the Python half of FR-1 crit. 4); (b) extend `test_fit_slug_trims_against_the_260_char_budget` with a realistically deep meeting-level parent — e.g. `<long root ~170 chars>/<PROJECT>/260101 - a long meeting title/action items` — asserting the fitted slug keeps `parent/<slug>/<slug>.md` *and* the 20-char screenshot sibling within 260 chars, and that an impossibly deep meeting path still raises `INVALID_REQUEST` (NFR-1).
@@ -72,7 +72,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: New/extended tests pass; `make format lint type test` green on the Python side.
 
-### [ ] T4: `_extract_sync` provenance — `source_project` from the meeting's parent, null for unsorted  [deps: —]
+### [x] T4: `_extract_sync` provenance — `source_project` from the meeting's parent, null for unsorted  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` (extraction section, lines ~285–480) — cases: (a) retarget every extraction test's `items_dir` from `meeting_dir.parent / "<kind>"` to `meeting_dir / "<kind>"` and assert items land there (FR-1 crit. 1–2); (b) `test_action_items_are_written_with_screenshots_and_front_matter` still asserts `source_project == "ELS"` and `source_meeting == MEETING_NAME` with the new layout (FR-3 crit. 1); (c) new test: extraction for a meeting under `vault/unsorted/` succeeds and writes front matter with `source_project` of JSON `null` (`meta["source_project"] is None`) and items under `unsorted/<meeting>/action items/` (FR-2 crit. 1, FR-3 crit. 2); (d) collision-suffix and screenshot-degradation tests keep passing at the new anchor.
@@ -80,7 +80,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: Extraction tests pass with meeting-level `output_dir`s and both `source_project` branches covered; `make format lint type test` green on the Python side.
 
-### [ ] T5: Export reads meeting-level items; unsorted special case removed  [deps: T4]
+### [x] T5: Export reads meeting-level items; unsorted special case removed  [deps: T4]
 
 - **Files**: `services/transcription/src/transcription/exporting.py`, `services/transcription/src/transcription/jobs.py`, `services/transcription/tests/test_llm_jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` (export section, lines ~485–535) — cases: (a) rework `test_export_assembles_sections_in_order_and_renders_a_pdf`: items written via `write_item` into `meeting_dir / "action items"` appear under "## Action items"; a legacy item planted at `meeting_dir.parent / "action items"` (even with matching `source_meeting`) does **not** appear — legacy trees are unread, not deleted (FR-4, FR-6, Q1); section order unchanged; (b) new test: an `unsorted/<meeting>` export includes its meeting-level items — no empty-section special case (FR-4 crit. 2); (c) screenshot links in an exported item body resolve relative to the export dir, i.e. rewrite to `../../action items/<slug>/screenshot-*.png` from `<meeting>/exports/<YYMMDD>/` (FR-4 crit. 1).
@@ -88,7 +88,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: `testing-toolkit:python-testing-patterns`
 - **Done when**: Export tests pass for filed and unsorted meetings; no reference to `project_dir` remains in `exporting.py`/`_export_sync`; `make format lint type test` green on the Python side.
 
-### [ ] T6: RecordingPage — enable Action items / Facts for unfiled recordings  [deps: —]
+### [x] T6: RecordingPage — enable Action items / Facts for unfiled recordings  [deps: —]
 
 - **Files**: `apps/desktop/src/components/RecordingPage.tsx`, `apps/desktop/src/components/RecordingPage.test.tsx`
 - **Test first**: `apps/desktop/src/components/RecordingPage.test.tsx` — cases: (a) an entry with `project: null` and a transcript renders "Action items" and "Facts" buttons **enabled**, and clicking each calls `onExtract(id, "action_items" | "facts")` (FR-2 crit. 2); (b) the "File this recording under a project first" tooltip (`title` attribute) is absent for unfiled entries; (c) buttons still disable while their job kind is in `activeLlmJobs` (existing behavior preserved).
@@ -96,7 +96,7 @@ No schema, IPC-shape, or config changes. Legacy `<PROJECT>/<kind>/` trees: never
 - **Skills**: `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: New Vitest cases pass, existing RecordingPage tests untouched-and-green; `make format lint type test` green on the frontend side.
 
-### [ ] T7: Integration verification — full QA plus a driven app smoke of the unsorted flow  [deps: T1, T2, T3, T4, T5, T6]
+### [x] T7: Integration verification — full QA plus a driven app smoke of the unsorted flow  [deps: T1, T2, T3, T4, T5, T6]
 
 - **Files**: — (read-only verification; no source edits — regressions found here are fixed in the owning task's files by re-opening that task)
 - **Test first**: n/a (this task executes the existing suites and drives the app; it adds no new test files)

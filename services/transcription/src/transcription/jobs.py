@@ -892,7 +892,10 @@ class JobManager:
             duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
 
         source_file = self._find_source_file(meeting_dir)
-        project_name = Path(job.output_path).parent.name
+        # Items live inside the meeting folder, so provenance comes from the
+        # meeting's parent: a project code, or null for `unsorted/` meetings.
+        parent_name = meeting_dir.parent.name
+        project_name = None if parent_name.casefold() == "unsorted" else parent_name
         created = datetime.now(UTC).isoformat()
 
         md_paths: list[Path] = []
@@ -1008,14 +1011,11 @@ class JobManager:
     def _export_sync(self, job: JobState) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
         export_dir = Path(job.output_path)
-        parent = meeting_dir.parent
-        project_dir = None if parent.name.casefold() == "unsorted" else parent
 
         job.progress = 0.1
         export_md, warnings = exporting.build_export_md(
             meeting_dir=meeting_dir,
             meeting_name=meeting_dir.name,
-            project_dir=project_dir,
             export_dir=export_dir,
         )
         job.warnings.extend(warnings)

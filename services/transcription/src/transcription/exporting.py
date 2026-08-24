@@ -68,13 +68,14 @@ def load_summary(meeting_dir: Path) -> str | None:
         return None
 
 
-def items_for_meeting(project_dir: Path, kind_dir_name: str, meeting_name: str) -> list[StoredItem]:
-    """The project-level items whose front matter cites this meeting."""
-    return [
-        item
-        for item in list_items(project_dir / kind_dir_name)
-        if str(item.meta.get("source_meeting", "")) == meeting_name
-    ]
+def items_for_meeting(meeting_dir: Path, kind_dir_name: str) -> list[StoredItem]:
+    """This recording's items of one kind, read from its own folder.
+
+    Everything under ``<meeting>/<kind>/`` belongs to that meeting by
+    construction, so no ``source_meeting`` filtering is needed. Legacy
+    project-level trees are never read (they stay on disk untouched).
+    """
+    return list_items(meeting_dir / kind_dir_name)
 
 
 def _relocate_screenshot_links(body: str, item_dir: Path, export_dir: Path) -> str:
@@ -103,7 +104,6 @@ def build_export_md(
     *,
     meeting_dir: Path,
     meeting_name: str,
-    project_dir: Path | None,
     export_dir: Path,
 ) -> tuple[str, list[str]]:
     """Assemble the export document; returns ``(markdown, warnings)``."""
@@ -126,11 +126,7 @@ def build_export_md(
     ):
         sections.append(f"## {heading}")
         sections.append("")
-        items = (
-            items_for_meeting(project_dir, kind_dir_name, meeting_name)
-            if project_dir is not None
-            else []
-        )
+        items = items_for_meeting(meeting_dir, kind_dir_name)
         if items:
             for item in items:
                 sections.append(_item_section(item, export_dir))

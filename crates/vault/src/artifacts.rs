@@ -1,6 +1,20 @@
 //! Read-only enumeration of project-level artifacts (action items, facts,
 //! reports) written by F2's LLM jobs.
 //!
+//! ## Legacy anchor
+//!
+//! Extraction now writes items *inside the meeting folder*
+//! (`<meeting>/action items/<slug>/`, `<meeting>/facts/<slug>/`), so
+//! [`list_project_artifacts`] enumerates only what an older build left
+//! behind at `<PROJECT>/<kind>/` — those files are never migrated and
+//! never deleted, just no longer written to or read by the app's own
+//! flows. Nothing here aggregates the new meeting-level items; the
+//! project-page browsing surface this module backs is being removed
+//! outright, and the per-recording export reads the meeting folder
+//! directly (`services/transcription/src/transcription/exporting.py`).
+//! [`list_reports`] is unaffected — `<PROJECT>/reports/` is still a
+//! project-level tree.
+//!
 //! Same contract as [`crate::list`]: best-effort against a directory tree
 //! never fully under this crate's control — junk entries are skipped, no
 //! `Result` anywhere, an absent directory is an empty listing. Nothing here
@@ -13,12 +27,17 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::{ACTION_ITEMS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME};
 
-/// Which project-level artifact directory to enumerate.
+/// Which kind of extracted artifact — i.e. which reserved directory name.
+///
+/// Anchor-neutral on purpose: [`ArtifactKind::dir_name`] names the
+/// directory, and the caller decides what to join it onto. Extraction joins
+/// it onto the meeting folder; the legacy enumeration below joins it onto a
+/// project folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
-    /// `<PROJECT>/action items/`
+    /// `action items` — the extracted to-dos.
     ActionItems,
-    /// `<PROJECT>/facts/`
+    /// `facts` — the extracted facts and answered questions.
     Facts,
 }
 
@@ -32,7 +51,9 @@ impl ArtifactKind {
     }
 }
 
-/// One artifact item folder: `<PROJECT>/<kind>/<slug>/`.
+/// One artifact item folder as found by [`list_project_artifacts`], i.e. a
+/// legacy `<PROJECT>/<kind>/<slug>/` (the item *shape* is the same one
+/// extraction writes today at `<meeting>/<kind>/<slug>/`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactEntry {
     /// The item folder's name.
@@ -80,11 +101,14 @@ fn project_dir(root: &Path, project: &str) -> Option<PathBuf> {
     None
 }
 
-/// Lists every item under `<root>/<project>/<kind dir>/`, sorted by slug.
+/// Lists every *legacy* item under `<root>/<project>/<kind dir>/`, sorted
+/// by slug.
 ///
 /// An item is a subdirectory containing `<its own name>.md`; anything else
 /// at that level is skipped. Returns an empty `Vec` (never an error) for a
-/// missing project or kind directory.
+/// missing project or kind directory — which is what a vault written only
+/// by the current build returns, since extraction now writes into
+/// `<meeting>/<kind>/` instead (see the module docs).
 pub fn list_project_artifacts(
     root: &Path,
     project: &str,
