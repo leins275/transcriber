@@ -3,6 +3,25 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.13.0 — 2026-08-25
+
+### Chores
+
+- Landing screenshot with English meeting titles
+- Add Astro landing page, deployed to GitHub Pages from CI
+- Add MIT license
+- Untrack the local scratch folder
+
+### Documentation
+
+- Reflect the extended pipeline and the one-model catalog
+
+### Features
+
+- Auto-export at the end of the drop-to-insights chain
+- Pin the assistant to Qwen3.5-9B and remove model switching
+- One flat recordings list with optional project grouping
+
 ## 0.12.1 — 2026-08-25
 
 ### Bug fixes
