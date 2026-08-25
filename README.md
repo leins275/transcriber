@@ -13,17 +13,15 @@ My setup (where this software kinda works):
 Everything runs locally; the app downloads the models on first use.
 
 - **Speech-to-text**: `faster-whisper large-v3` (~3 GB).
-- **Assistant LLM** (summaries, action items) — pick one in Settings:
-  - **Qwen3.5 9B** Q5_K_M (~6.6 GB) — the default. Fits fully into a 12 GB GPU, so it's fast.
-  - **Qwen3.6 35B A3B** Q4_K_M (~20 GB) — higher quality, but on a 12 GB GPU most of it runs from RAM, so it's noticeably slower.
+- **Assistant LLM** (summaries, action items): **Qwen3.5 9B** Q5_K_M (~6.6 GB) — the one built-in model, no switching. Fits fully into a 12 GB GPU, so it's fast.
 - **GPU acceleration** (optional, NVIDIA): the CUDA build of the local llama.cpp runtime (~460 MB), offered in Settings.
 
 # Main Idea
 
 As a person that simultaneously handle several projects, I like to take the most of the all condacted & participated meetings.
-Drop a recording and the pipeline runs on its own: transcript, then summary (with the key facts and decisions), then action items —
-viewable right in the app, with on-demand screenshots per action item. Also, it can generate singlefile meeting report with 
-all extracted artifacts for sharing and manual analysis.
+Drop a recording and the pipeline runs on its own: transcript, then summary (with the key facts and decisions), then action items,
+then a single-file meeting report (export) with all extracted artifacts for sharing and manual analysis — everything
+viewable right in the app, with on-demand screenshots per action item.
 
 Also, all the results should be concidered as a preprocessing, with the following manual handling. That's why I also don't have any
 external integrations. Apply your own brain to your data sometimes is good.
