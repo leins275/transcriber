@@ -8,7 +8,7 @@ slide), and capped per item.
 
 from __future__ import annotations
 
-# At most this many screenshots per action item / fact.
+# At most this many screenshots per action item.
 MAX_SCREENSHOTS_PER_ITEM = 6
 
 # Two cited moments closer than this collapse into one screenshot.

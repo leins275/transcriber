@@ -91,10 +91,11 @@ def summary_messages(transcript_text: str, *, language: str | None = None) -> li
             "role": "user",
             "content": (
                 "Summarize this meeting transcript as Markdown. Structure: a short "
-                "overview paragraph, then sections for key discussion points, "
-                "decisions made, and open questions. Omit a section when the "
-                "meeting had nothing for it. Do not invent content that is not "
-                "in the transcript.\n\nTranscript:\n\n" + transcript_text
+                "overview paragraph, then sections for key discussion points "
+                "(keep the notable facts -- constraints, metrics, dates, how "
+                "things work), decisions made, and open questions. Omit a section "
+                "when the meeting had nothing for it. Do not invent content that "
+                "is not in the transcript.\n\nTranscript:\n\n" + transcript_text
             ),
         },
     ]
@@ -116,7 +117,8 @@ def chunk_summary_messages(
             "role": "user",
             "content": (
                 f"This is part {index + 1} of {total} of a meeting transcript. "
-                "Write a compact Markdown summary of this part only: key points, "
+                "Write a compact Markdown summary of this part only: key points "
+                "(keep the notable facts -- constraints, metrics, dates), "
                 "decisions, open questions. Do not speculate about the other parts."
                 "\n\nTranscript part:\n\n" + chunk_text
             ),
@@ -145,7 +147,8 @@ def merge_summaries_messages(
             "content": (
                 "Merge these partial summaries of one meeting into a single "
                 "Markdown summary. Structure: a short overview paragraph, then "
-                "sections for key discussion points, decisions made, and open "
+                "sections for key discussion points (keep the notable facts -- "
+                "constraints, metrics, dates), decisions made, and open "
                 "questions. Deduplicate overlapping points.\n\n" + numbered
             ),
         },
@@ -160,7 +163,12 @@ _ACTION_ITEM_RULES = (
     "a short imperative title, a Markdown description with all relevant context "
     "from the discussion, and the timestamps (in seconds, from the [m:ss] markers) "
     "of the few most important transcript moments where it was discussed -- not "
-    "every mention."
+    "every mention. Separately, in screenshot_timestamps, list only the moments "
+    "where the speakers are clearly referring to something visible on a shared "
+    "screen -- a demo, a slide, a diagram, a document being walked through "
+    "('as you can see here', 'on this slide'). Most items have no such moment: "
+    "leave screenshot_timestamps empty unless the transcript makes the visual "
+    "reference explicit."
 )
 
 
@@ -181,40 +189,6 @@ def action_items_messages(chunk_text: str, *, language: str | None = None) -> li
             "content": (
                 "Extract every action item from this transcript part. If there are "
                 "none, return an empty items list.\n\nTranscript:\n\n" + chunk_text
-            ),
-        },
-    ]
-
-
-_FACT_RULES = (
-    "A fact is a concrete piece of information stated in the meeting that is worth "
-    "remembering (a constraint, a metric, a date, how something works). An answered "
-    "question is a question someone asked that got a substantive answer. For each, "
-    "give a short declarative title, a Markdown description (for answered questions: "
-    "the question and its answer), and the timestamps (in seconds, from the [m:ss] "
-    "markers) of the few most important transcript moments involved -- not every "
-    "mention."
-)
-
-
-def facts_messages(chunk_text: str, *, language: str | None = None) -> list[Message]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract notable facts and answered questions from meeting "
-                "transcripts and answer in strict JSON matching the provided schema. "
-                + _FACT_RULES
-                + " "
-                + _language_rule(language)
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "Extract the notable facts and answered questions from this "
-                "transcript part. If there are none, return an empty items list."
-                "\n\nTranscript:\n\n" + chunk_text
             ),
         },
     ]

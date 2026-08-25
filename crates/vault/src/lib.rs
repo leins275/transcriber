@@ -39,7 +39,7 @@
 //!     <date> - <Title>/
 //!       source.<ext>
 //!       action items/<slug>/<slug>.md   (F2's LLM extraction)
-//!       facts/<slug>/<slug>.md          (F2's LLM extraction)
+//!       facts/<slug>/<slug>.md          (legacy: the retired facts job)
 //!       exports/<YYMMDD>/               (per-recording export)
 //!     reports/<YYMMDD>/                 (project-level, F2's LLM jobs)
 //!   unsorted/
@@ -48,13 +48,13 @@
 //! ```
 //!
 //! Every ingested recording — sorted or unsorted — gets its own folder, so
-//! that later artifacts (a transcript, a summary, extracted action items
-//! and facts, a per-recording export) can be written next to the source;
-//! an unsorted meeting folder takes exactly the same contents as a filed
-//! one. `source.*`, `transcript.json`, `summary.md`, `action items`,
-//! `facts`, `exports` (all four inside a meeting folder), `reports`
-//! (project-level) and `unsorted` are reserved names owned by the vault
-//! contract.
+//! that later artifacts (a transcript, a summary, extracted action items,
+//! a per-recording export) can be written next to the source; an unsorted
+//! meeting folder takes exactly the same contents as a filed one.
+//! `source.*`, `transcript.json`, `summary.md`, `action items`, `facts`
+//! (legacy — the retired facts job's tree, still reserved), `exports` (all
+//! four inside a meeting folder), `reports` (project-level) and `unsorted`
+//! are reserved names owned by the vault contract.
 //!
 //! Only the project *level* needs a listing exclusion, since [`list`] never
 //! recurses into a meeting folder: `<PROJECT>/reports/`, plus the legacy
@@ -132,14 +132,14 @@ pub mod list;
 /// these the only vault-mutating calls outside ingest.
 pub mod manage;
 
-/// The artifact directories (action items, facts) that F2's LLM extraction
-/// jobs write into, anchored on the meeting folder — a name mapping only,
-/// no I/O.
+/// Reading the extraction items F2's LLM job writes into
+/// `<meeting>/action items/` — the Rust mirror of the Python-owned
+/// front-matter contract.
 pub mod artifacts;
 
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
-pub use artifacts::ArtifactKind;
+pub use artifacts::{list_action_items, read_item, StoredItem};
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
 pub use list::{list_meetings, MeetingEntry};

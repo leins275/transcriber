@@ -136,13 +136,15 @@ describe("SettingsPage", () => {
     expect(screen.queryByText(/no longer exists/i)).not.toBeInTheDocument();
   });
 
-  // FR-7: the project-report job is gone, so no copy may promise one.
-  it("describes the assistant as summaries, action items and facts — not project reports", () => {
+  // FR-7: the project-report job is gone, so no copy may promise one; the
+  // facts extraction followed it (the summary carries the notable facts).
+  it("describes the assistant as summaries and action items — not reports or facts", () => {
     renderPage({ llmModels: llmCatalog() });
     expect(
-      screen.getByText(/Summaries, action items and facts run on this machine\./),
+      screen.getByText(/Summaries and action items run on this machine\./),
     ).toBeInTheDocument();
     expect(screen.queryByText(/project reports/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/facts/i)).not.toBeInTheDocument();
   });
 
   it("lists every curated model with its size, and badges the active one", () => {

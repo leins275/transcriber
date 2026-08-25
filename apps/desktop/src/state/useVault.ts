@@ -1,7 +1,15 @@
 import { useCallback, useState } from "react";
 import { api } from "../api";
 import { sortVaultEntries } from "../lib/vaultGroups";
-import type { MeetingUpdate, SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type {
+  ActionItemsView,
+  ItemScreenshotView,
+  ItemScreenshotsView,
+  MeetingUpdate,
+  SummaryView,
+  TranscriptView,
+  VaultMeetingView,
+} from "../types";
 
 /**
  * Holds the vault listing and the per-meeting actions over it, so `App.tsx`
@@ -55,6 +63,23 @@ export function useVault() {
     [],
   );
 
+  const readActionItems = useCallback(
+    (entryId: string): Promise<ActionItemsView> => api.readActionItems(entryId),
+    [],
+  );
+
+  const captureItemScreenshots = useCallback(
+    (entryId: string, itemDirName: string): Promise<ItemScreenshotsView> =>
+      api.captureItemScreenshots(entryId, itemDirName),
+    [],
+  );
+
+  const readItemScreenshots = useCallback(
+    (entryId: string, itemDirName: string): Promise<ItemScreenshotView[]> =>
+      api.readItemScreenshots(entryId, itemDirName),
+    [],
+  );
+
   const saveSpeakers = useCallback(
     (entryId: string, assignments: Record<string, string>) =>
       api.setSpeakerLabels(entryId, assignments),
@@ -69,6 +94,9 @@ export function useVault() {
     reveal,
     readTranscript,
     readSummary,
+    readActionItems,
+    captureItemScreenshots,
+    readItemScreenshots,
     saveSpeakers,
     update,
     remove,

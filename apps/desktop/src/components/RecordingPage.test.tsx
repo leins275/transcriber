@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingPage } from "./RecordingPage";
-import type { SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type { ActionItemsView, SummaryView, TranscriptView, VaultMeetingView } from "../types";
 
 function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView {
   return {
@@ -39,6 +39,12 @@ const emptySummary: SummaryView = {
   markdown: null,
 };
 
+const emptyActionItems: ActionItemsView = {
+  entry_id: "v-1",
+  dir: "D:\\Meetings\\RDDM\\260709 - tech support 1\\action items",
+  items: [],
+};
+
 function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> = {}) {
   const defaults = {
     entry: buildEntry(),
@@ -54,8 +60,12 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
     onSummarize: () => Promise.resolve(),
     onExtract: () => Promise.resolve(),
     onExportPdf: () => Promise.resolve(),
+    onReadActionItems: () => Promise.resolve(emptyActionItems),
+    onCaptureItemScreenshots: () => Promise.resolve({ written: [], screenshots: [] }),
+    onReadItemScreenshots: () => Promise.resolve([]),
     activeLlmJobs: [],
     summaryReloadToken: 0,
+    actionItemsReloadToken: 0,
   };
   return render(<RecordingPage {...defaults} {...props} />);
 }
@@ -79,31 +89,33 @@ describe("RecordingPage", () => {
     expect(screen.getByText(/large-v3/)).toBeInTheDocument();
   });
 
-  it("names the language a transcript was decoded in", async () => {
+  it("names the language a transcript was decoded in, first on the meta line", async () => {
     renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "en" })) });
+    await screen.findByText(/может еще/);
 
-    expect(await screen.findByLabelText("Language: English")).toHaveTextContent("English");
+    expect(screen.getByText(/^English · /)).toBeInTheDocument();
   });
 
   it("names a Russian transcript as Russian", async () => {
     renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "ru" })) });
+    await screen.findByText(/может еще/);
 
-    expect(await screen.findByLabelText("Language: Russian")).toHaveTextContent("Russian");
+    expect(screen.getByText(/^Russian · /)).toBeInTheDocument();
   });
 
-  it("shows no language indicator and no placeholder for a legacy transcript that recorded none", async () => {
+  it("shows no language name and no placeholder for a legacy transcript that recorded none", async () => {
     renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: null })) });
     await screen.findByText(/может еще/);
 
-    expect(screen.queryByLabelText(/^Language:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Russian · |^English · /)).not.toBeInTheDocument();
     expect(screen.queryByText(/unknown|—/i)).not.toBeInTheDocument();
   });
 
-  it("shows no indicator for a transcript in a language the app does not name", async () => {
+  it("shows no language name for a transcript in a language the app does not name", async () => {
     renderPage({ onReadTranscript: () => Promise.resolve(buildTranscript({ language: "de" })) });
     await screen.findByText(/может еще/);
 
-    expect(screen.queryByLabelText(/^Language:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Russian · |^English · /)).not.toBeInTheDocument();
   });
 
   it("goes back to the library", async () => {
@@ -131,62 +143,69 @@ describe("RecordingPage", () => {
     expect(screen.getByText(/no transcript yet/i)).toBeInTheDocument();
   });
 
-  it("offers Transcribe for a recording with no transcript and Re-transcribe for one with", async () => {
+  it("offers Transcribe in the empty transcript panel, sending no language override", async () => {
     const onTranscribe = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    const { unmount } = renderPage();
-    expect(screen.getByRole("button", { name: /re-transcribe/i })).toBeInTheDocument();
-    unmount();
-
     renderPage({ entry: buildEntry({ id: "v-9", has_transcript: false }), onTranscribe });
+
     await user.click(screen.getByRole("button", { name: "Transcribe" }));
 
     expect(onTranscribe).toHaveBeenCalledWith("v-9", null);
   });
 
-  it("offers no transcription for a meeting whose recording is gone", () => {
+  it("offers no transcription for a meeting whose recording is gone", async () => {
+    const user = userEvent.setup();
     renderPage({ entry: buildEntry({ has_source: false }) });
-    expect(screen.queryByRole("button", { name: /transcribe/i })).not.toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: "Transcribe" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(screen.queryByRole("menuitem", { name: /transcribe/i })).not.toBeInTheDocument();
   });
 
-  it("transcribes in Auto by default, sending no language override", async () => {
+  it("re-transcribes from the overflow menu in Auto, sending no language override", async () => {
     const onTranscribe = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
 
-    const control = screen.getByLabelText(/transcript language/i);
-    expect(control).toHaveValue("auto");
-
-    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-transcribe (Auto)" }));
 
     expect(onTranscribe).toHaveBeenCalledWith("v-9", null);
+    // The menu closed on the click.
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("re-transcribes in English when the operator picks English", async () => {
+  it("re-transcribes in English when the operator picks English in the menu", async () => {
     const onTranscribe = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
 
-    await user.selectOptions(screen.getByLabelText(/transcript language/i), "en");
-    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-transcribe in English" }));
 
     expect(onTranscribe).toHaveBeenCalledWith("v-9", "en");
   });
 
-  it("re-transcribes in Russian when the operator picks Russian", async () => {
+  it("re-transcribes in Russian when the operator picks Russian in the menu", async () => {
     const onTranscribe = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9" }), onTranscribe });
 
-    await user.selectOptions(screen.getByLabelText(/transcript language/i), "ru");
-    await user.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-transcribe in Russian" }));
 
     expect(onTranscribe).toHaveBeenCalledWith("v-9", "ru");
   });
 
-  it("offers no language control for a meeting whose recording is gone", () => {
-    renderPage({ entry: buildEntry({ has_source: false }) });
-    expect(screen.queryByLabelText(/transcript language/i)).not.toBeInTheDocument();
+  it("labels the menu's transcribe section Transcribe while no transcript exists", async () => {
+    const onTranscribe = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9", has_transcript: false }), onTranscribe });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Transcribe in Russian" }));
+
+    expect(onTranscribe).toHaveBeenCalledWith("v-9", "ru");
   });
 
   it("switches to the summary tab and reports there is none", async () => {
@@ -231,50 +250,160 @@ describe("RecordingPage", () => {
     });
   });
 
-  it("asks before deleting, then deletes by id", async () => {
+  it("deletes via the overflow menu, asking first, then deleting by id", async () => {
     const onDelete = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9" }), onDelete });
 
-    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /delete recording/i }));
     expect(onDelete).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: /move to recycle bin/i }));
     expect(onDelete).toHaveBeenCalledWith("v-9");
   });
 
-  it("extracts action items and facts from an unfiled recording", async () => {
+  it("reveals in Explorer from the overflow menu", async () => {
+    const onReveal = vi.fn();
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onReveal });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /reveal in explorer/i }));
+
+    expect(onReveal).toHaveBeenCalledWith("v-9");
+  });
+
+  it("extracts action items from the empty tab's own Generate button, with no Facts anywhere", async () => {
     const onExtract = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9", project: null }), onExtract });
 
-    const actionItems = screen.getByRole("button", { name: "Action items" });
-    const facts = screen.getByRole("button", { name: "Facts" });
-    expect(actionItems).toBeEnabled();
-    expect(facts).toBeEnabled();
+    // The facts extraction was retired: the summary carries the notable
+    // facts, so no Facts control may exist anywhere on the page.
+    expect(screen.queryByRole("tab", { name: /facts/i })).not.toBeInTheDocument();
 
-    await user.click(actionItems);
-    await user.click(facts);
+    await user.click(screen.getByRole("tab", { name: "Action items" }));
+    await user.click(await screen.findByRole("button", { name: "Extract action items" }));
 
-    expect(onExtract).toHaveBeenNthCalledWith(1, "v-9", "action_items");
-    expect(onExtract).toHaveBeenNthCalledWith(2, "v-9", "facts");
+    expect(onExtract).toHaveBeenCalledWith("v-9", "action_items");
+  });
+
+  it("generates a summary from the empty tab's own Generate button", async () => {
+    const onSummarize = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onSummarize });
+
+    await user.click(screen.getByRole("tab", { name: "Summary" }));
+    await user.click(await screen.findByRole("button", { name: "Generate summary" }));
+
+    expect(onSummarize).toHaveBeenCalledWith("v-9");
+  });
+
+  it("regenerates from the overflow menu even when content already exists", async () => {
+    const onSummarize = vi.fn().mockResolvedValue(undefined);
+    const onExtract = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onSummarize, onExtract });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Regenerate summary" }));
+    expect(onSummarize).toHaveBeenCalledWith("v-9");
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-extract action items" }));
+    expect(onExtract).toHaveBeenCalledWith("v-9", "action_items");
   });
 
   it("no longer tells an unfiled recording to be filed under a project first", () => {
     renderPage({ entry: buildEntry({ project: null }) });
 
-    expect(screen.getByRole("button", { name: "Action items" })).not.toHaveAttribute("title");
-    expect(screen.getByRole("button", { name: "Facts" })).not.toHaveAttribute("title");
     expect(
       screen.queryByTitle(/file this recording under a project first/i),
     ).not.toBeInTheDocument();
   });
 
-  it("disables an extraction button while its own job is in flight", () => {
+  it("renders the empty tab's Generate button busy while its own job is in flight", async () => {
+    const user = userEvent.setup();
     renderPage({ entry: buildEntry({ project: null }), activeLlmJobs: ["action_items"] });
 
-    expect(screen.getByRole("button", { name: "Extracting…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Facts" })).toBeEnabled();
+    await user.click(screen.getByRole("tab", { name: "Action items" }));
+
+    expect(await screen.findByRole("button", { name: "Extracting…" })).toBeDisabled();
+  });
+
+  it("copies the visible tab: enabled on a loaded transcript, disabled on an empty summary", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(/может еще/);
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+
+    await user.click(screen.getByRole("tab", { name: "Summary" }));
+    await screen.findByText(/no summary for this meeting yet/i);
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeDisabled();
+  });
+
+  it("shows the extracted action items in their own tab beside the summary", async () => {
+    const user = userEvent.setup();
+    const onReadActionItems = vi.fn().mockResolvedValue({
+      entry_id: "v-1",
+      dir: "D:\\Meetings\\RDDM\\260709 - tech support 1\\action items",
+      items: [
+        {
+          dir_name: "fix-login",
+          title: "Fix login",
+          item_type: "task",
+          body_md: "The login flow breaks on refresh.",
+          timestamps: [65],
+          archived: false,
+          screenshot_names: [],
+        },
+      ],
+    });
+    renderPage({ onReadActionItems });
+
+    await user.click(screen.getByRole("tab", { name: "Action items" }));
+
+    expect(await screen.findByRole("heading", { name: "Fix login" })).toBeInTheDocument();
+    expect(screen.getByText("task")).toBeInTheDocument();
+    expect(screen.getByText(/login flow breaks/)).toBeInTheDocument();
+    expect(screen.getByText("1:05")).toBeInTheDocument();
+    expect(onReadActionItems).toHaveBeenCalledWith("v-1");
+  });
+
+  it("captures screenshots for one item on demand", async () => {
+    const user = userEvent.setup();
+    const onReadActionItems = vi.fn().mockResolvedValue({
+      entry_id: "v-1",
+      dir: "dir",
+      items: [
+        {
+          dir_name: "fix-login",
+          title: "Fix login",
+          item_type: "task",
+          body_md: "",
+          timestamps: [10],
+          archived: false,
+          screenshot_names: [],
+        },
+      ],
+    });
+    const onCaptureItemScreenshots = vi.fn().mockResolvedValue({
+      written: ["screenshot-0010.png"],
+      screenshots: ["screenshot-0010.png"],
+    });
+    const onReadItemScreenshots = vi
+      .fn()
+      .mockResolvedValue([{ name: "screenshot-0010.png", data_url: "data:image/png;base64,AA==" }]);
+    renderPage({ onReadActionItems, onCaptureItemScreenshots, onReadItemScreenshots });
+
+    await user.click(screen.getByRole("tab", { name: "Action items" }));
+    await user.click(await screen.findByRole("button", { name: "Capture screenshots" }));
+
+    expect(onCaptureItemScreenshots).toHaveBeenCalledWith("v-1", "fix-login");
+    expect(await screen.findByAltText("Screenshot screenshot-0010.png")).toBeInTheDocument();
   });
 
   it("surfaces a transcript read failure on the page", async () => {

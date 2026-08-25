@@ -109,7 +109,7 @@ class Config:
     hf_token: str | None = None
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
-    # --- Local LLM (summaries / action items / facts) ---
+    # --- Local LLM (summaries / action items) ---
     # Model id, resolved against the curated catalog (`llm_catalog.py`).
     # The defaults below mirror the catalog's `DEFAULT_MODEL_ID` entry so a
     # directly-constructed `Config` is coherent; `load_config` re-resolves

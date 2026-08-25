@@ -15,14 +15,19 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError
 
 ItemType = Literal["requirement", "epic", "task", "spike"]
-FactKind = Literal["fact", "answered_question"]
 
 # The most timestamps one item may cite. Becomes `maxItems` in the JSON
 # schema and so a hard bound in the compiled grammar: a small local model
 # left unbounded will happily cite every segment of the meeting (a 260825
 # field report saw ~300 citations on one item), flooding the output-token
-# cap with numbers nothing uses -- screenshots cap at 6 per item anyway.
+# cap with numbers nothing uses.
 MAX_ITEM_TIMESTAMPS = 20
+
+# The most *visual* moments one item may nominate for screenshots -- the
+# same per-item cap `frames.plan_screenshots` enforces at capture time, so
+# the grammar never lets the model promise more frames than the planner
+# would take.
+MAX_ITEM_SCREENSHOT_TIMESTAMPS = 6
 
 
 class ActionItemOut(BaseModel):
@@ -33,23 +38,17 @@ class ActionItemOut(BaseModel):
     description_md: str = ""
     # Seconds from the start of the recording, cited from the [m:ss] markers.
     timestamps: list[float] = Field(default_factory=list, max_length=MAX_ITEM_TIMESTAMPS)
+    # The subset of moments where the discussion clearly refers to something
+    # shown on screen (a demo, a slide, a diagram). Only these are captured
+    # automatically -- most items have none, and the operator can capture
+    # frames for the cited `timestamps` on demand from the app instead.
+    screenshot_timestamps: list[float] = Field(
+        default_factory=list, max_length=MAX_ITEM_SCREENSHOT_TIMESTAMPS
+    )
 
 
 class ActionItemsOut(BaseModel):
     items: list[ActionItemOut] = Field(default_factory=list)
-
-
-class FactOut(BaseModel):
-    """One extracted fact or answered question."""
-
-    kind: FactKind = "fact"
-    title: str = Field(min_length=1, max_length=200)
-    description_md: str = ""
-    timestamps: list[float] = Field(default_factory=list, max_length=MAX_ITEM_TIMESTAMPS)
-
-
-class FactsOut(BaseModel):
-    items: list[FactOut] = Field(default_factory=list)
 
 
 _CODE_FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import styles from "./RecordingPage.module.css";
+import { ActionItemsPanel } from "./ActionItemsPanel";
 import { MeetingEditor } from "./MeetingEditor";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
@@ -8,7 +9,10 @@ import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
 import { speakerNames } from "../lib/turns";
 import { groupIntoTurns } from "../lib/turns";
 import type {
+  ActionItemsView,
   ArtifactKind,
+  ItemScreenshotView,
+  ItemScreenshotsView,
   JobType,
   MeetingUpdate,
   SummaryView,
@@ -34,27 +38,40 @@ export type RecordingPageProps = {
   onSummarize: (entryId: string) => Promise<void>;
   onExtract: (entryId: string, kind: ArtifactKind) => Promise<void>;
   onExportPdf: (entryId: string) => Promise<void>;
+  /** The action-items tab's reads and per-item screenshot capture. */
+  onReadActionItems: (entryId: string) => Promise<ActionItemsView>;
+  onCaptureItemScreenshots: (entryId: string, itemDirName: string) => Promise<ItemScreenshotsView>;
+  onReadItemScreenshots: (entryId: string, itemDirName: string) => Promise<ItemScreenshotView[]>;
   /** Derived-job types currently in flight for this entry — the matching
-   * buttons render busy instead of firing twice. */
+   * controls render busy instead of firing twice. */
   activeLlmJobs: JobType[];
   /** Bumped when a summarize job for this entry finishes, so the summary
    * tab re-reads `summary.md`. */
   summaryReloadToken: number;
+  /** Bumped when an action-items job for this entry finishes, so the
+   * action-items tab re-reads the folder. */
+  actionItemsReloadToken: number;
 };
 
-type Tab = "transcript" | "summary";
+type Tab = "transcript" | "summary" | "action-items";
 type Panel = "none" | "edit" | "delete";
-/** What the language picker holds. `"auto"` is the default and the only
- * value that sends no override at all. */
-type LanguageChoice = "auto" | TranscriptLanguage;
 
 /** The languages the app can name. A transcript written before this feature —
  * or in anything outside the operator's two — carries a code we do not label,
- * and the indicator then shows nothing rather than a placeholder. */
+ * and the meta line then shows nothing rather than a placeholder. */
 const LANGUAGE_NAMES: Record<string, string | undefined> = {
   ru: "Russian",
   en: "English",
 };
+
+/** The overflow menu's transcribe choices: the language is picked on the
+ * menu item itself, not in a separate toolbar dropdown. */
+const TRANSCRIBE_CHOICES: { label: string; suffix: string; language: TranscriptLanguage | null }[] =
+  [
+    { label: "Auto", suffix: "(Auto)", language: null },
+    { label: "Russian", suffix: "in Russian", language: "ru" },
+    { label: "English", suffix: "in English", language: "en" },
+  ];
 
 function messageOf(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -64,12 +81,14 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * One recording, given the whole window.
+ * One recording, given the whole window — the factored layout.
  *
- * A page rather than a row that expands: reading an hour of transcript is
- * not something to do through a keyhole in a list, and everything else about
- * the recording — where it is, how it was transcribed, what to do with it —
- * belongs beside the text rather than three clicks away.
+ * Two rows instead of four: every derived view is a tab (Transcript /
+ * Summary / Action items), and an empty tab opens to its own Generate
+ * button in the content area — the generate verbs never sit in the header.
+ * Copy acts on the visible tab. Everything rare lives in the `…` overflow
+ * menu: re-transcribe (with its language picked right there), regenerate,
+ * reveal, rename and delete. Rename is also the pencil at the title.
  *
  * Presentational apart from its callbacks: no invoke, no listen, no fetch.
  */
@@ -87,19 +106,35 @@ export function RecordingPage({
   onSummarize,
   onExtract,
   onExportPdf,
+  onReadActionItems,
+  onCaptureItemScreenshots,
+  onReadItemScreenshots,
   activeLlmJobs,
   summaryReloadToken,
+  actionItemsReloadToken,
 }: RecordingPageProps) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [panel, setPanel] = useState<Panel>("none");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  // Local to the page and deliberately not persisted: the choice belongs to
-  // this one transcribe run, not to the recording or the app.
-  const [language, setLanguage] = useState<LanguageChoice>("auto");
+  // What the visible tab holds, reported up by the mounted panel, so Copy
+  // can act on the tab the operator is looking at.
+  const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [actionItemsText, setActionItemsText] = useState<string | null>(null);
+
+  // Opening a different recording resets the page-local view state; stale
+  // panel content must never survive into another meeting's Copy.
+  useEffect(() => {
+    setTab("transcript");
+    setPanel("none");
+    setMenuOpen(false);
+    setSummaryText(null);
+    setActionItemsText(null);
+  }, [entry.id]);
 
   useEffect(() => {
     if (!entry.has_transcript) {
@@ -129,28 +164,39 @@ export function RecordingPage({
     [entry.id, onSaveSpeakers],
   );
 
-  const copyAll = useCallback(async () => {
-    if (!transcript) return;
+  // Copy acts on the visible tab; a tab with nothing loaded copies nothing.
+  const copyText =
+    tab === "transcript"
+      ? (transcript?.text.trim() ?? null)
+      : tab === "summary"
+        ? summaryText
+        : actionItemsText;
+
+  const copyVisible = useCallback(async () => {
+    if (!copyText) return;
     try {
-      await navigator.clipboard.writeText(transcript.text.trim());
+      await navigator.clipboard.writeText(copyText);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch (caught) {
       setError(messageOf(caught));
     }
-  }, [transcript]);
+  }, [copyText]);
 
-  const transcribe = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onTranscribe(entry.id, language === "auto" ? null : language);
-    } catch (caught) {
-      setError(messageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }, [entry.id, language, onTranscribe]);
+  const transcribe = useCallback(
+    async (language: TranscriptLanguage | null) => {
+      setBusy(true);
+      setError(null);
+      try {
+        await onTranscribe(entry.id, language);
+      } catch (caught) {
+        setError(messageOf(caught));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [entry.id, onTranscribe],
+  );
 
   const runLlm = useCallback(
     async (action: (entryId: string) => Promise<void>) => {
@@ -179,17 +225,26 @@ export function RecordingPage({
   const turns = transcript ? groupIntoTurns(transcript.segments, transcript.speakers) : [];
   const speakers = speakerNames(turns);
 
+  // One provenance line, the decoded language first — it is the one value
+  // the operator acts on (a wrong one means re-transcribe with an override).
+  const languageName = transcript?.language ? LANGUAGE_NAMES[transcript.language] : undefined;
   const meta = [
+    languageName,
     parsed ? formatMeetingDate(parsed.date) : null,
     transcript?.duration_sec != null ? formatDuration(transcript.duration_sec) : null,
     speakers.length > 0 ? `${speakers.length} speaker${speakers.length === 1 ? "" : "s"}` : null,
     transcript?.model,
     transcript?.device,
   ].filter((part): part is string => Boolean(part));
-  // The decode language is the one crumb the operator acts on — a wrong one
-  // means "re-transcribe with an override" — so it leaves the run-together
-  // provenance line and gets named in full beside it.
-  const languageName = transcript?.language ? LANGUAGE_NAMES[transcript.language] : undefined;
+
+  const summarizing = activeLlmJobs.includes("summarize");
+  const extracting = activeLlmJobs.includes("action_items");
+  const exporting = activeLlmJobs.includes("export");
+
+  const closeMenuAnd = (action: () => void) => () => {
+    setMenuOpen(false);
+    action();
+  };
 
   return (
     <section className={styles.page} aria-label="Recording">
@@ -202,133 +257,171 @@ export function RecordingPage({
           <span className="pill">{entry.project ?? "unsorted"}</span>
         </div>
 
-        <div className={styles.titleRow}>
-          <div className={styles.titleBlock}>
+        <div className={styles.titleBlock}>
+          <div className={styles.titleLine}>
             <h2 className={styles.title}>{parsed ? parsed.title : entry.meeting_name}</h2>
-            <div className={styles.metaRow}>
-              {languageName && (
-                <span className="pill" aria-label={`Language: ${languageName}`}>
-                  {languageName}
-                </span>
-              )}
-              <span className={styles.meta}>{meta.join(" · ")}</span>
-            </div>
+            <button
+              type="button"
+              className={`btn btn-ghost ${styles.pencil}`}
+              aria-label="Rename"
+              onClick={() => setPanel((p) => (p === "edit" ? "none" : "edit"))}
+            >
+              ✎
+            </button>
           </div>
-          <div className={styles.actions}>
+          {meta.length > 0 && <p className={styles.meta}>{meta.join(" · ")}</p>}
+        </div>
+
+        <div className={styles.tabRow}>
+          <div className={styles.tabs} role="tablist" aria-label="Recording views">
+            <button
+              type="button"
+              role="tab"
+              id="recording-tab-transcript"
+              aria-selected={tab === "transcript"}
+              aria-controls="recording-panel-transcript"
+              className={styles.tab}
+              onClick={() => setTab("transcript")}
+            >
+              Transcript
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="recording-tab-summary"
+              aria-selected={tab === "summary"}
+              aria-controls="recording-panel-summary"
+              className={styles.tab}
+              onClick={() => setTab("summary")}
+            >
+              Summary
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="recording-tab-action-items"
+              aria-selected={tab === "action-items"}
+              aria-controls="recording-panel-action-items"
+              className={styles.tab}
+              onClick={() => setTab("action-items")}
+            >
+              Action items
+            </button>
+          </div>
+
+          <div className={styles.toolbar}>
             <button
               type="button"
               className="btn btn-secondary"
-              disabled={!transcript}
-              onClick={copyAll}
+              disabled={!copyText}
+              onClick={() => void copyVisible()}
             >
-              {copied ? "Copied" : "Copy all"}
+              {copied ? "Copied" : "Copy"}
             </button>
-            {entry.has_source && (
-              // The picker travels with the button it modifies, so the
-              // operator reads "Auto · Re-transcribe" as one sentence. The
-              // visible word is short; the accessible name says which
-              // language it means.
-              <span className={styles.transcribeGroup}>
-                <span className={styles.languageLabel} aria-hidden="true">
-                  Language
-                </span>
-                <select
-                  className={styles.language}
-                  aria-label="Transcript language"
-                  value={language}
-                  disabled={busy}
-                  onChange={(event) => setLanguage(event.target.value as LanguageChoice)}
-                >
-                  <option value="auto">Auto</option>
-                  <option value="ru">Russian</option>
-                  <option value="en">English</option>
-                </select>
-                <button type="button" className="btn" disabled={busy} onClick={transcribe}>
-                  {busy ? "Queueing…" : entry.has_transcript ? "Re-transcribe" : "Transcribe"}
-                </button>
-              </span>
-            )}
             {entry.has_transcript && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={exporting}
+                onClick={() => void runLlm(onExportPdf)}
+              >
+                {exporting ? "Exporting…" : "Export PDF"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              aria-label="More actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              ⋯
+            </button>
+            {menuOpen && (
               <>
                 <button
                   type="button"
-                  className="btn btn-secondary"
-                  disabled={activeLlmJobs.includes("summarize")}
-                  onClick={() => void runLlm(onSummarize)}
-                >
-                  {activeLlmJobs.includes("summarize") ? "Summarizing…" : "Summarize"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={activeLlmJobs.includes("action_items")}
-                  onClick={() => void runLlm((id) => onExtract(id, "action_items"))}
-                >
-                  {activeLlmJobs.includes("action_items") ? "Extracting…" : "Action items"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={activeLlmJobs.includes("facts")}
-                  onClick={() => void runLlm((id) => onExtract(id, "facts"))}
-                >
-                  {activeLlmJobs.includes("facts") ? "Extracting…" : "Facts"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={activeLlmJobs.includes("export")}
-                  onClick={() => void runLlm(onExportPdf)}
-                >
-                  {activeLlmJobs.includes("export") ? "Exporting…" : "Export PDF"}
-                </button>
+                  className={styles.menuBackdrop}
+                  aria-label="Close menu"
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div role="menu" className={styles.menu} aria-label="More actions">
+                  {entry.has_source && (
+                    <>
+                      <span className={styles.menuLabel}>
+                        {entry.has_transcript ? "Re-transcribe" : "Transcribe"}
+                      </span>
+                      {TRANSCRIBE_CHOICES.map((choice) => (
+                        <button
+                          key={choice.label}
+                          type="button"
+                          role="menuitem"
+                          className={styles.menuItem}
+                          disabled={busy}
+                          aria-label={`${entry.has_transcript ? "Re-transcribe" : "Transcribe"} ${choice.suffix}`}
+                          onClick={closeMenuAnd(() => void transcribe(choice.language))}
+                        >
+                          {choice.label}
+                        </button>
+                      ))}
+                      <hr className={styles.menuDivider} />
+                    </>
+                  )}
+                  {entry.has_transcript && (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={styles.menuItem}
+                        disabled={summarizing}
+                        onClick={closeMenuAnd(() => void runLlm(onSummarize))}
+                      >
+                        Regenerate summary
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={styles.menuItem}
+                        disabled={extracting}
+                        onClick={closeMenuAnd(
+                          () => void runLlm((id) => onExtract(id, "action_items")),
+                        )}
+                      >
+                        Re-extract action items
+                      </button>
+                      <hr className={styles.menuDivider} />
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    onClick={closeMenuAnd(() => onReveal(entry.id))}
+                  >
+                    Reveal in Explorer
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={styles.menuItem}
+                    onClick={closeMenuAnd(() => setPanel("edit"))}
+                  >
+                    Rename
+                  </button>
+                  <hr className={styles.menuDivider} />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={`${styles.menuItem} ${styles.menuDanger}`}
+                    onClick={closeMenuAnd(() => setPanel("delete"))}
+                  >
+                    Delete recording…
+                  </button>
+                </div>
               </>
             )}
-            <button type="button" className="btn btn-ghost" onClick={() => onReveal(entry.id)}>
-              Reveal
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              aria-expanded={panel === "edit"}
-              onClick={() => setPanel((p) => (p === "edit" ? "none" : "edit"))}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              aria-expanded={panel === "delete"}
-              onClick={() => setPanel((p) => (p === "delete" ? "none" : "delete"))}
-            >
-              Delete
-            </button>
           </div>
-        </div>
-
-        <div className={styles.tabs} role="tablist" aria-label="Recording views">
-          <button
-            type="button"
-            role="tab"
-            id="recording-tab-transcript"
-            aria-selected={tab === "transcript"}
-            aria-controls="recording-panel-transcript"
-            className={styles.tab}
-            onClick={() => setTab("transcript")}
-          >
-            Transcript
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="recording-tab-summary"
-            aria-selected={tab === "summary"}
-            aria-controls="recording-panel-summary"
-            className={styles.tab}
-            onClick={() => setTab("summary")}
-          >
-            Summary
-          </button>
         </div>
       </div>
 
@@ -386,11 +479,23 @@ export function RecordingPage({
             ) : transcript ? (
               <TranscriptViewer transcript={transcript} onSaveSpeakers={saveSpeakers} />
             ) : (
-              <p className={styles.status}>
-                {entry.has_source
-                  ? "No transcript yet. Transcribe runs this recording through the service again."
-                  : "This meeting has neither a recording nor a transcript."}
-              </p>
+              <div className={styles.emptyPanel}>
+                <p className={styles.status}>
+                  {entry.has_source
+                    ? "No transcript yet."
+                    : "This meeting has neither a recording nor a transcript."}
+                </p>
+                {entry.has_source && (
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => void transcribe(null)}
+                  >
+                    {busy ? "Queueing…" : "Transcribe"}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -401,6 +506,28 @@ export function RecordingPage({
               entryId={entry.id}
               onLoad={onReadSummary}
               reloadToken={summaryReloadToken}
+              onGenerate={() => void runLlm(onSummarize)}
+              busy={summarizing}
+              onContentChange={setSummaryText}
+            />
+          </div>
+        )}
+
+        {tab === "action-items" && (
+          <div
+            role="tabpanel"
+            id="recording-panel-action-items"
+            aria-labelledby="recording-tab-action-items"
+          >
+            <ActionItemsPanel
+              entryId={entry.id}
+              onLoad={onReadActionItems}
+              onCapture={onCaptureItemScreenshots}
+              onLoadScreenshots={onReadItemScreenshots}
+              reloadToken={actionItemsReloadToken}
+              onGenerate={() => void runLlm((id) => onExtract(id, "action_items"))}
+              generateBusy={extracting}
+              onContentChange={setActionItemsText}
             />
           </div>
         )}

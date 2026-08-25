@@ -4387,6 +4387,7 @@ name = "vault"
 version = "0.11.1"
 dependencies = [
  "chrono",
+ "serde_json",
  "tempfile",
  "trash",
 ]

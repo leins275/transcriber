@@ -25,14 +25,6 @@
   color: var(--text-faint);
 }
 
-.titleRow {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
 .titleBlock {
   min-width: 0;
   display: flex;
@@ -40,65 +32,41 @@
   gap: 2px;
 }
 
+.titleLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .title {
   font-size: var(--text-h1);
   overflow-wrap: anywhere;
 }
 
-/* Provenance line: the decoded language as a pill, then the run-together
-   crumbs. The language sits first and named in full because it is the one
-   value the operator acts on — a wrong one means re-transcribe with an
-   override — while date, model and device are only ever read. */
-.metaRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  margin-top: 2px;
+/* Rename lives at the title itself (and in the overflow menu) — a quiet
+   pencil, not a toolbar button. */
+.pencil {
+  color: var(--text-muted);
 }
 
+/* One provenance line, the decoded language first: it is the one value the
+   operator acts on — a wrong one means re-transcribe with an override —
+   while date, model and device are only ever read. */
 .meta {
+  margin: 0;
   font-size: var(--text-sm);
   color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
-.actions {
+/* Tabs on the left, the tab-scoped toolbar (Copy / Export PDF / …) on the
+   right — the factored layout's second and last header row. */
+.tabRow {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-/* The language picker and the Transcribe button are one control: they wrap
-   together rather than drifting to opposite ends of the action row. */
-.transcribeGroup {
-  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-}
-
-.languageLabel {
-  font-size: var(--text-xs);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.language {
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  color: var(--text);
-  font: var(--text-sm) / 1.5 var(--font-body);
-}
-
-.language:focus-visible {
-  border-color: var(--accent);
-}
-
-.language:disabled {
-  color: var(--text-faint);
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
 .tabs {
@@ -124,6 +92,87 @@
 .tab[aria-selected="true"] {
   color: var(--text);
   border-bottom-color: var(--accent);
+}
+
+.toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* An invisible click-catcher behind the open menu: any click outside the
+   menu closes it without triggering whatever sits underneath. */
+.menuBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.menuLabel {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.menuItem {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  font: var(--text-sm) / 1.4 var(--font-body);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.menuItem:disabled {
+  color: var(--text-faint);
+  cursor: default;
+  background: none;
+}
+
+.menuDanger {
+  color: var(--danger);
+}
+
+.menuDivider {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: var(--space-1) 0;
+}
+
+/* An empty tab's content area: a one-line state plus its Generate verb —
+   the generate buttons live here, never in the header. */
+.emptyPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
 }
 
 /* The reading area is the one part that scrolls; the header and the file
