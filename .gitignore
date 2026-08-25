@@ -1,4 +1,5 @@
 ﻿vexa/
+local/
 specs/_intake/*/worktrees/
 target/
 node_modules/
