@@ -41,7 +41,6 @@ function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {
     jobs: [] as JobSnapshot[],
     onOpen: () => {},
     onOpenProject: () => {},
-    onReveal: () => {},
     onRevealJob: () => {},
     onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),
@@ -149,12 +148,15 @@ describe("VaultPanel", () => {
     expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
   });
 
-  it("opens a recording by id", async () => {
+  it("opens a recording by id when its row is clicked", async () => {
     const onOpen = vi.fn();
     const user = userEvent.setup();
-    renderPanel({ entries: [buildEntry({ id: "v-42" })], onOpen });
+    renderPanel({
+      entries: [buildEntry({ id: "v-42", meeting_name: "260812 - Security issue" })],
+      onOpen,
+    });
 
-    await user.click(screen.getByRole("button", { name: /^transcript$/i }));
+    await user.click(screen.getByText("Security issue"));
 
     expect(onOpen).toHaveBeenCalledWith("v-42");
   });

@@ -352,6 +352,20 @@ pub async fn update_vault_entry_handler(
     title: &str,
 ) -> Result<VaultMeetingView, AppError> {
     let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
+
+    // Refuse to move the folder while any job is still working on (or into)
+    // it: a running transcription or LLM job holds the old path, and the
+    // rename would either fail it mid-flight or have it write its output
+    // into a re-created stale folder next to the renamed one.
+    let registry = state.registry.read().await.clone();
+    if registry.has_active_job_for(&meeting_dir).await {
+        let meeting_name = meeting_name_of(&meeting_dir);
+        return Err(AppError::invalid_argument(format!(
+            "\"{meeting_name}\" has a job still running; wait for it to finish \
+             (or cancel it) before renaming"
+        )));
+    }
+
     let update = vault::MeetingUpdate {
         project,
         date: date.to_string(),
@@ -1156,6 +1170,49 @@ mod tests {
 
                 assert_eq!(submission.language.as_deref(), expected);
             }
+        });
+    }
+
+    // -- update_vault_entry vs. in-flight jobs -----------------------------
+
+    #[test]
+    fn update_vault_entry_is_refused_while_a_job_is_running_for_the_meeting() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let id = only_entry_id(&state).await;
+
+            // A re-transcription of this very meeting. The production poll
+            // interval (1.5s) keeps it comfortably non-terminal while the
+            // rename below arrives.
+            transcribe_vault_entry_handler(&state, &id, None)
+                .await
+                .expect("transcribe enqueues");
+
+            let err = update_vault_entry_handler(
+                &state,
+                &id,
+                Some("ELS".to_string()),
+                "260812",
+                "Renamed while busy",
+            )
+            .await
+            .expect_err("a rename during an active job must be refused");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(
+                err.message().contains("still running"),
+                "the refusal must say why: {}",
+                err.message()
+            );
+            // Nothing moved: the original folder is untouched.
+            assert!(root
+                .path()
+                .join("ELS")
+                .join("260812 - Security issue")
+                .join("source.mp4")
+                .is_file());
         });
     }
 }

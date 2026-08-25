@@ -11,7 +11,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -718,6 +718,61 @@ async def test_a_truncated_extraction_is_split_not_repaired(
             for md in items_dir.rglob("*.md")
         }
         assert titles == {"From half A", "From half B"}
+    finally:
+        await manager.aclose()
+
+
+class _ProgressProbeLlm(FakeLlm):
+    """A `FakeLlm` that samples the job's *reported* progress at every
+    progress callback, so a test can assert the bar never runs backwards."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.samples: list[float] = []
+        self.probe: Callable[[], float] = lambda: 0.0
+
+    def complete(self, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+        inner = kwargs.pop("on_progress")
+
+        def probing(fraction: float) -> None:
+            inner(fraction)
+            self.samples.append(self.probe())
+
+        return super().complete(messages, on_progress=probing, **kwargs)
+
+
+async def test_extraction_progress_never_runs_backwards_across_a_split_retry(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # The looping-progress field report: a truncated chunk's split-and-retry
+    # used to re-run its completions with a fresh 0..1 fraction inside the
+    # same fixed progress slice, so the bar visibly jumped back to the start
+    # of the slice and re-climbed -- reading as the job restarting itself.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=30, repeat_text=3)
+    half_a = _items_json(
+        [{"type": "task", "title": "From half A", "description_md": "d", "timestamps": []}]
+    )
+    half_b = _items_json(
+        [{"type": "task", "title": "From half B", "description_md": "d", "timestamps": []}]
+    )
+    llm = _ProgressProbeLlm(responses=[('{"items": [{"ti', "length"), half_a, half_b])
+    manager = _manager(_small_ctx(config), ledger, llm)
+    items_dir = meeting / "action items"
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            job_type="action_items", input_path=str(meeting), output_dir=str(items_dir)
+        )
+        llm.probe = lambda: manager.status(job_id).progress
+        await _wait_until_terminal(manager, job_id)
+
+        assert manager.status(job_id).status == "succeeded"
+        assert len(llm.calls) == 3, "one truncated call, two split retries"
+        assert llm.samples, "the probe must have seen progress callbacks"
+        assert llm.samples == sorted(llm.samples), (
+            f"progress must never decrease, got {llm.samples}"
+        )
+        assert llm.samples[-1] > 0.0
     finally:
         await manager.aclose()
 

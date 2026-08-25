@@ -16,7 +16,6 @@ function buildEntry(id: string, meeting_name: string): VaultMeetingView {
 
 const actions = {
   onOpen: () => {},
-  onReveal: () => {},
 };
 
 describe("VaultList", () => {

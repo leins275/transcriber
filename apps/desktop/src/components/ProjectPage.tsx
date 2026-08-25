@@ -9,7 +9,6 @@ export type ProjectPageProps = {
   entries: VaultMeetingView[];
   onBack: () => void;
   onOpen: (entryId: string) => void;
-  onReveal: (entryId: string) => void;
 };
 
 /**
@@ -24,7 +23,7 @@ export type ProjectPageProps = {
  * page is open). Presentational apart from its callbacks: no invoke, no
  * listen, no fetch.
  */
-export function ProjectPage({ project, entries, onBack, onOpen, onReveal }: ProjectPageProps) {
+export function ProjectPage({ project, entries, onBack, onOpen }: ProjectPageProps) {
   return (
     <section className={styles.page} aria-label="Project" role="region">
       <div className={styles.head}>
@@ -54,7 +53,7 @@ export function ProjectPage({ project, entries, onBack, onOpen, onReveal }: Proj
             <span className="mono">{project} - 260812 - Weekly sync.mp4</span> files itself here.
           </p>
         ) : (
-          <VaultList entries={entries} onOpen={onOpen} onReveal={onReveal} />
+          <VaultList entries={entries} onOpen={onOpen} />
         )}
       </div>
     </section>

@@ -508,7 +508,6 @@ function App() {
                     setOpenProject(null);
                     setOpenEntryId(entryId);
                   }}
-                  onReveal={handleRevealVaultEntry}
                 />
               ) : (
                 <>
@@ -538,7 +537,6 @@ function App() {
                       setOpenEntryId(null);
                       setOpenProject(project);
                     }}
-                    onReveal={handleRevealVaultEntry}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}
                     onLoadServiceLog={loadServiceLog}

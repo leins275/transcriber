@@ -380,6 +380,22 @@ impl JobRegistry {
         snapshot
     }
 
+    /// True while any non-terminal job is working on (or into) `meeting_dir`
+    /// -- its source file, its meeting folder or its output folder.
+    ///
+    /// This is the rename guard's question: moving a meeting folder out from
+    /// under a running transcription or LLM job would strand the job's
+    /// output, or have it re-create the old folder next to the renamed one.
+    pub async fn has_active_job_for(&self, meeting_dir: &Path) -> bool {
+        let dir = paths::strip_verbatim(meeting_dir);
+        self.shared.jobs.read().await.values().any(|job| {
+            !matches!(
+                job.state,
+                JobState::Done | JobState::Failed | JobState::Rejected
+            ) && job_touches(job, &dir)
+        })
+    }
+
     /// Asks the service to cancel a job this app submitted.
     ///
     /// Returns `Ok(false)` when the job has no service-side id — it has not
@@ -638,6 +654,23 @@ async fn poll_until_terminal(
             }
         }
     }
+}
+
+/// Whether any path recorded on `job` is `dir` itself or lives inside it.
+///
+/// `source_path` matters for the still-pending window: a filed
+/// re-transcription's snapshot carries only its `<meeting_dir>/source.<ext>`
+/// until the worker dequeues it and fills in `meeting_dir`, and an LLM job's
+/// `source_path` is the meeting folder it reads.
+fn job_touches(job: &JobSnapshot, dir: &Path) -> bool {
+    [
+        Some(job.source_path.as_str()),
+        job.meeting_dir.as_deref(),
+        job.source_dest.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|recorded| paths::strip_verbatim(Path::new(recorded)).starts_with(dir))
 }
 
 /// Renders F1's [`CollisionOutcome`] as the operator-facing note FR-9
