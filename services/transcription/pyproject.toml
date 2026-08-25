@@ -1,6 +1,6 @@
 [project]
 name = "transcription"
-version = "0.12.0"
+version = "0.12.1"
 description = "Standalone transcription microservice: local faster-whisper + built-in llama.cpp LLM, over localhost HTTP and a one-shot CLI."
 readme = "README.md"
 requires-python = ">=3.12"
