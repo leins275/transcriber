@@ -17,8 +17,6 @@ export type SettingsPageProps = {
   onChangeRoot: () => void;
   onStartLlmModelDownload: (modelId: string) => void;
   onCancelLlmModelDownload: (modelId: string) => void;
-  onDeleteLlmModel: (modelId: string) => void;
-  onSelectLlmModel: (modelId: string) => void;
 };
 
 function extensionList(extensions: string[]): string {
@@ -49,23 +47,21 @@ const CHECK_ICON = (
   </svg>
 );
 
-/** One curated model's row in the Assistant section. */
+/** The one curated model's row in the Assistant section. The catalog is
+ * deliberately a single model with no switching, so the row's only actions
+ * are download-shaped. */
 function LlmModelRow({
   model,
   gpuBuildPresent,
   anyTransferring,
   onStartDownload,
   onCancelDownload,
-  onDelete,
-  onSelect,
 }: {
   model: LlmCatalogModel;
   gpuBuildPresent: boolean | null;
   anyTransferring: boolean;
   onStartDownload: (modelId: string) => void;
   onCancelDownload: (modelId: string) => void;
-  onDelete: (modelId: string) => void;
-  onSelect: (modelId: string) => void;
 }) {
   const transferring = isTransferring(model);
   const size = sizeLabel(model.size_bytes);
@@ -75,7 +71,6 @@ function LlmModelRow({
         {model.present && CHECK_ICON}
         {model.label}
         {size && <span className={styles.detail}>{size}</span>}
-        {model.active && <span className={styles.badge}>Active</span>}
         {transferring ? (
           <>
             {model.present
@@ -101,23 +96,13 @@ function LlmModelRow({
                 Download {size && `(${size})`}
               </button>
             )}
-            {model.present && model.active && gpuBuildPresent === false && (
+            {model.present && gpuBuildPresent === false && (
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => onStartDownload(model.id)}
               >
                 Enable GPU acceleration (~460 MB)
-              </button>
-            )}
-            {!model.active && (
-              <button type="button" className="btn btn-ghost" onClick={() => onSelect(model.id)}>
-                Use this model
-              </button>
-            )}
-            {model.present && !model.active && (
-              <button type="button" className="btn btn-ghost" onClick={() => onDelete(model.id)}>
-                Delete
               </button>
             )}
           </>
@@ -150,8 +135,6 @@ export function SettingsPage({
   onChangeRoot,
   onStartLlmModelDownload,
   onCancelLlmModelDownload,
-  onDeleteLlmModel,
-  onSelectLlmModel,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
   return (
@@ -228,8 +211,6 @@ export function SettingsPage({
                   anyTransferring={anyLlmTransferring}
                   onStartDownload={onStartLlmModelDownload}
                   onCancelDownload={onCancelLlmModelDownload}
-                  onDelete={onDeleteLlmModel}
-                  onSelect={onSelectLlmModel}
                 />
               ))}
               <p className={styles.hint}>
@@ -237,8 +218,7 @@ export function SettingsPage({
                   ? "Summaries currently run on CPU. Enabling GPU acceleration downloads the " +
                     "CUDA build of the local runtime and offloads as much of the model as " +
                     "fits in your GPU's memory."
-                  : "Summaries and action items run on this machine. Switching the " +
-                    "active model restarts the local service."}
+                  : "Summaries and action items run on this machine, on the one built-in model."}
               </p>
             </>
           )}

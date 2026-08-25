@@ -77,7 +77,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
-| `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`); an install whose disk still holds the legacy `qwen3.6-35b-a3b` GGUF and whose config has no `llm_model` key stays on it |
+| `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`, the only entry); a config still naming the retired `qwen3.6-35b-a3b` migrates to the default |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
 | `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | from the catalog entry for `llm_model` (`llm_catalog.py`); setting them explicitly is the escape hatch for a hand-picked GGUF and wins over the catalog |
 | `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `32768` |
@@ -109,18 +109,18 @@ points carry the notable facts), and submitting one answers
 and are no longer read — exports no longer include a Facts section.
 
 All of them run on the built-in llama.cpp runtime -- the only LLM *engine*
-this service ships -- against a GGUF from the curated model catalog
-(`llm_catalog.py`): `qwen3.5-9b` (Q5_K_M, ~6.6 GB, the default) or
-`qwen3.6-35b-a3b` (Q4_K_M, ~20 GB). `GET /v1/llm-models` lists the catalog
-with per-model presence and download status;
+this service ships -- against the one GGUF in the curated model catalog
+(`llm_catalog.py`): `qwen3.5-9b` (Q5_K_M, ~6.6 GB). There is deliberately
+no model switching. `GET /v1/llm-models` lists the catalog with per-model
+presence and download status;
 `POST`/`DELETE /v1/llm-models/{id}/download` start/cancel one model's
 transfer (one transfer at a time across the catalog) and
 `DELETE /v1/llm-models/{id}` removes a downloaded file (refused for the
 active model, during its transfer, or while an LLM job runs). The legacy
 `POST /v1/llm-model/download` trio and the CLI's `download-llm-model`
-keep working against the *active* model's slot. Which model is active is
-the `llm_model` config key -- the desktop app writes it on selection and
-restarts the service.
+keep working against the *active* model's slot -- with a one-model catalog
+that is always `qwen3.5-9b` unless the `llm_model_file` escape hatch points
+elsewhere.
 Long transcripts are map-reduced against `llm_ctx`, with the reduce running
 in budget-fitted rounds so any transcript length fits the context window;
 a completion that hits the output-token cap is retried on smaller input

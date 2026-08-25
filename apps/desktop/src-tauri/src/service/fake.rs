@@ -18,21 +18,13 @@ use super::{
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
-/// F2's `llm_catalog.CATALOG` (first entry is the default/active model).
-const FAKE_LLM_CATALOG: [(&str, &str, &str, u64); 2] = [
-    (
-        "qwen3.5-9b",
-        "Qwen3.5 9B",
-        "Qwen3.5-9B-Q5_K_M.gguf",
-        6_577_841_376,
-    ),
-    (
-        "qwen3.6-35b-a3b",
-        "Qwen3.6 35B A3B",
-        "Qwen3.6-35B-A3B-Q4_K_M.gguf",
-        20_419_565_568,
-    ),
-];
+/// F2's `llm_catalog.CATALOG` (deliberately a single model; no switching).
+const FAKE_LLM_CATALOG: [(&str, &str, &str, u64); 1] = [(
+    "qwen3.5-9b",
+    "Qwen3.5 9B",
+    "Qwen3.5-9B-Q5_K_M.gguf",
+    6_577_841_376,
+)];
 
 /// How many `status()` polls a scripted job spends in each phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

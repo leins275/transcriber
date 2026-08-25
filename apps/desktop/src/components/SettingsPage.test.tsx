@@ -55,20 +55,11 @@ function llmModel(overrides: Partial<LlmCatalogModel> = {}): LlmCatalogModel {
 }
 
 function llmCatalog(overrides: Partial<LlmModelsView> = {}): LlmModelsView {
+  // Deliberately a single model: there is no switching.
   return {
     active: "qwen3.5-9b",
     gpu_build_present: null,
-    models: [
-      llmModel(),
-      llmModel({
-        id: "qwen3.6-35b-a3b",
-        label: "Qwen3.6 35B A3B",
-        file: "Qwen3.6-35B-A3B-Q4_K_M.gguf",
-        size_bytes: 20_419_565_568,
-        present: false,
-        active: false,
-      }),
-    ],
+    models: [llmModel()],
     ...overrides,
   };
 }
@@ -90,8 +81,6 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onChangeRoot: () => {},
     onStartLlmModelDownload: () => {},
     onCancelLlmModelDownload: () => {},
-    onDeleteLlmModel: () => {},
-    onSelectLlmModel: () => {},
     ...overrides,
   };
   return render(<SettingsPage {...props} />);
@@ -140,54 +129,41 @@ describe("SettingsPage", () => {
   // facts extraction followed it (the summary carries the notable facts).
   it("describes the assistant as summaries and action items — not reports or facts", () => {
     renderPage({ llmModels: llmCatalog() });
-    expect(
-      screen.getByText(/Summaries and action items run on this machine\./),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Summaries and action items run on this machine/)).toBeInTheDocument();
     expect(screen.queryByText(/project reports/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/facts/i)).not.toBeInTheDocument();
   });
 
-  it("lists every curated model with its size, and badges the active one", () => {
+  it("lists the one built-in model with its size, and no switching controls", () => {
     renderPage({ llmModels: llmCatalog() });
     expect(screen.getByText("Qwen3.5 9B")).toBeInTheDocument();
-    expect(screen.getByText("Qwen3.6 35B A3B")).toBeInTheDocument();
     expect(screen.getByText("~6.6 GB")).toBeInTheDocument();
-    expect(screen.getByText("~20.4 GB")).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
+    // Rigid on purpose: one model, so nothing to badge, select or delete.
+    expect(screen.queryByText("Active")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use this model/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 
-  it("offers Download for an absent model and passes its id through", async () => {
+  it("offers Download when the model is absent and passes its id through", async () => {
     const user = userEvent.setup();
     const onStartLlmModelDownload = vi.fn();
-    renderPage({ llmModels: llmCatalog(), onStartLlmModelDownload });
-
-    await user.click(screen.getByRole("button", { name: /download \(~20\.4 GB\)/i }));
-    expect(onStartLlmModelDownload).toHaveBeenCalledWith("qwen3.6-35b-a3b");
-  });
-
-  it("offers Use this model and Delete on a present non-active model", async () => {
-    const user = userEvent.setup();
-    const onSelectLlmModel = vi.fn();
-    const onDeleteLlmModel = vi.fn();
     const catalog = llmCatalog();
-    catalog.models[1].present = true;
-    renderPage({ llmModels: catalog, onSelectLlmModel, onDeleteLlmModel });
+    catalog.models[0].present = false;
+    renderPage({ llmModels: catalog, onStartLlmModelDownload });
 
-    await user.click(screen.getByRole("button", { name: /use this model/i }));
-    expect(onSelectLlmModel).toHaveBeenCalledWith("qwen3.6-35b-a3b");
-
-    await user.click(screen.getByRole("button", { name: /delete/i }));
-    expect(onDeleteLlmModel).toHaveBeenCalledWith("qwen3.6-35b-a3b");
+    await user.click(screen.getByRole("button", { name: /download \(~6\.6 GB\)/i }));
+    expect(onStartLlmModelDownload).toHaveBeenCalledWith("qwen3.5-9b");
   });
 
-  it("shows progress and Cancel while a model downloads, and no second Download", async () => {
+  it("shows progress and Cancel while the model downloads", async () => {
     const user = userEvent.setup();
     const onCancelLlmModelDownload = vi.fn();
     const catalog = llmCatalog();
-    catalog.models[1].download = {
+    catalog.models[0].present = false;
+    catalog.models[0].download = {
       state: "downloading",
-      downloaded_bytes: 5_000_000_000,
-      total_bytes: 20_000_000_000,
+      downloaded_bytes: 1_650_000_000,
+      total_bytes: 6_600_000_000,
       percent: 25,
       error_kind: null,
       error_message: null,
@@ -195,13 +171,13 @@ describe("SettingsPage", () => {
     renderPage({ llmModels: catalog, onCancelLlmModelDownload });
 
     expect(screen.getByText(/Downloading · 25%/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download \(/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /cancel/i }));
-    expect(onCancelLlmModelDownload).toHaveBeenCalledWith("qwen3.6-35b-a3b");
+    expect(onCancelLlmModelDownload).toHaveBeenCalledWith("qwen3.5-9b");
   });
 
-  it("offers GPU acceleration only on the active row when the GPU build is missing", () => {
+  it("offers GPU acceleration when the GPU build is missing", () => {
     const catalog = llmCatalog({ gpu_build_present: false });
-    catalog.models[1].present = true;
     renderPage({ llmModels: catalog });
 
     const buttons = screen.getAllByRole("button", { name: /enable gpu acceleration/i });
@@ -211,13 +187,14 @@ describe("SettingsPage", () => {
 
   it("surfaces a failed download's message on its row", () => {
     const catalog = llmCatalog();
-    catalog.models[1].download = {
+    catalog.models[0].present = false;
+    catalog.models[0].download = {
       state: "error",
       downloaded_bytes: 0,
       total_bytes: 0,
       percent: 0,
       error_kind: "checksum_mismatch",
-      error_message: "digest mismatch for Qwen3.6-35B-A3B-Q4_K_M.gguf",
+      error_message: "digest mismatch for Qwen3.5-9B-Q5_K_M.gguf",
     };
     renderPage({ llmModels: catalog });
     expect(screen.getByText(/digest mismatch/)).toBeInTheDocument();

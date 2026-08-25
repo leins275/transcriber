@@ -25,10 +25,27 @@ from transcription.model_download import ModelDownload, RemoteFile
 AUTH = {"Authorization": "Bearer test-token"}
 WRONG_AUTH = {"Authorization": "Bearer wrong-token"}
 
-CONTENT = {entry.file: entry.id.encode() * 100 for entry in llm_catalog.CATALOG}
+# The shipped catalog is deliberately a single model (no switching), but the
+# manager under test is still multi-slot (per-id downloads, cross-slot
+# guards). A second, test-only entry keeps those guards exercised.
+ALT_ENTRY = llm_catalog.CatalogEntry(
+    id="test-alt",
+    label="Test Alt",
+    repo="test/alt-GGUF",
+    revision="0" * 40,
+    file="Test-Alt-Q4_K_M.gguf",
+    size_bytes=1234,
+)
+
+CONTENT = {entry.file: entry.id.encode() * 100 for entry in (*llm_catalog.CATALOG, ALT_ENTRY)}
 
 DEFAULT = llm_catalog.DEFAULT_MODEL_ID
-LEGACY = llm_catalog.LEGACY_MODEL_ID
+ALT = ALT_ENTRY.id
+
+
+@pytest.fixture(autouse=True)
+def _two_model_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llm_catalog, "CATALOG", (*llm_catalog.CATALOG, ALT_ENTRY))
 
 
 @pytest.fixture
@@ -101,31 +118,27 @@ def test_llm_models_routes_require_the_bearer_token(config: Config) -> None:
     app = create_app(config, llm_models_factory_for=_factory_for(config))
     with TestClient(app) as client:
         assert client.get("/v1/llm-models", headers=WRONG_AUTH).status_code == 401
+        assert client.post(f"/v1/llm-models/{ALT}/download", headers=WRONG_AUTH).status_code == 401
         assert (
-            client.post(f"/v1/llm-models/{LEGACY}/download", headers=WRONG_AUTH).status_code == 401
+            client.delete(f"/v1/llm-models/{ALT}/download", headers=WRONG_AUTH).status_code == 401
         )
-        assert (
-            client.delete(f"/v1/llm-models/{LEGACY}/download", headers=WRONG_AUTH).status_code
-            == 401
-        )
-        assert client.delete(f"/v1/llm-models/{LEGACY}", headers=WRONG_AUTH).status_code == 401
+        assert client.delete(f"/v1/llm-models/{ALT}", headers=WRONG_AUTH).status_code == 401
 
 
 def test_llm_models_download_fetches_only_the_requested_model(config: Config) -> None:
     app = create_app(config, llm_models_factory_for=_factory_for(config))
     with TestClient(app) as client:
-        response = client.post(f"/v1/llm-models/{LEGACY}/download", headers=AUTH)
+        response = client.post(f"/v1/llm-models/{ALT}/download", headers=AUTH)
         assert response.status_code == 202
 
-        row = _wait_terminal(client, LEGACY)
+        row = _wait_terminal(client, ALT)
         assert row["download"]["state"] == "complete"
         assert row["present"] is True
 
         llm_dir = Path(config.llm_model_path)
-        legacy_entry = llm_catalog.get(LEGACY)
         default_entry = llm_catalog.get(DEFAULT)
-        assert legacy_entry is not None and default_entry is not None
-        assert (llm_dir / legacy_entry.file).read_bytes() == CONTENT[legacy_entry.file]
+        assert default_entry is not None
+        assert (llm_dir / ALT_ENTRY.file).read_bytes() == CONTENT[ALT_ENTRY.file]
         assert not (llm_dir / default_entry.file).exists()
 
         # The other row is untouched -- and the active model is still absent.
@@ -138,14 +151,14 @@ def test_llm_models_download_fetches_only_the_requested_model(config: Config) ->
 def test_llm_models_refuses_a_second_concurrent_transfer(config: Config) -> None:
     app = create_app(config, llm_models_factory_for=_factory_for(config, chunk_sleep=0.05))
     with TestClient(app) as client:
-        assert client.post(f"/v1/llm-models/{LEGACY}/download", headers=AUTH).status_code == 202
+        assert client.post(f"/v1/llm-models/{ALT}/download", headers=AUTH).status_code == 202
         try:
             response = client.post(f"/v1/llm-models/{DEFAULT}/download", headers=AUTH)
             assert response.status_code == 400, response.text
             assert response.json()["error_kind"] == "invalid_request"
         finally:
-            client.delete(f"/v1/llm-models/{LEGACY}/download", headers=AUTH)
-            _wait_terminal(client, LEGACY)
+            client.delete(f"/v1/llm-models/{ALT}/download", headers=AUTH)
+            _wait_terminal(client, ALT)
 
 
 def test_llm_models_download_of_an_unknown_id_is_refused(config: Config) -> None:
@@ -159,17 +172,15 @@ def test_llm_models_download_of_an_unknown_id_is_refused(config: Config) -> None
 def test_llm_models_delete_removes_a_non_active_model(config: Config) -> None:
     app = create_app(config, llm_models_factory_for=_factory_for(config))
     with TestClient(app) as client:
-        client.post(f"/v1/llm-models/{LEGACY}/download", headers=AUTH)
-        _wait_terminal(client, LEGACY)
+        client.post(f"/v1/llm-models/{ALT}/download", headers=AUTH)
+        _wait_terminal(client, ALT)
 
-        legacy_entry = llm_catalog.get(LEGACY)
-        assert legacy_entry is not None
-        gguf = Path(config.llm_model_path) / legacy_entry.file
+        gguf = Path(config.llm_model_path) / ALT_ENTRY.file
         assert gguf.is_file()
 
-        body = client.delete(f"/v1/llm-models/{LEGACY}", headers=AUTH).json()
+        body = client.delete(f"/v1/llm-models/{ALT}", headers=AUTH).json()
         assert not gguf.exists()
-        row = next(m for m in body["models"] if m["id"] == LEGACY)
+        row = next(m for m in body["models"] if m["id"] == ALT)
         assert row["present"] is False
 
 
@@ -186,20 +197,20 @@ def test_llm_models_delete_is_refused_while_an_llm_job_is_active(config: Config)
         config, factory_for=_factory_for(config), has_active_llm_job=lambda: True
     )
     with pytest.raises(ServiceError, match="jobs are running"):
-        manager.delete(LEGACY)
+        manager.delete(ALT)
 
 
 def test_llm_models_delete_is_refused_while_that_model_is_downloading(config: Config) -> None:
     app = create_app(config, llm_models_factory_for=_factory_for(config, chunk_sleep=0.05))
     with TestClient(app) as client:
-        client.post(f"/v1/llm-models/{LEGACY}/download", headers=AUTH)
+        client.post(f"/v1/llm-models/{ALT}/download", headers=AUTH)
         try:
-            response = client.delete(f"/v1/llm-models/{LEGACY}", headers=AUTH)
+            response = client.delete(f"/v1/llm-models/{ALT}", headers=AUTH)
             assert response.status_code == 400
             assert "download" in response.json()["error_message"]
         finally:
-            client.delete(f"/v1/llm-models/{LEGACY}/download", headers=AUTH)
-            _wait_terminal(client, LEGACY)
+            client.delete(f"/v1/llm-models/{ALT}/download", headers=AUTH)
+            _wait_terminal(client, ALT)
 
 
 def test_gguf_already_present_means_the_target_file_not_the_shared_ready_marker(
@@ -213,13 +224,12 @@ def test_gguf_already_present_means_the_target_file_not_the_shared_ready_marker(
     llm_dir = Path(config.llm_model_path)
     llm_dir.mkdir(parents=True)
     (llm_dir / ".ready").touch()
-    legacy_entry = llm_catalog.get(LEGACY)
     default_entry = llm_catalog.get(DEFAULT)
-    assert legacy_entry is not None and default_entry is not None
-    (llm_dir / legacy_entry.file).write_bytes(b"weights")
+    assert default_entry is not None
+    (llm_dir / ALT_ENTRY.file).write_bytes(b"weights")
 
     factory = _factory_for(config)
-    assert factory(legacy_entry).already_present() is True
+    assert factory(ALT_ENTRY).already_present() is True
     assert factory(default_entry).already_present() is False
 
 

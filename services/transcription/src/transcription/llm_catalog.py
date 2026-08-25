@@ -1,8 +1,8 @@
 """The curated LLM model catalog.
 
-The service supports exactly the GGUF models listed here; the Settings UI
-lists them and lets the operator download, delete and switch between them.
-Each entry pins a Hugging Face repo + revision + one file out of that repo
+The service supports exactly the GGUF models listed here -- deliberately just
+one: there is no model switching, the Settings UI only downloads it. Each
+entry pins a Hugging Face repo + revision + one file out of that repo
 (GGUF repos carry many quants; downloading all of them would be hundreds of
 GB), so verification always has a concrete digest set to compare against --
 the same discipline as the whisper snapshot pin in ``model_download.py``.
@@ -36,10 +36,9 @@ class CatalogEntry:
 
 
 CATALOG: tuple[CatalogEntry, ...] = (
-    # Dense 9B: fully GPU-resident on a 12 GB card, which makes it several
-    # times faster end-to-end than the (better, but partially CPU-offloaded)
-    # 35B MoE below. Neither Qwen nor ggml-org publishes a GGUF conversion
-    # of this one; unsloth's is the canonical community conversion.
+    # Dense 9B: fully GPU-resident on a 12 GB card. Neither Qwen nor
+    # ggml-org publishes a GGUF conversion of this one; unsloth's is the
+    # canonical community conversion.
     CatalogEntry(
         id="qwen3.5-9b",
         label="Qwen3.5 9B",
@@ -48,25 +47,14 @@ CATALOG: tuple[CatalogEntry, ...] = (
         file="Qwen3.5-9B-Q5_K_M.gguf",
         size_bytes=6_577_841_376,
     ),
-    # MoE 35B (3B active): higher quality, but ~20 GB of weights means the
-    # MoE-blind GPU auto-fit leaves most of it on the CPU on consumer cards.
-    CatalogEntry(
-        id="qwen3.6-35b-a3b",
-        label="Qwen3.6 35B A3B",
-        repo="ggml-org/Qwen3.6-35B-A3B-GGUF",
-        revision="baec3ebee244827cda0f4557eafa8b28f7545fa6",
-        file="Qwen3.6-35B-A3B-Q4_K_M.gguf",
-        size_bytes=20_419_565_568,
-    ),
 )
 
 DEFAULT_ENTRY = CATALOG[0]
 DEFAULT_MODEL_ID = DEFAULT_ENTRY.id
-# Installs from before the catalog existed have this model on disk and no
-# `llm_model` key in config.json; `load_config` keeps them on it (see the
-# migration probe there) instead of surprise-downloading the new default.
-LEGACY_ENTRY = CATALOG[1]
-LEGACY_MODEL_ID = LEGACY_ENTRY.id
+# Ids the catalog used to carry (the 35B MoE, retired when model switching
+# was removed). A config.json that still names one -- written by the old
+# Settings switcher -- migrates to the default instead of failing to load.
+RETIRED_MODEL_IDS: frozenset[str] = frozenset({"qwen3.6-35b-a3b"})
 
 
 def get(model_id: str) -> CatalogEntry | None:

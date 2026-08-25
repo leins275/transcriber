@@ -237,7 +237,6 @@ pub fn run() {
             commands::llm::start_llm_model_download_for,
             commands::llm::cancel_llm_model_download_for,
             commands::llm::delete_llm_model,
-            commands::llm::select_llm_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

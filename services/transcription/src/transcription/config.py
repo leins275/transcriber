@@ -228,10 +228,11 @@ def _resolve_llm_model(values: dict[str, Any]) -> None:
     Runs after every layer has merged (and after ``llm_model_path`` has been
     defaulted). Mutates ``values`` in place:
 
-    - No layer supplied ``llm_model``: migration probe -- an install that
-      already holds the legacy GGUF on disk (and predates the ``llm_model``
-      key) stays on it; everything else gets the catalog default. Keeps
-      existing setups working with zero writes and no surprise download.
+    - No layer supplied ``llm_model``: the catalog default -- there is only
+      one curated model, and it is not a choice.
+    - A *retired* id (written by the old Settings model switcher) migrates
+      to the default instead of failing the whole config load -- unless the
+      escape hatch supplied an explicit file, which always wins.
     - ``llm_model_repo``/``llm_model_revision``/``llm_model_file`` are filled
       from the catalog entry only where no layer supplied them, so an
       explicit value (the hand-picked-GGUF escape hatch) always wins.
@@ -239,12 +240,10 @@ def _resolve_llm_model(values: dict[str, Any]) -> None:
       the file to load -- failing fast beats downloading the wrong thing.
     """
     model_id = str(values.get("llm_model") or "")
-    if not model_id:
-        legacy = llm_catalog.LEGACY_ENTRY
-        if (Path(values["llm_model_path"]) / legacy.file).is_file():
-            model_id = legacy.id
-        else:
-            model_id = llm_catalog.DEFAULT_MODEL_ID
+    if not model_id or (
+        model_id in llm_catalog.RETIRED_MODEL_IDS and not values.get("llm_model_file")
+    ):
+        model_id = llm_catalog.DEFAULT_MODEL_ID
         values["llm_model"] = model_id
 
     entry = llm_catalog.get(model_id)

@@ -523,38 +523,32 @@ def test_llm_model_defaults_to_the_catalog_default_on_a_fresh_install(
     assert cfg.llm_ctx == 32768
 
 
-def test_llm_model_migration_probe_keeps_a_legacy_install_on_its_model(
-    tmp_app_dir: Path,
-) -> None:
-    """An install from before the catalog: the 35B GGUF is on disk and
-    config.json has no `llm_model` key -- it must stay on that model, not
-    silently start needing a 6.6 GB download."""
-    legacy = llm_catalog.get(llm_catalog.LEGACY_MODEL_ID)
-    assert legacy is not None
-    llm_dir = tmp_app_dir / "models" / "llm"
-    llm_dir.mkdir(parents=True)
-    (llm_dir / legacy.file).write_bytes(b"weights")
+def test_llm_model_retired_id_migrates_to_the_default(tmp_app_dir: Path) -> None:
+    """A config.json still naming the retired 35B (written by the old
+    Settings model switcher) must load on the default, not fail."""
+    retired = next(iter(llm_catalog.RETIRED_MODEL_IDS))
+    _write_config(tmp_app_dir, {"llm_model": retired})
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 
     cfg = load_config(env=env)
 
-    assert cfg.llm_model == llm_catalog.LEGACY_MODEL_ID
-    assert cfg.llm_model_repo == legacy.repo
-    assert cfg.llm_model_revision == legacy.revision
-    assert cfg.llm_model_file == legacy.file
+    default = llm_catalog.DEFAULT_ENTRY
+    assert cfg.llm_model == default.id
+    assert cfg.llm_model_repo == default.repo
+    assert cfg.llm_model_file == default.file
 
 
-def test_llm_model_id_from_the_config_file_resolves_against_the_catalog(
-    tmp_app_dir: Path,
-) -> None:
-    _write_config(tmp_app_dir, {"llm_model": llm_catalog.LEGACY_MODEL_ID})
+def test_llm_model_retired_id_with_an_explicit_file_stays_on_it(tmp_app_dir: Path) -> None:
+    """The escape hatch wins over retirement: an operator who pinned the file
+    by hand keeps running it."""
+    retired = next(iter(llm_catalog.RETIRED_MODEL_IDS))
+    _write_config(tmp_app_dir, {"llm_model": retired, "llm_model_file": "pinned.gguf"})
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 
     cfg = load_config(env=env)
 
-    legacy = llm_catalog.get(llm_catalog.LEGACY_MODEL_ID)
-    assert legacy is not None
-    assert cfg.llm_model_file == legacy.file
+    assert cfg.llm_model == retired
+    assert cfg.llm_model_file == "pinned.gguf"
 
 
 def test_llm_model_explicit_repo_and_file_beat_the_catalog(tmp_app_dir: Path) -> None:
