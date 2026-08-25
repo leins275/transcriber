@@ -22,7 +22,6 @@ function renderPage(props: Partial<React.ComponentProps<typeof ProjectPage>> = {
     entries: [buildEntry()],
     onBack: () => {},
     onOpen: () => {},
-    onReveal: () => {},
   };
   return render(<ProjectPage {...defaults} {...props} />);
 }
@@ -76,19 +75,16 @@ describe("ProjectPage", () => {
     const user = userEvent.setup();
     renderPage({ entries: [buildEntry({ id: "v-42" })], onOpen });
 
-    await user.click(screen.getByRole("button", { name: /^transcript$/i }));
+    await user.click(screen.getByText("Security issue"));
 
     expect(onOpen).toHaveBeenCalledWith("v-42");
   });
 
-  it("reveals a recording by id", async () => {
-    const onReveal = vi.fn();
-    const user = userEvent.setup();
-    renderPage({ entries: [buildEntry({ id: "v-42" })], onReveal });
+  it("carries no per-row Transcript or Reveal buttons — those live on the recording page", () => {
+    renderPage({ entries: [buildEntry({ id: "v-42" })] });
 
-    await user.click(screen.getByRole("button", { name: /^reveal$/i }));
-
-    expect(onReveal).toHaveBeenCalledWith("v-42");
+    expect(screen.queryByRole("button", { name: /^transcript$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^reveal$/i })).not.toBeInTheDocument();
   });
 
   it("explains an empty project instead of rendering an empty page", () => {

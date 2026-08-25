@@ -339,31 +339,28 @@ describe("App vault browser", () => {
     await settle();
   });
 
-  it("invokes reveal_vault_entry with the entry id when a vault row's Reveal is clicked", async () => {
-    const revealCalls: unknown[] = [];
+  it("offers no per-row Reveal or Transcript buttons in the library list", async () => {
+    // Those actions live on the recording's own page now; the list keeps
+    // only the row itself (open) and the group's "Open project" link.
     mockIPC(
-      (cmd, payload) => {
+      (cmd) => {
         if (cmd === "get_settings") return buildSettings();
         if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
         if (cmd === "list_vault") return [buildVaultEntry({ id: "v-9" })];
-        if (cmd === "reveal_vault_entry") {
-          revealCalls.push(payload);
-          return null;
-        }
         return null;
       },
       { shouldMockEvents: true },
     );
 
-    const user = userEvent.setup();
     render(<App />);
     await waitFor(() =>
       expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
     );
+    await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
 
-    await user.click(screen.getByRole("button", { name: /reveal/i }));
-
-    expect(revealCalls).toEqual([{ entryId: "v-9" }]);
+    expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^transcript$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open project/i })).toBeInTheDocument();
     await settle();
   });
 });

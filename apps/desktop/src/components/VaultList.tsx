@@ -5,7 +5,6 @@ import type { VaultMeetingView } from "../types";
 export type VaultListProps = {
   entries: VaultMeetingView[];
   onOpen: (entryId: string) => void;
-  onReveal: (entryId: string) => void;
 };
 
 /**
@@ -13,12 +12,12 @@ export type VaultListProps = {
  * (newest meeting date first — see `vault::list_meetings`), keyed by id.
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function VaultList({ entries, onOpen, onReveal }: VaultListProps) {
+export function VaultList({ entries, onOpen }: VaultListProps) {
   return (
     <ul className={styles.list}>
       {entries.map((entry) => (
         <li key={entry.id}>
-          <VaultRow entry={entry} onOpen={onOpen} onReveal={onReveal} />
+          <VaultRow entry={entry} onOpen={onOpen} />
         </li>
       ))}
     </ul>

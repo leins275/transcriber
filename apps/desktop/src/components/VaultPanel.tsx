@@ -38,7 +38,6 @@ export type VaultPanelProps = {
   onOpen: (entryId: string) => void;
   /** Opens the project page (that project's recordings, full-window). */
   onOpenProject: (project: string) => void;
-  onReveal: (entryId: string) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
   onLoadServiceLog: () => Promise<LedgerJobView[]>;
@@ -66,7 +65,6 @@ export function VaultPanel({
   jobs,
   onOpen,
   onOpenProject,
-  onReveal,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
@@ -202,7 +200,7 @@ export function VaultPanel({
                         Open project →
                       </button>
                     </div>
-                    <VaultList entries={group} onOpen={onOpen} onReveal={onReveal} />
+                    <VaultList entries={group} onOpen={onOpen} />
                   </div>
                 );
               })}
@@ -228,7 +226,7 @@ export function VaultPanel({
                 These did not follow the <span className="mono">Project - YYMMDD - Title</span>{" "}
                 naming convention. Open one and rename it to file it under a project.
               </p>
-              <VaultList entries={unsorted} onOpen={onOpen} onReveal={onReveal} />
+              <VaultList entries={unsorted} onOpen={onOpen} />
             </>
           )}
         </div>

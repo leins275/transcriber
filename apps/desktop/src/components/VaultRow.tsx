@@ -5,9 +5,8 @@ import type { VaultMeetingView } from "../types";
 export type VaultRowProps = {
   entry: VaultMeetingView;
   /** Opens the recording's own page. Called with the entry's server-issued
-   * id (FR: never a raw path from the UI) -- as is every callback here. */
+   * id (FR: never a raw path from the UI). */
   onOpen: (entryId: string) => void;
-  onReveal: (entryId: string) => void;
 };
 
 /** A filled check for a meeting that already has a transcript, a hollow
@@ -51,15 +50,15 @@ function statusLine(entry: VaultMeetingView): string {
  * One filed recording in the library.
  *
  * Deliberately thin: the row's job is to be scanned and chosen between, so
- * it carries a name, a state and two actions. Everything else about a
- * recording — its transcript, its speakers, renaming, deleting — lives on
- * the recording's own page, because those are things you do to *one*
- * recording after you have picked it, and doing them inside a list means
- * reading an hour of transcript through a keyhole.
+ * it carries a name, a state and one action — opening the recording.
+ * Everything else about a recording — its transcript, its speakers, Reveal,
+ * renaming, deleting — lives on the recording's own page, because those are
+ * things you do to *one* recording after you have picked it, and doing them
+ * inside a list means reading an hour of transcript through a keyhole.
  *
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function VaultRow({ entry, onOpen, onReveal }: VaultRowProps) {
+export function VaultRow({ entry, onOpen }: VaultRowProps) {
   const parsed = parseMeetingName(entry.meeting_name);
 
   return (
@@ -71,14 +70,6 @@ export function VaultRow({ entry, onOpen, onReveal }: VaultRowProps) {
         <span className={styles.name}>{parsed ? parsed.title : entry.meeting_name}</span>
         <span className={styles.meta}>{statusLine(entry)}</span>
       </button>
-      <div className={styles.actions}>
-        <button type="button" className="btn btn-secondary" onClick={() => onOpen(entry.id)}>
-          {entry.has_transcript ? "Transcript" : "Open"}
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={() => onReveal(entry.id)}>
-          Reveal
-        </button>
-      </div>
     </div>
   );
 }

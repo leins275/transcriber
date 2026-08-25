@@ -20,7 +20,6 @@ function renderRow(props: Partial<React.ComponentProps<typeof VaultRow>> = {}) {
   const defaults = {
     entry: buildEntry(),
     onOpen: () => {},
-    onReveal: () => {},
   };
   return render(<VaultRow {...defaults} {...props} />);
 }
@@ -62,22 +61,12 @@ describe("VaultRow", () => {
     expect(onOpen).not.toHaveBeenCalledWith(expect.stringContaining("D:\\Meetings"));
   });
 
-  it("offers Transcript for a transcribed recording and Open otherwise", () => {
-    const { unmount } = renderRow();
-    expect(screen.getByRole("button", { name: /^transcript$/i })).toBeInTheDocument();
-    unmount();
-
-    renderRow({ entry: buildEntry({ has_transcript: false }) });
-    expect(screen.getByRole("button", { name: /^open$/i })).toBeInTheDocument();
-  });
-
-  it("calls onReveal with the entry's id, never a raw path", async () => {
-    const onReveal = vi.fn();
-    const user = userEvent.setup();
-    renderRow({ entry: buildEntry({ id: "v-9" }), onReveal });
-
-    await user.click(screen.getByRole("button", { name: /reveal/i }));
-
-    expect(onReveal).toHaveBeenCalledWith("v-9");
+  it("carries no per-row action buttons — opening the recording is the row", () => {
+    // Transcript/Reveal used to sit on every row; they now live on the
+    // recording's own page, so the row's single button is its content.
+    renderRow();
+    expect(screen.queryByRole("button", { name: /^transcript$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 });

@@ -97,6 +97,38 @@ class JobState:
     cancel_token: CancelToken = field(default_factory=CancelToken)
 
 
+class _ExtractionProgress:
+    """Monotone progress over a growing plan of LLM calls.
+
+    The extraction path used to map each chunk onto a fixed slice of the
+    bar; a split-and-retry (or a JSON repair round) then re-ran its
+    completion with a fresh 0..1 fraction inside the same slice, so the
+    bar visibly jumped back and re-climbed -- which the operator reads as
+    the job silently restarting. This mirrors the summarize path instead:
+    extra calls grow the denominator, and the clamp keeps the bar monotone.
+    """
+
+    def __init__(self, job: JobState, share: float, planned_calls: int) -> None:
+        self._job = job
+        self._share = share
+        self._planned = planned_calls
+        self._done = 0
+
+    def advance(self, fraction: float) -> None:
+        total = max(self._planned, self._done + 1)
+        self._job.progress = min(
+            0.99,
+            max(self._job.progress, (self._done + fraction) / total * self._share),
+        )
+
+    def call_done(self) -> None:
+        self._done += 1
+        self.advance(0.0)
+
+    def calls_added(self, count: int) -> None:
+        self._planned += count
+
+
 class JobManager:
     """FIFO queue, one serial worker, progress, cancel, ledger, transcript (FR-2)."""
 
@@ -863,7 +895,7 @@ class JobManager:
         provider: LlmProvider,
         messages: list[Message],
         wrapper_cls: type[ActionItemsOut] | type[FactsOut],
-        on_progress: Callable[[float], None],
+        progress: _ExtractionProgress,
     ) -> list[Any]:
         """One schema-constrained completion with the one bounded repair retry.
 
@@ -874,11 +906,15 @@ class JobManager:
         """
         schema = wrapper_cls.model_json_schema()
         text = self._complete_text(
-            job, provider, messages, json_schema=schema, on_progress=on_progress
+            job, provider, messages, json_schema=schema, on_progress=progress.advance
         )
+        progress.call_done()
         try:
             return list(parse_llm_json(text, wrapper_cls).items)
         except LlmOutputError as first_error:
+            # The repair round was not in the plan; put it on the denominator
+            # so the bar stalls rather than ever running backwards.
+            progress.calls_added(1)
             repair = repair_messages(
                 messages,
                 first_error.raw,
@@ -887,8 +923,9 @@ class JobManager:
                 count_tokens=provider.count_tokens,
             )
             text = self._complete_text(
-                job, provider, repair, json_schema=schema, on_progress=on_progress
+                job, provider, repair, json_schema=schema, on_progress=progress.advance
             )
+            progress.call_done()
             try:
                 return list(parse_llm_json(text, wrapper_cls).items)
             except LlmOutputError as second_error:
@@ -916,7 +953,7 @@ class JobManager:
         chunk: str,
         messages_fn: Callable[[str], list[Message]],
         wrapper_cls: type[ActionItemsOut] | type[FactsOut],
-        on_progress: Callable[[float], None],
+        progress: _ExtractionProgress,
         budget_tokens: int,
         depth: int = 0,
     ) -> list[Any]:
@@ -927,7 +964,7 @@ class JobManager:
         misleading JSON parse error truncation used to surface as."""
         try:
             return self._constrained_items(
-                job, provider, messages_fn(chunk), wrapper_cls, on_progress=on_progress
+                job, provider, messages_fn(chunk), wrapper_cls, progress=progress
             )
         except LlmTruncatedError as truncated:
             half_budget = max(64, budget_tokens // 2)
@@ -943,6 +980,18 @@ class JobManager:
                     "for a minimal transcript chunk; raising "
                     "llm_max_output_tokens in the service config may help",
                 ) from truncated
+            # The truncated attempt did run end to end (its output is just
+            # discarded); count it done and put the retries on the plan so
+            # the bar stays monotone. Logged so a long stretch of retries is
+            # explicable from the service log instead of looking like a hang.
+            progress.call_done()
+            progress.calls_added(len(sub_chunks))
+            _logger.info(
+                "%s output for job %s hit the token limit; retrying as %d smaller chunks",
+                job.job_type,
+                job.job_id,
+                len(sub_chunks),
+            )
             items: list[Any] = []
             for sub_chunk in sub_chunks:
                 job.cancel_token.raise_if_cancelled()
@@ -953,7 +1002,7 @@ class JobManager:
                         sub_chunk,
                         messages_fn,
                         wrapper_cls,
-                        on_progress,
+                        progress,
                         half_budget,
                         depth + 1,
                     )
@@ -984,12 +1033,7 @@ class JobManager:
         # The LLM owns the first 80% of the progress bar; screenshots and
         # artifact writes own the rest (the diarization progress-split rule).
         llm_share = 0.8
-
-        def progress_for(base: float, span: float) -> Callable[[float], None]:
-            def on_progress(fraction: float) -> None:
-                job.progress = min(0.99, base + fraction * span)
-
-            return on_progress
+        progress = _ExtractionProgress(job, share=llm_share, planned_calls=len(chunks))
 
         # One bad chunk degrades to a warning instead of failing the whole
         # job (the screenshots pattern): every other chunk's items are
@@ -1007,7 +1051,7 @@ class JobManager:
                         chunk,
                         messages_fn,
                         wrapper_cls,
-                        progress_for((index / len(chunks)) * llm_share, llm_share / len(chunks)),
+                        progress,
                         budget,
                     )
                 )
@@ -1109,7 +1153,11 @@ class JobManager:
                 )
             )
             job.progress = min(
-                0.99, llm_share + ((index + 1) / max(1, len(items))) * (1 - llm_share)
+                0.99,
+                max(
+                    job.progress,
+                    llm_share + ((index + 1) / max(1, len(items))) * (1 - llm_share),
+                ),
             )
 
         return {"artifacts": [str(path) for path in md_paths], "item_count": len(md_paths)}
