@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.12.0 — 2026-08-25
+
+### Features
+
+- Action-items-first pipeline with in-app view and factored UI
+
 ## 0.11.1 — 2026-08-25
 
 ### Bug fixes
