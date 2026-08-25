@@ -1,0 +1,465 @@
+---
+// The one page. Markup and tokens carried over from the approved design
+// (local/Transcriber Landing.html); content edits happen here directly.
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const github = "https://github.com/leins275/transcriber";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Transcriber — every meeting becomes one document</title>
+    <meta
+      name="description"
+      content="A local-first desktop app: drop a meeting recording, get a transcript, summary and action items filed into one document. Nothing leaves your computer."
+    />
+    <link rel="icon" type="image/svg+xml" href={`${base}/logo.svg`} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Lora:wght@400;600&display=swap"
+    />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <img src={`${base}/logo.svg`} alt="" width="26" height="26" />
+        <span class="brand">Transcriber</span>
+        <nav class="topnav">
+          <a href="#how">How it works</a>
+          <a href="#principles">Principles</a>
+          <a href={github}>GitHub</a>
+        </nav>
+      </header>
+
+      <section class="hero">
+        <div class="kicker">A desktop tool · Local · Open source</div>
+        <h1>Every meeting becomes one document.</h1>
+        <p class="lede">
+          Transcriber does a single job: it takes a recording, transcribes it on your machine,
+          extracts the summary and action items, and files everything into one organized document
+          in a folder you own. Nothing leaves your computer.
+        </p>
+        <div class="cta-row">
+          <a href={`${github}/releases`} class="btn btn-primary">Download for Windows</a>
+          <a href={github} class="btn btn-ghost">View source →</a>
+        </div>
+        <div class="fineprint">Rust + Tauri · Whisper runs locally · free</div>
+      </section>
+
+      <section class="shot">
+        <div class="plate">
+          <img
+            src={`${base}/screenshot.png`}
+            alt="Transcriber: the recordings list with a transcription in progress"
+          />
+        </div>
+        <div class="shot-caption">The whole interface: one list of recordings, one job in flight.</div>
+      </section>
+
+      <section id="how" class="how">
+        <h2>How it works</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="step-no">01</div>
+            <div class="step-title">Drop a recording</div>
+            <p>
+              Any common audio or video file — mp4, mkv, webm, m4a, mp3, wav and more. Drop it
+              anywhere in the window.
+            </p>
+          </div>
+          <div class="step">
+            <div class="step-no">02</div>
+            <div class="step-title">It works locally</div>
+            <p>
+              Whisper large-v3 transcribes on your own GPU or CPU, then Qwen3.5 9B extracts the
+              summary and action items from the transcript.
+            </p>
+          </div>
+          <div class="step">
+            <div class="step-no">03</div>
+            <div class="step-title">One document, filed</div>
+            <p>
+              Transcript, summary and action items land in a single document, filed by project in
+              a plain folder on your disk.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="principles" class="principles">
+        <h2>Deliberately rigid</h2>
+        <p class="principles-lede">
+          Transcriber is opinionated on purpose. It refuses to be a platform so it can be good at
+          one thing.
+        </p>
+        <div class="principle-grid">
+          <div class="principle">
+            <div class="principle-title">Your files, your disk</div>
+            <p>
+              No cloud, no account, no telemetry. The vault is an ordinary folder you can open in
+              Explorer.
+            </p>
+          </div>
+          <div class="principle">
+            <div class="principle-title">One output shape</div>
+            <p>
+              Every meeting produces the same document: transcript, summary, action items. No
+              templates to configure.
+            </p>
+          </div>
+          <div class="principle">
+            <div class="principle-title">No editor, no wiki</div>
+            <p>Read, copy, export to PDF. Your notes belong in the tools you already use.</p>
+          </div>
+          <div class="principle">
+            <div class="principle-title">Two models, no picker</div>
+            <p>
+              Whisper large-v3 transcribes, Qwen3.5 9B extracts the insights. The best local pair
+              we found — so there is nothing to choose.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="closer">
+        <h2>Stop taking notes in meetings.</h2>
+        <div class="cta-row">
+          <a href={`${github}/releases`} class="btn btn-primary">Download for Windows</a>
+          <a href={github} class="btn btn-ghost">Star on GitHub</a>
+        </div>
+        <div class="fineprint">MIT license · leins275/transcriber</div>
+      </section>
+    </div>
+  </body>
+</html>
+
+<style is:global>
+  /* Design-system tokens, carried over from the approved design. */
+  :root {
+    --color-bg: #f3f2f2;
+    --color-surface: #eae9e9;
+    --color-text: #201f1d;
+    --color-accent: #b68235;
+    --color-divider: color-mix(in srgb, #201f1d 16%, transparent);
+
+    --color-neutral-600: #7d7979;
+    --color-neutral-700: #605d5d;
+    --color-neutral-800: #444141;
+
+    --color-accent-400: #e1ad66;
+    --color-accent-600: #a06f24;
+
+    --font-heading: "Cormorant Garamond", Georgia, serif;
+    --font-body: "Lora", Georgia, serif;
+
+    --radius-md: 4px;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  a {
+    color: var(--color-accent);
+    text-underline-offset: 3px;
+  }
+  img {
+    display: block;
+    max-width: 100%;
+  }
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.2;
+    color: var(--color-text);
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 9.2px 16.5px;
+    border-radius: var(--radius-md);
+  }
+  .btn-primary {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .btn-primary:hover {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  }
+  .btn-primary:active {
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+  .btn-ghost {
+    color: var(--color-accent);
+    padding-inline: 4.6px;
+  }
+  .btn-ghost:hover {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  }
+  .btn-ghost:active {
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+
+  /* The screenshot's period frame. */
+  .plate {
+    filter: sepia(0.22) saturate(0.82) contrast(1.05);
+    border: 6px solid var(--color-surface);
+    outline: 1px solid var(--color-divider);
+  }
+</style>
+
+<style>
+  .page {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 0 32px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 28px 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .brand {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 22px;
+  }
+  .topnav {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    font-size: 14px;
+  }
+  .topnav a {
+    text-decoration: none;
+  }
+  .topnav a:hover {
+    text-decoration: underline;
+  }
+
+  .hero {
+    padding: 88px 0 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .kicker {
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-neutral-600);
+  }
+  .hero h1 {
+    font-family: var(--font-heading);
+    font-weight: 400;
+    font-size: 58px;
+    line-height: 1.12;
+    margin: 0;
+    max-width: 15ch;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 18px;
+    max-width: 52ch;
+    margin: 0;
+    color: var(--color-neutral-800);
+  }
+  .cta-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .fineprint {
+    font-size: 13px;
+    color: var(--color-neutral-600);
+    font-style: italic;
+  }
+
+  .shot {
+    padding: 64px 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .shot .plate {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+  .shot img {
+    width: 100%;
+    height: auto;
+  }
+  .shot-caption {
+    text-align: center;
+    font-size: 13px;
+    font-style: italic;
+    color: var(--color-neutral-600);
+    margin-top: 14px;
+  }
+
+  .how {
+    padding: 72px 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .how h2 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 32px;
+    margin: 0 0 40px;
+  }
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .step {
+    padding: 0 28px;
+    border-right: 1px solid var(--color-divider);
+  }
+  .step:first-child {
+    padding-left: 0;
+  }
+  .step:last-child {
+    padding-right: 0;
+    border-right: 0;
+  }
+  .step-no {
+    font-family: var(--font-heading);
+    font-size: 30px;
+    color: var(--color-accent-600);
+    font-feature-settings: "tnum";
+  }
+  .step-title {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 19px;
+    margin: 10px 0 8px;
+  }
+  .step p {
+    margin: 0;
+    font-size: 14.5px;
+    color: var(--color-neutral-700);
+    text-align: justify;
+  }
+
+  .principles {
+    padding: 72px 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .principles h2 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 32px;
+    margin: 0 0 12px;
+  }
+  .principles-lede {
+    font-size: 15px;
+    color: var(--color-neutral-700);
+    max-width: 56ch;
+    margin: 0 0 40px;
+  }
+  .principle-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px 56px;
+  }
+  .principle {
+    border-top: 1px solid var(--color-accent-400);
+    padding-top: 16px;
+  }
+  .principle-title {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 18px;
+  }
+  .principle p {
+    margin: 6px 0 0;
+    font-size: 14.5px;
+    color: var(--color-neutral-700);
+  }
+
+  .closer {
+    padding: 80px 0 96px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    text-align: center;
+  }
+  .closer h2 {
+    font-family: var(--font-heading);
+    font-weight: 400;
+    font-size: 36px;
+    margin: 0;
+    max-width: 22ch;
+    text-wrap: balance;
+  }
+  .closer .cta-row {
+    justify-content: center;
+  }
+  .closer .fineprint {
+    font-style: normal;
+  }
+
+  /* The design is an artboard; below its width the columns stack. */
+  @media (max-width: 760px) {
+    .page {
+      padding: 0 20px;
+    }
+    .hero {
+      padding: 56px 0 48px;
+    }
+    .hero h1 {
+      font-size: 40px;
+    }
+    .steps {
+      grid-template-columns: 1fr;
+      gap: 32px;
+    }
+    .step {
+      padding: 0;
+      border-right: 0;
+    }
+    .principle-grid {
+      grid-template-columns: 1fr;
+    }
+    .topnav {
+      gap: 14px;
+    }
+  }
+</style>

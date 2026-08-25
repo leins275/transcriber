@@ -1,0 +1,60 @@
+# Builds and deploys the landing page (landing/, Astro) to GitHub Pages.
+#
+# Runs only when a push to main actually touched the landing (or this
+# workflow) — app releases and every other merge leave the site alone.
+# First run needs Pages enabled for the repo; `configure-pages` below
+# flips it to the "GitHub Actions" source on its own.
+
+name: Landing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/landing.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: landing/package-lock.json
+
+      - name: Install dependencies
+        working-directory: landing
+        run: npm ci
+
+      - name: Build
+        working-directory: landing
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
