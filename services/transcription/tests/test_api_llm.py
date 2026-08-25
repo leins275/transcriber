@@ -181,12 +181,12 @@ def _llm_download_factory(config: Config):  # type: ignore[no-untyped-def]
 
     hub = FakeHubClient(
         [
-            RemoteFile(path="Qwen3.6-35B-A3B-Q4_K_M.gguf", size=len(GGUF_CONTENT), sha256=GGUF_SHA),
-            RemoteFile(path="Qwen3.6-35B-A3B-Q8_0.gguf", size=999_999, sha256=None),
+            RemoteFile(path=config.llm_model_file, size=len(GGUF_CONTENT), sha256=GGUF_SHA),
+            RemoteFile(path="Other-Quant-Q8_0.gguf", size=999_999, sha256=None),
             RemoteFile(path="README.md", size=10, sha256=None),
         ]
     )
-    transport = FakeTransport({"Qwen3.6-35B-A3B-Q4_K_M.gguf": GGUF_CONTENT})
+    transport = FakeTransport({config.llm_model_file: GGUF_CONTENT})
     wanted = config.llm_model_file.casefold()
 
     def factory() -> ModelDownload:
@@ -221,8 +221,8 @@ def test_llm_model_download_fetches_exactly_the_configured_file(config: Config) 
 
         assert status["state"] == "complete", status
         llm_dir = Path(config.llm_model_path)
-        assert (llm_dir / "Qwen3.6-35B-A3B-Q4_K_M.gguf").read_bytes() == GGUF_CONTENT
-        assert not (llm_dir / "Qwen3.6-35B-A3B-Q8_0.gguf").exists()
+        assert (llm_dir / config.llm_model_file).read_bytes() == GGUF_CONTENT
+        assert not (llm_dir / "Other-Quant-Q8_0.gguf").exists()
         assert not (llm_dir / "README.md").exists()
         assert (llm_dir / ".ready").exists()
 

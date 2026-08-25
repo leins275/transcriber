@@ -70,7 +70,12 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   speaker diarization without the app's `Settings` schema knowing the key
   exists. The LLM feature's `llm_*` keys (`llm_model`, `llm_model_path`,
   `llm_ctx`, `llm_gpu_layers`, ... — same README) travel the same way; a
-  future hardware "preset" is just a named bundle of these flat keys.
+  future hardware "preset" is just a named bundle of these flat keys. One of
+  them the app now *writes* as well as preserves: `select_llm_model`
+  (`commands/llm.rs`) inserts the flat `llm_model` key (a curated-catalog id,
+  see `services/transcription/src/transcription/llm_catalog.py`) into
+  `Settings.extra`, saves, and restarts the sidecar so F2 picks the model up
+  on its next start.
 - **Missing known keys fall back to their defaults** on load; a malformed
   JSON file returns a typed `config`-kind error naming the file, never a
   panic.

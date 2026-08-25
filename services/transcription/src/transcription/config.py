@@ -18,6 +18,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from transcription import llm_catalog
+
 # Keys that must never be settable from an argv-shaped override (FR-9): credentials
 # come from the environment or the config file only, never from a CLI flag.
 _SECRET_KEYS = frozenset({"token", "hf_token"})
@@ -46,6 +48,8 @@ _MODEL_KEY = "model"
 # else -- from the config file, `TRANSCRIBER_LANGUAGE`, or `--language` -- is
 # a configuration error rather than a value handed to the decoder.
 _ALLOWED_LANGUAGES = ("ru", "en")
+
+_DEFAULT_LLM_ENTRY = llm_catalog.DEFAULT_ENTRY
 
 
 class ConfigError(Exception):
@@ -106,22 +110,28 @@ class Config:
     job_timeout_sec: int | None = None
     log_level: str = "INFO"
     # --- Local LLM (summaries / action items / facts) ---
-    # Display/model id: it names the local GGUF snapshot the built-in
-    # llama.cpp engine loads.
-    llm_model: str = "qwen3.6-35b-a3b"
+    # Model id, resolved against the curated catalog (`llm_catalog.py`).
+    # The defaults below mirror the catalog's `DEFAULT_MODEL_ID` entry so a
+    # directly-constructed `Config` is coherent; `load_config` re-resolves
+    # them (including the legacy-install migration probe -- an install that
+    # already holds the old 35B on disk and has no `llm_model` key stays on
+    # it instead of surprise-downloading the new default).
+    llm_model: str = llm_catalog.DEFAULT_MODEL_ID
     # Where GGUF snapshots live; empty means `<app_dir>/models/llm`.
     llm_model_path: str = ""
     # Hugging Face repo + revision the in-app GGUF download fetches, and the
     # one file it selects out of that repo (GGUF repos carry many quants;
-    # downloading all of them would be hundreds of GB). The Qwen org itself
-    # publishes no GGUF; ggml-org (the llama.cpp maintainers) is the
-    # canonical conversion. Revision pinned so verification always has a
-    # concrete digest set to compare against, like the whisper snapshot.
-    llm_model_repo: str = "ggml-org/Qwen3.6-35B-A3B-GGUF"
-    llm_model_revision: str = "baec3ebee244827cda0f4557eafa8b28f7545fa6"
-    llm_model_file: str = "Qwen3.6-35B-A3B-Q4_K_M.gguf"
+    # downloading all of them would be hundreds of GB). Normally these come
+    # from the catalog entry for `llm_model`; setting them explicitly
+    # (config file or env) is the escape hatch for running a hand-picked
+    # GGUF and wins over the catalog. Revisions are pinned so verification
+    # always has a concrete digest set to compare against, like the whisper
+    # snapshot.
+    llm_model_repo: str = _DEFAULT_LLM_ENTRY.repo
+    llm_model_revision: str = _DEFAULT_LLM_ENTRY.revision
+    llm_model_file: str = _DEFAULT_LLM_ENTRY.file
     # Context window the chunker budgets against and llama.cpp allocates.
-    llm_ctx: int = 16384
+    llm_ctx: int = 32768
     # -1 = auto-fit: put as many whole layers on the GPU as the free VRAM
     # holds (measured via NVML, layer count read from the GGUF header) and
     # leave the rest on CPU. 0 disables offload; a positive number pins the
@@ -138,8 +148,8 @@ class Config:
     # calls suppress thinking and keep the plain cap.
     llm_think_headroom_tokens: int = 2048
     # Keep the GGUF model resident between LLM jobs. Off by default so the
-    # ~20 GB working set is released and never sits next to a loaded whisper
-    # model; reloading is mmap-fast.
+    # multi-GB working set is released and never sits next to a loaded
+    # whisper model; reloading is mmap-fast.
     llm_keep_loaded: bool = False
 
     def public(self) -> dict[str, Any]:
@@ -210,6 +220,49 @@ def _normalize_language(value: object) -> str | None:
 
 def _env_value(env: Mapping[str, str], key: str) -> str | None:
     return env.get(f"TRANSCRIBER_{key.upper()}")
+
+
+def _resolve_llm_model(values: dict[str, Any]) -> None:
+    """Resolve ``llm_model`` and its repo/revision/file against the catalog.
+
+    Runs after every layer has merged (and after ``llm_model_path`` has been
+    defaulted). Mutates ``values`` in place:
+
+    - No layer supplied ``llm_model``: migration probe -- an install that
+      already holds the legacy GGUF on disk (and predates the ``llm_model``
+      key) stays on it; everything else gets the catalog default. Keeps
+      existing setups working with zero writes and no surprise download.
+    - ``llm_model_repo``/``llm_model_revision``/``llm_model_file`` are filled
+      from the catalog entry only where no layer supplied them, so an
+      explicit value (the hand-picked-GGUF escape hatch) always wins.
+    - An id outside the catalog is an error unless the escape hatch supplied
+      the file to load -- failing fast beats downloading the wrong thing.
+    """
+    model_id = str(values.get("llm_model") or "")
+    if not model_id:
+        legacy = llm_catalog.LEGACY_ENTRY
+        if (Path(values["llm_model_path"]) / legacy.file).is_file():
+            model_id = legacy.id
+        else:
+            model_id = llm_catalog.DEFAULT_MODEL_ID
+        values["llm_model"] = model_id
+
+    entry = llm_catalog.get(model_id)
+    if entry is not None:
+        for key, catalog_value in (
+            ("llm_model_repo", entry.repo),
+            ("llm_model_revision", entry.revision),
+            ("llm_model_file", entry.file),
+        ):
+            if not values.get(key):
+                values[key] = catalog_value
+    elif not values.get("llm_model_file"):
+        known = ", ".join(repr(model_id) for model_id in llm_catalog.known_ids())
+        raise ConfigError(
+            f"unknown llm_model {model_id!r}: curated models are {known}; to run a "
+            f"custom GGUF set llm_model_file (and llm_model_repo/llm_model_revision "
+            f"for the in-app download) explicitly"
+        )
 
 
 def load_config(
@@ -321,6 +374,8 @@ def load_config(
         values["model_path"] = str(app_dir / "models")
     if "llm_model_path" not in values or not values["llm_model_path"]:
         values["llm_model_path"] = str(app_dir / "models" / "llm")
+
+    _resolve_llm_model(values)
 
     if "compute_type" in values and values["compute_type"] in (None, ""):
         values["compute_type"] = None

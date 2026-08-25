@@ -249,6 +249,18 @@ class JobManager:
             "llm_model_present": model_file.is_file(),
         }
 
+    def has_active_llm_job(self) -> bool:
+        """Whether any model-loading LLM job (summarize / action_items /
+        facts -- not export, which never touches the model) is queued or
+        running. Guards catalog model deletion: never pull a GGUF out from
+        under a job that may be about to mmap it.
+        """
+        return any(
+            job.job_type in ("summarize", "action_items", "facts")
+            and job.status in ("queued", "running")
+            for job in self._jobs.values()
+        )
+
     async def submit(
         self,
         *,
@@ -1180,7 +1192,9 @@ class JobManager:
         try:
             pdf_path = render_pdf(
                 export_md,
-                export_dir / "export.pdf",
+                # Named for sharing (`<project> - <date> - <title>.pdf`),
+                # unlike the fixed `export.md` beside it.
+                export_dir / artifacts.export_pdf_filename(meeting_dir),
                 base_dir=export_dir,
                 # Font degradation (no Cyrillic-capable family) is not an
                 # error, but it makes the PDF unreadable for Russian text --

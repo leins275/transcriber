@@ -1,26 +1,133 @@
 import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { LlmModelDownloadStatus, ServiceStatusView, SettingsView } from "../types";
+import type { LlmCatalogModel, LlmModelsView, ServiceStatusView, SettingsView } from "../types";
 
 export type SettingsPageProps = {
   settings: SettingsView;
   serviceStatus: ServiceStatusView;
   modelStatus: ModelDownloadStatus | null;
-  /** The GGUF (assistant LLM) model's status -- `null` while unknown, which
-   * omits the actions rather than showing a false "missing". */
-  llmModelStatus: LlmModelDownloadStatus | null;
+  /** The curated assistant (LLM) model catalog -- `null` while unknown,
+   * which renders the row inert rather than showing a false "missing". */
+  llmModels: LlmModelsView | null;
   /** The installed build's version, once known -- `null` simply omits the
    * row rather than showing a placeholder. */
   appVersion: string | null;
   onBack: () => void;
   onChangeRoot: () => void;
-  onStartLlmDownload: () => void;
-  onCancelLlmDownload: () => void;
+  onStartLlmModelDownload: (modelId: string) => void;
+  onCancelLlmModelDownload: (modelId: string) => void;
+  onDeleteLlmModel: (modelId: string) => void;
+  onSelectLlmModel: (modelId: string) => void;
 };
 
 function extensionList(extensions: string[]): string {
   return extensions.map((ext) => ext.replace(/^\./, "")).join(" · ");
+}
+
+function sizeLabel(sizeBytes: number | null): string {
+  if (sizeBytes === null) return "";
+  return `~${(sizeBytes / 1_000_000_000).toFixed(1)} GB`;
+}
+
+function isTransferring(model: LlmCatalogModel): boolean {
+  return model.download.state === "downloading" || model.download.state === "verifying";
+}
+
+const CHECK_ICON = (
+  <svg
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="var(--accent)"
+    strokeWidth="2.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <polyline points="20 6 9 17 4 12"></polyline>
+  </svg>
+);
+
+/** One curated model's row in the Assistant section. */
+function LlmModelRow({
+  model,
+  gpuBuildPresent,
+  anyTransferring,
+  onStartDownload,
+  onCancelDownload,
+  onDelete,
+  onSelect,
+}: {
+  model: LlmCatalogModel;
+  gpuBuildPresent: boolean | null;
+  anyTransferring: boolean;
+  onStartDownload: (modelId: string) => void;
+  onCancelDownload: (modelId: string) => void;
+  onDelete: (modelId: string) => void;
+  onSelect: (modelId: string) => void;
+}) {
+  const transferring = isTransferring(model);
+  const size = sizeLabel(model.size_bytes);
+  return (
+    <div>
+      <div className={styles.line}>
+        {model.present && CHECK_ICON}
+        {model.label}
+        {size && <span className={styles.detail}>{size}</span>}
+        {model.active && <span className={styles.badge}>Active</span>}
+        {transferring ? (
+          <>
+            {model.present
+              ? `Downloading GPU acceleration · ${Math.round(model.download.percent)}%`
+              : `Downloading · ${Math.round(model.download.percent)}%`}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => onCancelDownload(model.id)}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {!model.present && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={anyTransferring}
+                onClick={() => onStartDownload(model.id)}
+              >
+                Download {size && `(${size})`}
+              </button>
+            )}
+            {model.present && model.active && gpuBuildPresent === false && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => onStartDownload(model.id)}
+              >
+                Enable GPU acceleration (~460 MB)
+              </button>
+            )}
+            {!model.active && (
+              <button type="button" className="btn btn-ghost" onClick={() => onSelect(model.id)}>
+                Use this model
+              </button>
+            )}
+            {model.present && !model.active && (
+              <button type="button" className="btn btn-ghost" onClick={() => onDelete(model.id)}>
+                Delete
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {model.download.error_message && (
+        <p className={styles.warning}>{model.download.error_message}</p>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -37,13 +144,16 @@ export function SettingsPage({
   settings,
   serviceStatus,
   modelStatus,
-  llmModelStatus,
+  llmModels,
   appVersion,
   onBack,
   onChangeRoot,
-  onStartLlmDownload,
-  onCancelLlmDownload,
+  onStartLlmModelDownload,
+  onCancelLlmModelDownload,
+  onDeleteLlmModel,
+  onSelectLlmModel,
 }: SettingsPageProps) {
+  const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
   return (
     <section className={styles.page} role="region" aria-label="Settings">
       <button type="button" className={`btn btn-ghost ${styles.back}`} onClick={onBack}>
@@ -106,70 +216,29 @@ export function SettingsPage({
       <div className={styles.row}>
         <div className={styles.kicker}>Assistant</div>
         <div className={styles.value}>
-          {llmModelStatus === null ? (
+          {llmModels === null ? (
             <div className={styles.line}>Local language model</div>
-          ) : llmModelStatus.model_present &&
-            (llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying") ? (
-            // The GGUF is here; what's transferring is the GPU build.
-            <div className={styles.line}>
-              Downloading GPU acceleration · {Math.round(llmModelStatus.percent)}%
-              <button type="button" className="btn btn-ghost" onClick={onCancelLlmDownload}>
-                Cancel
-              </button>
-            </div>
-          ) : llmModelStatus.model_present ? (
+          ) : (
             <>
-              <div className={styles.line}>
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Local language model installed
-                {llmModelStatus.gpu_build_present === false && (
-                  <button type="button" className="btn btn-secondary" onClick={onStartLlmDownload}>
-                    Enable GPU acceleration (~460 MB)
-                  </button>
-                )}
-              </div>
+              {llmModels.models.map((model) => (
+                <LlmModelRow
+                  key={model.id}
+                  model={model}
+                  gpuBuildPresent={llmModels.gpu_build_present}
+                  anyTransferring={anyLlmTransferring}
+                  onStartDownload={onStartLlmModelDownload}
+                  onCancelDownload={onCancelLlmModelDownload}
+                  onDelete={onDeleteLlmModel}
+                  onSelect={onSelectLlmModel}
+                />
+              ))}
               <p className={styles.hint}>
-                {llmModelStatus.gpu_build_present === false
+                {llmModels.gpu_build_present === false
                   ? "Summaries currently run on CPU. Enabling GPU acceleration downloads the " +
                     "CUDA build of the local runtime and offloads as much of the model as " +
                     "fits in your GPU's memory."
-                  : "Summaries, action items and facts run on this machine."}
-              </p>
-            </>
-          ) : llmModelStatus.state === "downloading" || llmModelStatus.state === "verifying" ? (
-            <>
-              <div className={styles.line}>
-                Downloading the language model · {Math.round(llmModelStatus.percent)}%
-                <button type="button" className="btn btn-ghost" onClick={onCancelLlmDownload}>
-                  Cancel
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className={styles.line}>
-                Local language model not installed
-                <button type="button" className="btn btn-secondary" onClick={onStartLlmDownload}>
-                  Download (~20 GB)
-                </button>
-              </div>
-              {llmModelStatus.error_message && (
-                <p className={styles.warning}>{llmModelStatus.error_message}</p>
-              )}
-              <p className={styles.hint}>
-                Needed for summaries, action items and facts. Everything runs locally; nothing
-                leaves this machine.
+                  : "Summaries, action items and facts run on this machine. Switching the " +
+                    "active model restarts the local service."}
               </p>
             </>
           )}

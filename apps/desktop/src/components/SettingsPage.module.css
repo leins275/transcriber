@@ -69,6 +69,16 @@
   line-height: 1.8;
 }
 
+.badge {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
 .hint {
   margin: 0;
   font-size: var(--text-sm);

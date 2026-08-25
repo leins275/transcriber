@@ -28,8 +28,9 @@ from fastapi.responses import JSONResponse
 from transcription import __version__
 from transcription.api import model_routes
 from transcription.api.model_routes import (
+    LlmModelsManager,
     ModelDownloadManager,
-    build_llm_setup_download,
+    build_llm_models_router,
     build_model_router,
     is_model_present,
     llm_gpu_build_present,
@@ -39,6 +40,7 @@ from transcription.cuda_runtime import is_cuda_runtime_present
 from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import JobManager, JobNotFoundError
 from transcription.ledger import Ledger
+from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
 from transcription.schema import JobCreate, JobStatus
 
@@ -70,16 +72,23 @@ def create_app(
     *,
     model_download_factory: Callable[[], ModelDownload] | None = None,
     llm_model_download_factory: Callable[[], ModelDownload] | None = None,
+    llm_models_factory_for: Callable[[CatalogEntry | None], ModelDownload] | None = None,
     job_manager_factory: Callable[[Config, Ledger], JobManager] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1).
 
-    ``model_download_factory``/``llm_model_download_factory`` are test-only
-    seams (mirroring T10's ``HubClient``/``Transport`` seams): production
-    callers never pass them, so each :class:`ModelDownloadManager` builds
-    its own real download from ``config``. ``job_manager_factory`` is the
-    equivalent seam for injecting a :class:`JobManager` wired with fake
-    LLM/diarizer/frame-extractor engines.
+    ``model_download_factory``/``llm_model_download_factory``/
+    ``llm_models_factory_for`` are test-only seams (mirroring T10's
+    ``HubClient``/``Transport`` seams): production callers never pass them,
+    so each :class:`ModelDownloadManager` builds its own real download from
+    ``config``. ``llm_models_factory_for`` builds one download per catalog
+    entry (``None`` = the config-resolved escape hatch);
+    ``llm_model_download_factory`` is the older single-slot seam, applied to
+    every slot when the per-entry seam is absent -- existing tests only ever
+    poll the active slot through ``/v1/llm-model/download``, where the two
+    coincide. ``job_manager_factory`` is the equivalent seam for injecting a
+    :class:`JobManager` wired with fake LLM/diarizer/frame-extractor
+    engines.
     """
     ledger = Ledger(config.db_path)
     job_manager = (
@@ -88,10 +97,19 @@ def create_app(
         else JobManager(config, ledger)
     )
     model_download_manager = ModelDownloadManager(config, factory=model_download_factory)
-    llm_model_download_manager = ModelDownloadManager(
+    factory_for = llm_models_factory_for
+    if factory_for is None and llm_model_download_factory is not None:
+        single_factory = llm_model_download_factory
+        factory_for = lambda entry: single_factory()  # noqa: E731
+    llm_models_manager = LlmModelsManager(
         config,
-        factory=llm_model_download_factory or (lambda: build_llm_setup_download(config)),
+        factory_for=factory_for,
+        has_active_llm_job=job_manager.has_active_llm_job,
     )
+    # The legacy single-slot routes keep working against the active model's
+    # slot of the same manager map, so the two surfaces can never race two
+    # transfers of one file.
+    llm_model_download_manager = llm_models_manager.manager_for_active()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -109,6 +127,7 @@ def create_app(
     app.state.job_manager = job_manager
     app.state.model_download_manager = model_download_manager
     app.state.llm_model_download_manager = llm_model_download_manager
+    app.state.llm_models_manager = llm_models_manager
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         """Bearer-auth dependency for every `/v1/*` route (FR-9).
@@ -283,5 +302,6 @@ def create_app(
             state_attr="llm_model_download_manager",
         )
     )
+    app.include_router(build_llm_models_router(require_token))
 
     return app

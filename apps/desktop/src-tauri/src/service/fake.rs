@@ -12,9 +12,26 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    JobState, JobStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, ServiceError,
-    ServiceHealth, SubmitRequest, TranscriptionService,
+    JobState, JobStatus, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
+    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
+
+/// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
+/// F2's `llm_catalog.CATALOG` (first entry is the default/active model).
+const FAKE_LLM_CATALOG: [(&str, &str, &str, u64); 2] = [
+    (
+        "qwen3.5-9b",
+        "Qwen3.5 9B",
+        "Qwen3.5-9B-Q5_K_M.gguf",
+        6_577_841_376,
+    ),
+    (
+        "qwen3.6-35b-a3b",
+        "Qwen3.6 35B A3B",
+        "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+        20_419_565_568,
+    ),
+];
 
 /// How many `status()` polls a scripted job spends in each phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,16 +205,68 @@ struct Inner {
     next_outcome: ScriptedOutcome,
     jobs: HashMap<String, ScriptedJob>,
     model: FakeModelDownload,
-    /// The GGUF slot (the LLM feature) -- its own independent simulated
-    /// transfer, present by default so `--fake-service` dev sessions can
-    /// exercise the LLM job flow without a download step.
-    llm_model: FakeModelDownload,
+    /// The curated LLM catalog's per-model slots (`FAKE_LLM_CATALOG` order);
+    /// each is its own independent simulated transfer. All present by
+    /// default so `--fake-service` dev sessions can exercise the LLM job
+    /// flow without a download step.
+    llm_models: Vec<(String, FakeModelDownload)>,
+    /// Which catalog id is active -- the slot the legacy
+    /// `llm_model_download_*` trio and `/health.llm_model_present` report.
+    llm_active: String,
     /// Every derived-job submission this fake accepted, for assertions.
     llm_submissions: Vec<LlmSubmitRequest>,
     /// Every transcription submission this fake accepted, for assertions --
     /// the only place a caller can observe what actually went on the wire
     /// (per-job `language`, FR-5), since `submit()` itself only returns an id.
     submissions: Vec<SubmitRequest>,
+}
+
+impl Inner {
+    fn active_llm_slot(&mut self) -> &mut FakeModelDownload {
+        let active = self.llm_active.clone();
+        self.llm_slot(&active)
+            .expect("the active llm id always has a slot")
+    }
+
+    fn llm_slot(&mut self, model_id: &str) -> Result<&mut FakeModelDownload, ServiceError> {
+        self.llm_models
+            .iter_mut()
+            .find(|(id, _)| id == model_id)
+            .map(|(_, slot)| slot)
+            .ok_or_else(|| ServiceError::Http {
+                status: 400,
+                message: format!("unknown llm model {model_id:?}"),
+            })
+    }
+
+    /// The catalog listing, advancing any in-flight simulated transfer by
+    /// one chunk (the same poll-driven convention as
+    /// `FakeModelDownload::advance_and_peek`).
+    fn llm_models_status(&mut self, advance: bool) -> LlmModelsStatus {
+        let active = self.llm_active.clone();
+        let models = FAKE_LLM_CATALOG
+            .iter()
+            .map(|(id, label, file, size_bytes)| {
+                let slot = self.llm_slot(id).expect("catalog ids always have a slot");
+                let download = if advance {
+                    slot.advance_and_peek()
+                } else {
+                    slot.peek()
+                };
+                LlmCatalogModel {
+                    id: (*id).to_string(),
+                    label: (*label).to_string(),
+                    file: (*file).to_string(),
+                    size_bytes: Some(*size_bytes),
+                    catalog: true,
+                    present: slot.present,
+                    active: *id == active,
+                    download,
+                }
+            })
+            .collect();
+        LlmModelsStatus { active, models }
+    }
 }
 
 /// In-memory fake used by tests and by `--fake-service` dev mode (T11).
@@ -223,7 +292,11 @@ impl FakeService {
                 next_outcome: ScriptedOutcome::Succeed,
                 jobs: HashMap::new(),
                 model: FakeModelDownload::present(),
-                llm_model: FakeModelDownload::present(),
+                llm_models: FAKE_LLM_CATALOG
+                    .iter()
+                    .map(|(id, _, _, _)| (id.to_string(), FakeModelDownload::present()))
+                    .collect(),
+                llm_active: FAKE_LLM_CATALOG[0].0.to_string(),
                 llm_submissions: Vec::new(),
                 submissions: Vec::new(),
             }),
@@ -241,14 +314,16 @@ impl FakeService {
         fake
     }
 
-    /// A healthy fake whose simulated *LLM* model is not yet present -- the
-    /// first-use "download the GGUF" case.
+    /// A healthy fake whose simulated *LLM* models are not yet present --
+    /// the first-use "download the GGUF" case (every catalog slot absent).
     pub fn with_llm_model_absent() -> Self {
         let fake = Self::new();
-        fake.inner
-            .lock()
-            .expect("fake service mutex poisoned")
-            .llm_model = FakeModelDownload::absent();
+        {
+            let mut inner = fake.inner.lock().expect("fake service mutex poisoned");
+            for (_, slot) in &mut inner.llm_models {
+                *slot = FakeModelDownload::absent();
+            }
+        }
         fake
     }
 
@@ -344,7 +419,14 @@ impl TranscriptionService for FakeService {
             // (`FakeModelDownload::advance_and_peek`, T13's own convention
             // for `present`/`model_present`).
             cuda_runtime_present: Some(inner.model.cuda_runtime_present),
-            llm_model_present: Some(inner.llm_model.present),
+            llm_model_present: Some(
+                inner
+                    .llm_models
+                    .iter()
+                    .find(|(id, _)| *id == inner.llm_active)
+                    .map(|(_, slot)| slot.present)
+                    .unwrap_or(false),
+            ),
             // The fake behaves like a machine whose GPU build is already
             // fetched -- dev sessions exercise the happy path by default.
             llm_gpu_build_present: Some(true),
@@ -467,19 +549,84 @@ impl TranscriptionService for FakeService {
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
-        Ok(inner.llm_model.advance_and_peek())
+        Ok(inner.active_llm_slot().advance_and_peek())
     }
 
     async fn start_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
-        inner.llm_model.start();
-        Ok(inner.llm_model.peek())
+        let slot = inner.active_llm_slot();
+        slot.start();
+        Ok(slot.peek())
     }
 
     async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
-        inner.llm_model.cancel();
-        Ok(inner.llm_model.peek())
+        let slot = inner.active_llm_slot();
+        slot.cancel();
+        Ok(slot.peek())
+    }
+
+    async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.llm_models_status(true))
+    }
+
+    async fn start_llm_model_download_for(
+        &self,
+        model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        // One transfer at a time across the whole catalog, like F2.
+        let busy = inner.llm_models.iter().find(|(id, slot)| {
+            id != model_id
+                && matches!(
+                    slot.state,
+                    ModelDownloadState::Downloading | ModelDownloadState::Verifying
+                )
+        });
+        if let Some((busy_id, _)) = busy {
+            return Err(ServiceError::Http {
+                status: 400,
+                message: format!("another model ({busy_id:?}) is downloading"),
+            });
+        }
+        let slot = inner.llm_slot(model_id)?;
+        slot.start();
+        Ok(slot.peek())
+    }
+
+    async fn cancel_llm_model_download_for(
+        &self,
+        model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        let slot = inner.llm_slot(model_id)?;
+        slot.cancel();
+        Ok(slot.peek())
+    }
+
+    async fn delete_llm_model(&self, model_id: &str) -> Result<LlmModelsStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if model_id == inner.llm_active {
+            return Err(ServiceError::Http {
+                status: 400,
+                message: "cannot delete the active model; select another model first".to_string(),
+            });
+        }
+        let slot = inner.llm_slot(model_id)?;
+        if matches!(
+            slot.state,
+            ModelDownloadState::Downloading | ModelDownloadState::Verifying
+        ) {
+            return Err(ServiceError::Http {
+                status: 400,
+                message: "cannot delete a model while it is downloading".to_string(),
+            });
+        }
+        slot.present = false;
+        slot.state = ModelDownloadState::Idle;
+        slot.downloaded_bytes = 0;
+        Ok(inner.llm_models_status(false))
     }
 }
 

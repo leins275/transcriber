@@ -13,7 +13,10 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::jobs::{self, JobSnapshot};
-use crate::service::{LlmJobKind, LlmSubmitRequest, ModelDownloadStatus, ServiceError};
+use crate::service::{
+    LlmJobKind, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus,
+    ServiceError,
+};
 use vault::{ArtifactKind, EXPORTS_DIR_NAME};
 
 use super::meetings::{meeting_name_of, resolve_entry};
@@ -201,6 +204,174 @@ pub async fn cancel_llm_model_download_handler(
     Ok(build_llm_view(status, llm_health_fields(state).await))
 }
 
+// -- curated model catalog ---------------------------------------------------
+
+/// One curated model's download slot, as the UI renders it -- the plain
+/// download fields without the health-derived extras (those live on
+/// [`LlmModelsView`], once per listing, not once per row).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LlmModelDownloadView {
+    pub state: ModelDownloadStateView,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: f64,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+}
+
+/// One row of the curated model list.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LlmCatalogModelView {
+    pub id: String,
+    pub label: String,
+    pub file: String,
+    pub size_bytes: Option<u64>,
+    pub catalog: bool,
+    pub present: bool,
+    pub active: bool,
+    pub download: LlmModelDownloadView,
+}
+
+/// `list_llm_models` response: the catalog plus the one machine-level field
+/// the rows share (`gpu_build_present`, from `/health`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LlmModelsView {
+    pub active: String,
+    pub gpu_build_present: Option<bool>,
+    pub models: Vec<LlmCatalogModelView>,
+}
+
+fn build_models_view(status: LlmModelsStatus, gpu_build_present: Option<bool>) -> LlmModelsView {
+    LlmModelsView {
+        active: status.active,
+        gpu_build_present,
+        models: status
+            .models
+            .into_iter()
+            .map(|row| LlmCatalogModelView {
+                id: row.id,
+                label: row.label,
+                file: row.file,
+                size_bytes: row.size_bytes,
+                catalog: row.catalog,
+                present: row.present,
+                active: row.active,
+                download: LlmModelDownloadView {
+                    state: row.download.state.into(),
+                    downloaded_bytes: row.download.downloaded_bytes,
+                    total_bytes: row.download.total_bytes,
+                    percent: row.download.percent,
+                    error_kind: row.download.error_kind,
+                    error_message: row.download.error_message,
+                },
+            })
+            .collect(),
+    }
+}
+
+async fn fetch_models_view(state: &AppState) -> Result<LlmModelsView, AppError> {
+    let service = state.service.read().await.clone();
+    let status = service.llm_models().await.map_err(map_service_error)?;
+    let (_, gpu_build_present) = llm_health_fields(state).await;
+    Ok(build_models_view(status, gpu_build_present))
+}
+
+/// `list_llm_models` handler body.
+pub async fn list_llm_models_handler(state: &AppState) -> Result<LlmModelsView, AppError> {
+    fetch_models_view(state).await
+}
+
+/// `start_llm_model_download_for` handler body -- starts one catalog
+/// model's transfer, then returns the refreshed listing.
+pub async fn start_llm_model_download_for_handler(
+    state: &AppState,
+    model_id: &str,
+) -> Result<LlmModelsView, AppError> {
+    let service = state.service.read().await.clone();
+    service
+        .start_llm_model_download_for(model_id)
+        .await
+        .map_err(map_service_error)?;
+    fetch_models_view(state).await
+}
+
+/// `cancel_llm_model_download_for` handler body.
+pub async fn cancel_llm_model_download_for_handler(
+    state: &AppState,
+    model_id: &str,
+) -> Result<LlmModelsView, AppError> {
+    let service = state.service.read().await.clone();
+    service
+        .cancel_llm_model_download_for(model_id)
+        .await
+        .map_err(map_service_error)?;
+    fetch_models_view(state).await
+}
+
+/// `delete_llm_model` handler body. The service enforces its own guards
+/// (active model, transfer in flight, LLM job running); the local
+/// LLM-job check just answers faster and covers jobs the service has not
+/// been handed yet (still pending in this app's registry).
+pub async fn delete_llm_model_handler(
+    state: &AppState,
+    model_id: &str,
+) -> Result<LlmModelsView, AppError> {
+    if state.registry.read().await.has_active_llm_job().await {
+        return Err(AppError::invalid_argument(
+            "cannot delete a model while assistant jobs are running",
+        ));
+    }
+    let service = state.service.read().await.clone();
+    let status = service
+        .delete_llm_model(model_id)
+        .await
+        .map_err(map_service_error)?;
+    let (_, gpu_build_present) = llm_health_fields(state).await;
+    Ok(build_models_view(status, gpu_build_present))
+}
+
+/// `select_llm_model` handler body -- persists the flat `llm_model` key
+/// into config.json (the service reads it at startup; see
+/// `docs/config-contract.md`). The caller (the `#[tauri::command]` wrapper)
+/// restarts the sidecar in the background afterwards, exactly like
+/// `set_meetings_root` -- which is why this refuses while anything is
+/// running: the restart would kill it.
+pub async fn select_llm_model_handler(state: &AppState, model_id: &str) -> Result<(), AppError> {
+    if state.registry.read().await.has_active_job().await {
+        return Err(AppError::invalid_argument(
+            "cannot switch models while jobs are running; wait for them to finish",
+        ));
+    }
+
+    let service = state.service.read().await.clone();
+    let models = service.llm_models().await.map_err(map_service_error)?;
+    let known = models.models.iter().any(|row| row.id == model_id);
+    if !known {
+        return Err(AppError::invalid_argument(format!(
+            "unknown llm model {model_id:?}"
+        )));
+    }
+    let transferring = models.models.iter().any(|row| {
+        matches!(
+            row.download.state,
+            ModelDownloadState::Downloading | ModelDownloadState::Verifying
+        )
+    });
+    if transferring {
+        return Err(AppError::invalid_argument(
+            "cannot switch models while a download is running; wait for it or cancel it first",
+        ));
+    }
+
+    let mut settings = state.settings.write().await;
+    settings.extra.insert(
+        "llm_model".to_string(),
+        serde_json::Value::String(model_id.to_string()),
+    );
+    crate::config::save(&state.config_dir, &settings)?;
+    Ok(())
+}
+
 // -- `#[tauri::command]` wrappers -------------------------------------------
 
 #[tauri::command]
@@ -247,6 +418,59 @@ pub async fn cancel_llm_model_download(
     state: tauri::State<'_, AppState>,
 ) -> Result<LlmModelDownloadStatusView, AppError> {
     cancel_llm_model_download_handler(&state).await
+}
+
+#[tauri::command]
+pub async fn list_llm_models(state: tauri::State<'_, AppState>) -> Result<LlmModelsView, AppError> {
+    list_llm_models_handler(&state).await
+}
+
+#[tauri::command]
+pub async fn start_llm_model_download_for(
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<LlmModelsView, AppError> {
+    start_llm_model_download_for_handler(&state, &model_id).await
+}
+
+#[tauri::command]
+pub async fn cancel_llm_model_download_for(
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<LlmModelsView, AppError> {
+    cancel_llm_model_download_for_handler(&state, &model_id).await
+}
+
+#[tauri::command]
+pub async fn delete_llm_model(
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<LlmModelsView, AppError> {
+    delete_llm_model_handler(&state, &model_id).await
+}
+
+#[tauri::command]
+pub async fn select_llm_model(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<(), AppError> {
+    select_llm_model_handler(&state, &model_id).await?;
+    // The service reads `llm_model` from config.json at startup, so the
+    // selection takes effect via a sidecar restart -- driven in the
+    // background exactly like `set_meetings_root`'s E17 pattern, with the
+    // outcome reported through the existing `service://status` event.
+    tauri::async_runtime::spawn(async move {
+        let state = tauri::Manager::state::<AppState>(&app);
+        let settings = state.settings.read().await.clone();
+        let root = settings
+            .meetings_root
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| state.config_dir.clone());
+        crate::commands::resolve_and_apply_meetings_root_service(&state, &settings, root).await;
+    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -531,6 +755,167 @@ mod tests {
             assert_eq!(snapshot.job_type, "export");
             let meeting_dir = snapshot.meeting_dir.expect("output dir recorded");
             assert!(meeting_dir.contains("exports"));
+        });
+    }
+
+    #[test]
+    fn list_llm_models_reports_the_catalog_with_the_default_active() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::with_llm_model_absent()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let view = list_llm_models_handler(&state).await.expect("list");
+            assert_eq!(view.active, "qwen3.5-9b");
+            assert_eq!(view.gpu_build_present, Some(true));
+            assert_eq!(view.models.len(), 2);
+            let active_row = view.models.iter().find(|m| m.active).expect("active row");
+            assert_eq!(active_row.id, "qwen3.5-9b");
+            assert!(view.models.iter().all(|m| !m.present && m.catalog));
+            assert!(view.models.iter().all(|m| m.size_bytes.is_some()));
+        });
+    }
+
+    #[test]
+    fn catalog_download_completes_only_the_requested_model() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::with_llm_model_absent()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            start_llm_model_download_for_handler(&state, "qwen3.6-35b-a3b")
+                .await
+                .expect("start must succeed");
+
+            // Poll the listing (each poll advances the fake one chunk).
+            let mut done = false;
+            for _ in 0..10 {
+                let view = list_llm_models_handler(&state).await.expect("list");
+                let row = view
+                    .models
+                    .iter()
+                    .find(|m| m.id == "qwen3.6-35b-a3b")
+                    .expect("row");
+                if row.present {
+                    done = true;
+                    let other = view
+                        .models
+                        .iter()
+                        .find(|m| m.id == "qwen3.5-9b")
+                        .expect("row");
+                    assert!(!other.present, "only the requested model may download");
+                    break;
+                }
+            }
+            assert!(done, "the requested model's transfer must complete");
+        });
+    }
+
+    #[test]
+    fn delete_llm_model_removes_a_non_active_model_and_refuses_the_active_one() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            // Default fake: both models present, "qwen3.5-9b" active.
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let view = delete_llm_model_handler(&state, "qwen3.6-35b-a3b")
+                .await
+                .expect("deleting a non-active model must succeed");
+            let row = view
+                .models
+                .iter()
+                .find(|m| m.id == "qwen3.6-35b-a3b")
+                .expect("row");
+            assert!(!row.present);
+
+            let err = delete_llm_model_handler(&state, "qwen3.5-9b")
+                .await
+                .expect_err("deleting the active model must be refused");
+            assert_eq!(err.kind(), ErrorKind::Service);
+        });
+    }
+
+    #[test]
+    fn select_llm_model_writes_the_flat_key_and_preserves_unknown_keys() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+            // An unknown flat key some other writer owns must survive the
+            // round-trip (docs/config-contract.md).
+            state.settings.write().await.extra.insert(
+                "llm_ctx".to_string(),
+                serde_json::Value::Number(16384.into()),
+            );
+
+            select_llm_model_handler(&state, "qwen3.6-35b-a3b")
+                .await
+                .expect("select must succeed");
+
+            let raw = std::fs::read_to_string(root.path().join("config.json"))
+                .expect("config.json written");
+            let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+            assert_eq!(
+                parsed.get("llm_model").and_then(|v| v.as_str()),
+                Some("qwen3.6-35b-a3b")
+            );
+            assert_eq!(parsed.get("llm_ctx").and_then(|v| v.as_u64()), Some(16384));
+        });
+    }
+
+    #[test]
+    fn select_llm_model_is_refused_while_a_job_is_active() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path(), "ELS", "260101 - Planning", true);
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+            summarize_vault_entry_handler(&state, &id)
+                .await
+                .expect("summarize enqueues");
+
+            let err = select_llm_model_handler(&state, "qwen3.6-35b-a3b")
+                .await
+                .expect_err("switching during an active job must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(
+                !root.path().join("config.json").exists(),
+                "a refused select must write nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn select_llm_model_of_an_unknown_id_is_refused() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let err = select_llm_model_handler(&state, "no-such-model")
+                .await
+                .expect_err("an unknown id must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
         });
     }
 

@@ -15,6 +15,7 @@ from transcription.artifacts import (
     FACTS_DIR_NAME,
     MAX_PATH_LEN,
     UNSORTED_DIR_NAME,
+    export_pdf_filename,
     fit_slug,
     list_items,
     parse_front_matter,
@@ -419,6 +420,38 @@ def test_fit_slug_fits_a_realistically_deep_meeting_level_parent() -> None:
 def test_unsorted_dir_name_mirrors_the_vault_crate() -> None:
     # crates/vault/src/paths.rs: `pub const UNSORTED_DIR_NAME: &str = "unsorted";`
     assert UNSORTED_DIR_NAME == "unsorted"
+
+
+def test_export_pdf_filename_is_project_date_title() -> None:
+    meeting = Path("vault") / "Project core" / "260824 - Weekly sync"
+    assert export_pdf_filename(meeting) == "Project core - 2026-08-24 - Weekly sync.pdf"
+
+
+def test_export_pdf_filename_drops_absent_parts() -> None:
+    # Unsorted meetings have no project part.
+    unfiled = Path("vault") / "unsorted" / "260824 - Weekly sync"
+    assert export_pdf_filename(unfiled) == "2026-08-24 - Weekly sync.pdf"
+    # No YYMMDD prefix: no date part, the whole folder name is the title.
+    undated = Path("vault") / "ELS" / "Planning"
+    assert export_pdf_filename(undated) == "ELS - Planning.pdf"
+
+
+def test_export_pdf_filename_keeps_case_spaces_and_cyrillic() -> None:
+    meeting = Path("vault") / "ЛМК" / "260824 - Обзор спринта"
+    assert export_pdf_filename(meeting) == "ЛМК - 2026-08-24 - Обзор спринта.pdf"
+
+
+def test_export_pdf_filename_replaces_windows_illegal_characters() -> None:
+    meeting = Path("vault") / "ELS" / '260824 - a:b<c>d|e?f*g"h'
+    name = export_pdf_filename(meeting)
+    assert name.endswith(".pdf")
+    assert not set('<>:"/\\|?*') & set(name)
+
+
+def test_export_pdf_filename_falls_back_to_export_pdf() -> None:
+    # Nothing usable survives cleaning: keep the historical fixed name.
+    meeting = Path("vault") / "unsorted" / "..."
+    assert export_pdf_filename(meeting) == "export.pdf"
 
 
 def test_source_date_reads_the_meetings_leading_yymmdd_as_20xx() -> None:

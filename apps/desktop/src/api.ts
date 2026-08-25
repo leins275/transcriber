@@ -21,6 +21,7 @@ import type {
   JobSnapshot,
   LedgerJobView,
   LlmModelDownloadStatus,
+  LlmModelsView,
   MeetingUpdate,
   ServiceStatusView,
   SettingsView,
@@ -135,6 +136,14 @@ export const api = {
     call<LlmModelDownloadStatus>("start_llm_model_download"),
   cancelLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>
     call<LlmModelDownloadStatus>("cancel_llm_model_download"),
+  listLlmModels: (): Promise<LlmModelsView> => call<LlmModelsView>("list_llm_models"),
+  startLlmModelDownloadFor: (modelId: string): Promise<LlmModelsView> =>
+    call<LlmModelsView>("start_llm_model_download_for", { modelId }),
+  cancelLlmModelDownloadFor: (modelId: string): Promise<LlmModelsView> =>
+    call<LlmModelsView>("cancel_llm_model_download_for", { modelId }),
+  deleteLlmModel: (modelId: string): Promise<LlmModelsView> =>
+    call<LlmModelsView>("delete_llm_model", { modelId }),
+  selectLlmModel: (modelId: string): Promise<void> => call<void>("select_llm_model", { modelId }),
 };
 
 /** Upsert-by-id feed of job transitions (FR-8, FR-14). */

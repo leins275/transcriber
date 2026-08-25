@@ -77,16 +77,16 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
-| `llm_model` | `TRANSCRIBER_LLM_MODEL` | `qwen3.6-35b-a3b` |
+| `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`); an install whose disk still holds the legacy `qwen3.6-35b-a3b` GGUF and whose config has no `llm_model` key stays on it |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
-| `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | `ggml-org/Qwen3.6-35B-A3B-GGUF` (pinned revision) / `Qwen3.6-35B-A3B-Q4_K_M.gguf` |
-| `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `16384` |
+| `llm_model_repo` / `llm_model_revision` / `llm_model_file` | `TRANSCRIBER_LLM_MODEL_REPO` / `..._REVISION` / `..._FILE` | from the catalog entry for `llm_model` (`llm_catalog.py`); setting them explicitly is the escape hatch for a hand-picked GGUF and wins over the catalog |
+| `llm_ctx` | `TRANSCRIBER_LLM_CTX` | `32768` |
 | `llm_gpu_layers` | `TRANSCRIBER_LLM_GPU_LAYERS` | `-1` = auto-fit: as many whole layers as free VRAM holds (NVML + GGUF header), rest on CPU; `0` disables; positive pins |
 | `llm_threads` | `TRANSCRIBER_LLM_THREADS` | none (llama.cpp picks) |
 | `llm_temperature` | `TRANSCRIBER_LLM_TEMPERATURE` | `0.3` |
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
 | `llm_think_headroom_tokens` | `TRANSCRIBER_LLM_THINK_HEADROOM_TOKENS` | `2048` (extra output budget for the reasoning `<think>` block on free-text calls) |
-| `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the ~20 GB working set after each LLM job) |
+| `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the multi-GB working set after each LLM job) |
 
 `Config.public()` (what `/health` and log lines may show) never includes
 `token` or `hf_token`.
@@ -102,11 +102,21 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` |
 | `action_items` | same | `<project>/action items/<slug>/<slug>.md` + `screenshot-*.png` |
 | `facts` | same | `<project>/facts/<slug>/...` (same shape) |
-| `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `export.pdf` |
+| `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`) |
 
-All of them run on the built-in llama.cpp runtime -- the only LLM engine
-this service ships, with no config selector to point it elsewhere -- against
-a GGUF fetched via `POST /v1/llm-model/download` or `download-llm-model`.
+All of them run on the built-in llama.cpp runtime -- the only LLM *engine*
+this service ships -- against a GGUF from the curated model catalog
+(`llm_catalog.py`): `qwen3.5-9b` (Q5_K_M, ~6.6 GB, the default) or
+`qwen3.6-35b-a3b` (Q4_K_M, ~20 GB). `GET /v1/llm-models` lists the catalog
+with per-model presence and download status;
+`POST`/`DELETE /v1/llm-models/{id}/download` start/cancel one model's
+transfer (one transfer at a time across the catalog) and
+`DELETE /v1/llm-models/{id}` removes a downloaded file (refused for the
+active model, during its transfer, or while an LLM job runs). The legacy
+`POST /v1/llm-model/download` trio and the CLI's `download-llm-model`
+keep working against the *active* model's slot. Which model is active is
+the `llm_model` config key -- the desktop app writes it on selection and
+restarts the service.
 Long transcripts are map-reduced against `llm_ctx`, with the reduce running
 in budget-fitted rounds so any transcript length fits the context window;
 a completion that hits the output-token cap is retried on smaller input

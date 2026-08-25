@@ -30,8 +30,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    JobStatus, LedgerJob, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, ServiceError,
-    ServiceHealth, SubmitRequest, TranscriptionService,
+    JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
+    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -227,6 +227,52 @@ impl ModelDownloadResponse {
             error_kind: self.error_kind,
             error_message: self.error_message,
             cuda_warning: self.cuda_warning,
+        })
+    }
+}
+
+/// `GET /v1/llm-models` response body: the curated catalog listing.
+#[derive(Deserialize)]
+struct LlmModelsResponse {
+    active: String,
+    models: Vec<LlmCatalogModelResponse>,
+}
+
+/// One row of `GET /v1/llm-models`.
+#[derive(Deserialize)]
+struct LlmCatalogModelResponse {
+    id: String,
+    label: String,
+    file: String,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+    catalog: bool,
+    present: bool,
+    active: bool,
+    download: ModelDownloadResponse,
+}
+
+impl LlmModelsResponse {
+    fn into_status(self) -> Result<LlmModelsStatus, ServiceError> {
+        let models = self
+            .models
+            .into_iter()
+            .map(|row| {
+                Ok(LlmCatalogModel {
+                    id: row.id,
+                    label: row.label,
+                    file: row.file,
+                    size_bytes: row.size_bytes,
+                    catalog: row.catalog,
+                    present: row.present,
+                    active: row.active,
+                    download: row.download.into_status()?,
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        Ok(LlmModelsStatus {
+            active: self.active,
+            models,
         })
     }
 }
@@ -580,6 +626,67 @@ impl TranscriptionService for HttpTranscriptionService {
             return Err(service_error_from_response(response).await);
         }
         let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {
+        let request = self.authorize(self.client.get(self.endpoint("/v1/llm-models")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: LlmModelsResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn start_llm_model_download_for(
+        &self,
+        model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let path = format!("/v1/llm-models/{model_id}/download");
+        let request = self.authorize(self.client.post(self.endpoint(&path)));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn cancel_llm_model_download_for(
+        &self,
+        model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let path = format!("/v1/llm-models/{model_id}/download");
+        let request = self.authorize(self.client.delete(self.endpoint(&path)));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn delete_llm_model(&self, model_id: &str) -> Result<LlmModelsStatus, ServiceError> {
+        let path = format!("/v1/llm-models/{model_id}");
+        let request = self.authorize(self.client.delete(self.endpoint(&path)));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: LlmModelsResponse =
             response.json().await.map_err(|err| ServiceError::Decode {
                 message: err.to_string(),
             })?;
