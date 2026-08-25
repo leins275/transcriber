@@ -25,6 +25,7 @@ import {
   onServiceStatus,
   safeUnlisten,
 } from "./api";
+import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { entriesForProject, projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
@@ -463,6 +464,18 @@ function App() {
       ).length
     : 0;
 
+  // The header narrates the in-flight job only while the operator is away
+  // from the main view (mockup 7a) -- on the library the queue itself is
+  // already on screen, and a finished job must never yank anyone off the
+  // page they are reading; the chip is the deliberate way back.
+  const onMainView = !settingsOpen && !openEntry && !openProject;
+  const headerJob = onMainView ? null : activeJobView(jobs);
+  const showRecordings = useCallback(() => {
+    setOpenEntryId(null);
+    setOpenProject(null);
+    setSettingsOpen(false);
+  }, []);
+
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
       commands={modelDownloadCommands}
@@ -482,6 +495,8 @@ function App() {
         modelStatus={modelStatus}
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen((open) => !open)}
+        activeJob={headerJob}
+        onShowRecordings={showRecordings}
       />
       <main className="main-pane">
         {/* Above the config error and everything else: it is the one notice
