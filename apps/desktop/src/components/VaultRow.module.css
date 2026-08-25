@@ -61,6 +61,22 @@
   color: var(--text-muted);
 }
 
+/* The flat list's only statement of which project a row is filed under. */
+.project {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--accent-deep);
+}
+
+.project::before {
+  content: "·";
+  margin-right: 8px;
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--text-muted);
+}
+
 .path {
   font-size: 11px;
   color: var(--text-faint);

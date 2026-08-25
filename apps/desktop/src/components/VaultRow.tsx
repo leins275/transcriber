@@ -7,6 +7,10 @@ export type VaultRowProps = {
   /** Opens the recording's own page. Called with the entry's server-issued
    * id (FR: never a raw path from the UI). */
   onOpen: (entryId: string) => void;
+  /** Whether the row names its project in the meta line. On in the flat
+   * library list, where the tag is the only thing saying which project a
+   * row belongs to; off under a project group header, which already says. */
+  showProject?: boolean;
 };
 
 /** A filled check for a meeting that already has a transcript, a hollow
@@ -58,7 +62,7 @@ function statusLine(entry: VaultMeetingView): string {
  *
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function VaultRow({ entry, onOpen }: VaultRowProps) {
+export function VaultRow({ entry, onOpen, showProject = true }: VaultRowProps) {
   const parsed = parseMeetingName(entry.meeting_name);
 
   return (
@@ -68,7 +72,12 @@ export function VaultRow({ entry, onOpen }: VaultRowProps) {
       </span>
       <button type="button" className={styles.content} onClick={() => onOpen(entry.id)}>
         <span className={styles.name}>{parsed ? parsed.title : entry.meeting_name}</span>
-        <span className={styles.meta}>{statusLine(entry)}</span>
+        <span className={styles.meta}>
+          <span>{statusLine(entry)}</span>
+          {showProject && entry.project && (
+            <span className={`${styles.project} mono`}>{entry.project}</span>
+          )}
+        </span>
       </button>
     </div>
   );

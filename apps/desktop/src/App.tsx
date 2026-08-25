@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "./components/AppHeader";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
-import { ProjectPage } from "./components/ProjectPage";
 import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
@@ -27,7 +26,7 @@ import {
 } from "./api";
 import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
-import { entriesForProject, projectCodes } from "./lib/vaultGroups";
+import { projectCodes } from "./lib/vaultGroups";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
@@ -88,10 +87,6 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
-  // Which project page is open (that project's recordings) -- the same
-  // no-router pattern; opening a project closes any open recording and vice
-  // versa.
-  const [openProject, setOpenProject] = useState<string | null>(null);
   // The Settings page (redesign turn 6): the old sidebar's vault/model/
   // service content, behind the header's gear. Rendered over whatever else
   // is open; closing it returns there untouched.
@@ -201,36 +196,6 @@ function App() {
     api
       .cancelLlmModelDownloadFor(modelId)
       .then(setLlmModels)
-      .catch((error: AppError) => setLastError(error));
-  }, []);
-
-  const handleDeleteLlmModel = useCallback((modelId: string) => {
-    api
-      .deleteLlmModel(modelId)
-      .then(setLlmModels)
-      .catch((error: AppError) => setLastError(error));
-  }, []);
-
-  const handleSelectLlmModel = useCallback((modelId: string) => {
-    api
-      .selectLlmModel(modelId)
-      .then(() => {
-        // The sidecar restarts in the background; the service-status effect
-        // above refetches the catalog when it is back. Optimistically flip
-        // the active flag so the click lands immediately.
-        setLlmModels((current) =>
-          current
-            ? {
-                ...current,
-                active: modelId,
-                models: current.models.map((model) => ({
-                  ...model,
-                  active: model.id === modelId,
-                })),
-              }
-            : current,
-        );
-      })
       .catch((error: AppError) => setLastError(error));
   }, []);
 
@@ -468,11 +433,10 @@ function App() {
   // from the main view (mockup 7a) -- on the library the queue itself is
   // already on screen, and a finished job must never yank anyone off the
   // page they are reading; the chip is the deliberate way back.
-  const onMainView = !settingsOpen && !openEntry && !openProject;
+  const onMainView = !settingsOpen && !openEntry;
   const headerJob = onMainView ? null : activeJobView(jobs);
   const showRecordings = useCallback(() => {
     setOpenEntryId(null);
-    setOpenProject(null);
     setSettingsOpen(false);
   }, []);
 
@@ -532,8 +496,6 @@ function App() {
               onChangeRoot={handleChooseFolder}
               onStartLlmModelDownload={handleStartLlmModelDownload}
               onCancelLlmModelDownload={handleCancelLlmModelDownload}
-              onDeleteLlmModel={handleDeleteLlmModel}
-              onSelectLlmModel={handleSelectLlmModel}
             />
           ) : inSetup ? (
             <FirstRun
@@ -567,16 +529,6 @@ function App() {
                   summaryReloadToken={summaryReloadToken}
                   actionItemsReloadToken={actionItemsReloadToken}
                 />
-              ) : openProject ? (
-                <ProjectPage
-                  project={openProject}
-                  entries={entriesForProject(vaultEntries, openProject)}
-                  onBack={() => setOpenProject(null)}
-                  onOpen={(entryId) => {
-                    setOpenProject(null);
-                    setOpenEntryId(entryId);
-                  }}
-                />
               ) : (
                 <>
                   {vaultEntries.length === 0 && jobs.length === 0 ? (
@@ -597,14 +549,7 @@ function App() {
                   <VaultPanel
                     entries={vaultEntries}
                     jobs={jobs}
-                    onOpen={(entryId) => {
-                      setOpenProject(null);
-                      setOpenEntryId(entryId);
-                    }}
-                    onOpenProject={(project) => {
-                      setOpenEntryId(null);
-                      setOpenProject(project);
-                    }}
+                    onOpen={setOpenEntryId}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}
                     onLoadServiceLog={loadServiceLog}

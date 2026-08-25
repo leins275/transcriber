@@ -1,5 +1,5 @@
 /**
- * Pure grouping and ordering for the vault browser's two meeting tabs.
+ * Pure grouping and ordering for the vault browser's one recordings list.
  *
  * The split is the same one the vault itself makes on disk: a meeting either
  * sits under a project folder or under `unsorted/`. The Rust side already
@@ -12,11 +12,6 @@ import type { VaultMeetingView } from "../types";
 /** Every meeting filed under `unsorted/`, in the order given. */
 export function unsortedEntries(entries: VaultMeetingView[]): VaultMeetingView[] {
   return entries.filter((entry) => entry.project === null);
-}
-
-/** Every meeting filed under a real project, in the order given. */
-export function sortedEntries(entries: VaultMeetingView[]): VaultMeetingView[] {
-  return entries.filter((entry) => entry.project !== null);
 }
 
 /**
@@ -40,22 +35,6 @@ export function entriesForProject(
   project: string,
 ): VaultMeetingView[] {
   return entries.filter((entry) => entry.project === project);
-}
-
-/**
- * Keeps a selected project valid as the vault changes.
- *
- * Re-filing the last meeting out of a project makes that code vanish; rather
- * than leaving the tab pointed at a project that no longer exists (an empty
- * list with no explanation), fall back to the first available code, or to
- * `null` when the vault holds no projects at all.
- */
-export function resolveSelectedProject(
-  available: string[],
-  selected: string | null,
-): string | null {
-  if (selected !== null && available.includes(selected)) return selected;
-  return available[0] ?? null;
 }
 
 /**

@@ -40,7 +40,6 @@ function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {
     entries: [buildEntry()],
     jobs: [] as JobSnapshot[],
     onOpen: () => {},
-    onOpenProject: () => {},
     onRevealJob: () => {},
     onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),
@@ -92,21 +91,45 @@ describe("VaultPanel", () => {
     expect(onCancelJob).toHaveBeenCalledWith("job-7");
   });
 
-  it("groups recordings under their project", () => {
+  it("renders one flat list — no group headings, no project pages", () => {
     renderPanel({
       entries: [
         buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
         buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
+        buildEntry({ id: "c", project: null, meeting_name: "260810 - loose file" }),
       ],
     });
+
+    // Everything visible at once, unsorted included, with no structure to
+    // click through first.
+    expect(screen.getByText("Els meeting")).toBeInTheDocument();
+    expect(screen.getByText("Gis meeting")).toBeInTheDocument();
+    expect(screen.getByText("loose file")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open project/i })).not.toBeInTheDocument();
+  });
+
+  it("groups under project headings when the toggle is on", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
+        buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
+        buildEntry({ id: "c", project: null, meeting_name: "260810 - loose file" }),
+      ],
+    });
+
+    await user.click(screen.getByRole("checkbox", { name: /group by project/i }));
 
     expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
       "ELS",
       "GIS",
+      "Unsorted",
     ]);
-    // Both visible at once: grouped, not filtered down to one.
+    // Grouped, not filtered: everything is still on screen.
     expect(screen.getByText("Els meeting")).toBeInTheDocument();
     expect(screen.getByText("Gis meeting")).toBeInTheDocument();
+    expect(screen.getByText("loose file")).toBeInTheDocument();
   });
 
   it("narrows to one project through the picker", async () => {
@@ -124,12 +147,7 @@ describe("VaultPanel", () => {
     expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
   });
 
-  it("offers no picker for a single project — there is nothing to choose", () => {
-    renderPanel();
-    expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
-  });
-
-  it("keeps unsorted recordings on their own tab, with a count", async () => {
+  it("narrows to unsorted recordings through the same picker", async () => {
     const user = userEvent.setup();
     renderPanel({
       entries: [
@@ -138,14 +156,16 @@ describe("VaultPanel", () => {
       ],
     });
 
-    const unsortedTab = screen.getByRole("tab", { name: /unsorted/i });
-    expect(unsortedTab).toHaveTextContent("1");
-    expect(screen.queryByText("loose file")).not.toBeInTheDocument();
-
-    await user.click(unsortedTab);
+    await user.selectOptions(screen.getByRole("combobox", { name: /project/i }), "Unsorted");
 
     expect(screen.getByText("loose file")).toBeInTheDocument();
     expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
+  });
+
+  it("offers no filter row for a single project — there is nothing to choose", () => {
+    renderPanel();
+    expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /group by project/i })).not.toBeInTheDocument();
   });
 
   it("opens a recording by id when its row is clicked", async () => {

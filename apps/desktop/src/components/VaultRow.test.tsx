@@ -61,6 +61,19 @@ describe("VaultRow", () => {
     expect(onOpen).not.toHaveBeenCalledWith(expect.stringContaining("D:\\Meetings"));
   });
 
+  it("names the row's project as a tag", () => {
+    renderRow({ entry: buildEntry({ project: "GIS" }) });
+    expect(screen.getByText("GIS")).toBeInTheDocument();
+  });
+
+  it("omits the project tag when told to (grouped view) and for unsorted rows", () => {
+    const { rerender } = renderRow({ entry: buildEntry({ project: "GIS" }), showProject: false });
+    expect(screen.queryByText("GIS")).not.toBeInTheDocument();
+
+    rerender(<VaultRow entry={buildEntry({ project: null })} onOpen={() => {}} />);
+    expect(screen.queryByText("GIS")).not.toBeInTheDocument();
+  });
+
   it("carries no per-row action buttons — opening the recording is the row", () => {
     // Transcript/Reveal used to sit on every row; they now live on the
     // recording's own page, so the row's single button is its content.

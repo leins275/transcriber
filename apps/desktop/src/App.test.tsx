@@ -425,7 +425,7 @@ describe("App vault browser", () => {
 
   it("offers no per-row Reveal or Transcript buttons in the library list", async () => {
     // Those actions live on the recording's own page now; the list keeps
-    // only the row itself (open) and the group's "Open project" link.
+    // only the row itself (open).
     mockIPC(
       (cmd) => {
         if (cmd === "get_settings") return buildSettings();
@@ -444,7 +444,7 @@ describe("App vault browser", () => {
 
     expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^transcript$/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /open project/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open project/i })).not.toBeInTheDocument();
     await settle();
   });
 });

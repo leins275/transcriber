@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  entriesForProject,
-  projectCodes,
-  resolveSelectedProject,
-  sortVaultEntries,
-  sortedEntries,
-  unsortedEntries,
-} from "./vaultGroups";
+import { entriesForProject, projectCodes, sortVaultEntries, unsortedEntries } from "./vaultGroups";
 import type { VaultMeetingView } from "../types";
 
 function entry(
@@ -24,12 +17,11 @@ function entry(
   };
 }
 
-describe("unsortedEntries / sortedEntries", () => {
-  it("splits on the project field, losing nothing", () => {
+describe("unsortedEntries", () => {
+  it("keeps only project-less meetings, in the order given", () => {
     const entries = [entry("a", "ELS"), entry("b", null), entry("c", "GIS")];
 
     expect(unsortedEntries(entries).map((e) => e.id)).toEqual(["b"]);
-    expect(sortedEntries(entries).map((e) => e.id)).toEqual(["a", "c"]);
   });
 });
 
@@ -57,21 +49,6 @@ describe("entriesForProject", () => {
       "260812 - One",
       "260810 - Three",
     ]);
-  });
-});
-
-describe("resolveSelectedProject", () => {
-  it("keeps a selection that still exists", () => {
-    expect(resolveSelectedProject(["ELS", "GIS"], "GIS")).toBe("GIS");
-  });
-
-  it("falls back to the first project when the selection has disappeared", () => {
-    expect(resolveSelectedProject(["ELS", "GIS"], "OLD")).toBe("ELS");
-  });
-
-  it("resolves to null when the vault holds no projects at all", () => {
-    expect(resolveSelectedProject([], "ELS")).toBeNull();
-    expect(resolveSelectedProject([], null)).toBeNull();
   });
 });
 

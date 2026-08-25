@@ -5,6 +5,9 @@ import type { VaultMeetingView } from "../types";
 export type VaultListProps = {
   entries: VaultMeetingView[];
   onOpen: (entryId: string) => void;
+  /** Forwarded to every row: whether it names its project in the meta line.
+   * Defaults on (the flat list); a grouped caller turns it off. */
+  showProject?: boolean;
 };
 
 /**
@@ -12,12 +15,12 @@ export type VaultListProps = {
  * (newest meeting date first — see `vault::list_meetings`), keyed by id.
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function VaultList({ entries, onOpen }: VaultListProps) {
+export function VaultList({ entries, onOpen, showProject = true }: VaultListProps) {
   return (
     <ul className={styles.list}>
       {entries.map((entry) => (
         <li key={entry.id}>
-          <VaultRow entry={entry} onOpen={onOpen} />
+          <VaultRow entry={entry} onOpen={onOpen} showProject={showProject} />
         </li>
       ))}
     </ul>

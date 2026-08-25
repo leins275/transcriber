@@ -6,10 +6,13 @@ import { VaultList } from "./VaultList";
 import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGroups";
 import type { JobSnapshot, LedgerJobView, VaultMeetingView } from "../types";
 
-/** The three views over what is in the vault. `projects` leads because a
- * filed recording is the normal case; `unsorted` is the queue of things
- * still needing a decision, which is why it carries a count. */
-type Tab = "projects" | "unsorted" | "log";
+/** The two views: the recordings themselves, and F2's durable job ledger. */
+type Tab = "recordings" | "log";
+
+/** The picker value meaning "only recordings filed under `unsorted/`".
+ * Lowercase, so it can never collide with a real project code — the vault
+ * capitalizes those. */
+const UNSORTED_FILTER = "unsorted";
 
 /** A job still moving through the pipeline. A terminal one has already
  * become (or updated) a real recording in the list below, so leaving it
@@ -36,8 +39,6 @@ export type VaultPanelProps = {
    * their own -- see the component docs. */
   jobs: JobSnapshot[];
   onOpen: (entryId: string) => void;
-  /** Opens the project page (that project's recordings, full-window). */
-  onOpenProject: (project: string) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
   onLoadServiceLog: () => Promise<LedgerJobView[]>;
@@ -53,9 +54,11 @@ export type VaultPanelProps = {
  * place at the top of the same list, and drops out of the pinned section as
  * soon as it is a recording like any other.
  *
- * Within **Projects**, recordings are grouped under their project rather
- * than mixed, so scanning does not mean filtering by eye. The picker filters
- * to one project when there are enough to want that.
+ * One list, grouping optional (redesign turn 8): recordings render flat,
+ * newest first, each row carrying its project as a small tag. One filter
+ * row narrows to a project (or to Unsorted) and can switch to grouped-by-
+ * project headers — a view preference over the same list, not a different
+ * page. There are no project pages.
  *
  * Presentational only: no invoke, no listen, no fetch — App.tsx owns
  * fetching and passes every action down.
@@ -64,13 +67,13 @@ export function VaultPanel({
   entries,
   jobs,
   onOpen,
-  onOpenProject,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
 }: VaultPanelProps) {
-  const [tab, setTab] = useState<Tab>("projects");
-  const [project, setProject] = useState<string>("");
+  const [tab, setTab] = useState<Tab>("recordings");
+  const [filter, setFilter] = useState<string>("");
+  const [grouped, setGrouped] = useState(false);
 
   const projects = useMemo(() => projectCodes(entries), [entries]);
   const unsorted = useMemo(() => unsortedEntries(entries), [entries]);
@@ -80,13 +83,35 @@ export function VaultPanel({
   );
   const inFlight = useMemo(() => jobs.filter(isInFlight).length, [jobs]);
 
-  // "" means every project: the default, matching the design's grouped
-  // list. A selection narrows it without changing the grouping, so the
-  // headers stay meaningful either way.
-  const shown = useMemo(
-    () => (project === "" ? projects : projects.filter((code) => code === project)),
-    [projects, project],
-  );
+  // A selection can outlive its target (the last meeting re-filed out of a
+  // project, or out of unsorted). Fall back to "everything" rather than
+  // rendering an empty list with no explanation.
+  const validFilter =
+    filter === UNSORTED_FILTER
+      ? unsorted.length > 0
+        ? filter
+        : ""
+      : projects.includes(filter)
+        ? filter
+        : "";
+
+  const shown = useMemo(() => {
+    if (validFilter === "") return entries;
+    if (validFilter === UNSORTED_FILTER) return unsorted;
+    return entriesForProject(entries, validFilter);
+  }, [entries, unsorted, validFilter]);
+
+  // The filter row earns its place only when there is something to choose
+  // or to group -- a vault of one project with nothing unsorted needs
+  // neither control (grouping it would draw a single header over the same
+  // list).
+  const showFilterRow = projects.length + (unsorted.length > 0 ? 1 : 0) > 1;
+
+  // Grouped view: which project groups render, and whether Unsorted tails.
+  const shownProjects =
+    validFilter === "" ? projects : validFilter === UNSORTED_FILTER ? [] : [validFilter];
+  const showUnsortedGroup =
+    (validFilter === "" || validFilter === UNSORTED_FILTER) && unsorted.length > 0;
 
   return (
     <section className={styles.panel} aria-label="Recordings" role="region">
@@ -96,26 +121,14 @@ export function VaultPanel({
           <button
             type="button"
             role="tab"
-            id="vault-tab-projects"
-            aria-selected={tab === "projects"}
-            aria-controls="vault-panel-projects"
+            id="vault-tab-recordings"
+            aria-selected={tab === "recordings"}
+            aria-controls="vault-panel-recordings"
             className={styles.tab}
-            onClick={() => setTab("projects")}
+            onClick={() => setTab("recordings")}
           >
-            Projects
-            <span className={styles.tabCount}>{projects.length}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            id="vault-tab-unsorted"
-            aria-selected={tab === "unsorted"}
-            aria-controls="vault-panel-unsorted"
-            className={styles.tab}
-            onClick={() => setTab("unsorted")}
-          >
-            Unsorted
-            <span className={styles.tabCount}>{unsorted.length}</span>
+            Recordings
+            <span className={styles.tabCount}>{entries.length}</span>
           </button>
           <button
             type="button"
@@ -144,31 +157,28 @@ export function VaultPanel({
         </div>
       )}
 
-      {tab === "projects" && (
+      {tab === "recordings" && (
         <div
           role="tabpanel"
-          id="vault-panel-projects"
-          aria-labelledby="vault-tab-projects"
+          id="vault-panel-recordings"
+          aria-labelledby="vault-tab-recordings"
           className={styles.body}
         >
-          {projects.length === 0 ? (
+          {entries.length === 0 ? (
             <p className={styles.empty}>
-              No projects yet. A recording named{" "}
-              <span className="mono">ELS - 260812 - Weekly sync.mp4</span> files itself under{" "}
-              <span className="mono">ELS</span>; anything in Unsorted can be filed by renaming it.
+              No recordings yet. A recording named{" "}
+              <span className="mono">ELS - 260812 - Weekly sync.mp4</span> files itself under
+              project <span className="mono">ELS</span>; anything else lands in Unsorted.
             </p>
           ) : (
             <>
-              {projects.length > 1 && (
-                <div className={styles.picker}>
-                  <span className={styles.pickerLabel} aria-hidden="true">
-                    Project
-                  </span>
+              {showFilterRow && (
+                <div className={styles.filterRow}>
                   <select
                     className={styles.pickerSelect}
                     aria-label="Project"
-                    value={project}
-                    onChange={(event) => setProject(event.target.value)}
+                    value={validFilter}
+                    onChange={(event) => setFilter(event.target.value)}
                   >
                     <option value="">All projects</option>
                     {projects.map((code) => (
@@ -176,57 +186,60 @@ export function VaultPanel({
                         {code}
                       </option>
                     ))}
+                    {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
                   </select>
+                  <label className={styles.groupToggle}>
+                    <input
+                      type="checkbox"
+                      className={styles.groupSwitch}
+                      checked={grouped}
+                      onChange={(event) => setGrouped(event.target.checked)}
+                    />
+                    Group by project
+                  </label>
                 </div>
               )}
-              {shown.map((code) => {
-                const group = entriesForProject(entries, code);
-                return (
-                  <div key={code} className={styles.group}>
-                    <div className={styles.groupHead}>
-                      <span className={styles.groupKicker}>Project</span>
-                      {/* A real heading, not a styled span: this is the
-                          structure of the list, and it is how the group is
-                          reached by anything navigating by headings. */}
-                      <h3 className={`${styles.groupName} mono`}>{code}</h3>
-                      <span className={styles.groupCount}>
-                        {group.length} recording{group.length === 1 ? "" : "s"}
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => onOpenProject(code)}
-                      >
-                        Open project →
-                      </button>
+              {validFilter === UNSORTED_FILTER && (
+                <p className={styles.hint}>
+                  These did not follow the <span className="mono">Project - YYMMDD - Title</span>{" "}
+                  naming convention. Open one and rename it to file it under a project.
+                </p>
+              )}
+              {!grouped ? (
+                <VaultList entries={shown} onOpen={onOpen} />
+              ) : (
+                <>
+                  {shownProjects.map((code) => {
+                    const group = entriesForProject(entries, code);
+                    return (
+                      <div key={code} className={styles.group}>
+                        <div className={styles.groupHead}>
+                          <span className={styles.groupKicker}>Project</span>
+                          {/* A real heading, not a styled span: this is the
+                              structure of the list, and it is how the group is
+                              reached by anything navigating by headings. */}
+                          <h3 className={`${styles.groupName} mono`}>{code}</h3>
+                          <span className={styles.groupCount}>
+                            {group.length} recording{group.length === 1 ? "" : "s"}
+                          </span>
+                        </div>
+                        <VaultList entries={group} onOpen={onOpen} showProject={false} />
+                      </div>
+                    );
+                  })}
+                  {showUnsortedGroup && (
+                    <div className={styles.group}>
+                      <div className={styles.groupHead}>
+                        <h3 className={`${styles.groupName} mono`}>Unsorted</h3>
+                        <span className={styles.groupCount}>
+                          {unsorted.length} recording{unsorted.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      <VaultList entries={unsorted} onOpen={onOpen} showProject={false} />
                     </div>
-                    <VaultList entries={group} onOpen={onOpen} />
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "unsorted" && (
-        <div
-          role="tabpanel"
-          id="vault-panel-unsorted"
-          aria-labelledby="vault-tab-unsorted"
-          className={styles.body}
-        >
-          {unsorted.length === 0 ? (
-            <p className={styles.empty}>
-              Nothing unsorted — every recording in the vault is filed under a project.
-            </p>
-          ) : (
-            <>
-              <p className={styles.hint}>
-                These did not follow the <span className="mono">Project - YYMMDD - Title</span>{" "}
-                naming convention. Open one and rename it to file it under a project.
-              </p>
-              <VaultList entries={unsorted} onOpen={onOpen} />
+                  )}
+                </>
+              )}
             </>
           )}
         </div>
