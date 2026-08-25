@@ -70,9 +70,13 @@ pub const UNSORTED_DIR_NAME: &str = "unsorted";
 /// project-level tree — see that constant.
 pub const ACTION_ITEMS_DIR_NAME: &str = "action items";
 
-/// Reserved directory *inside a meeting folder* for extracted facts and
-/// answered questions (`<meeting>/facts/<slug>/`). Same contract, anchor
-/// and listing rationale as [`ACTION_ITEMS_DIR_NAME`].
+/// Reserved directory *inside a meeting folder* that used to hold extracted
+/// facts and answered questions (`<meeting>/facts/<slug>/`). The facts
+/// extraction job was retired — the summary carries the notable facts now —
+/// so nothing writes or reads this tree any more, but the name stays
+/// reserved (same contract, anchor and listing rationale as
+/// [`ACTION_ITEMS_DIR_NAME`]) so existing folders keep living untouched
+/// beside the meeting's other materials for external tools.
 pub const FACTS_DIR_NAME: &str = "facts";
 
 /// Reserved project-level directory for dated project-essence reports

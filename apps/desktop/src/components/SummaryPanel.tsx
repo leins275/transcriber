@@ -6,6 +6,16 @@ import type { SummaryView } from "../types";
 export type SummaryPanelProps = {
   entryId: string;
   onLoad: (entryId: string) => Promise<SummaryView>;
+  /** Runs the summarize job — the empty state's Generate button (the
+   * factored layout keeps generate verbs in the content area, never the
+   * header). */
+  onGenerate: () => void;
+  /** True while a summarize job for this entry is queued or running; the
+   * Generate button renders busy instead of firing twice. */
+  busy?: boolean;
+  /** Reports what this panel currently shows (`null` when nothing), so the
+   * page's Copy button can act on the visible tab. */
+  onContentChange?: (markdown: string | null) => void;
   /** Bump to re-read `summary.md` — App increments it when a summarize job
    * for this entry finishes, so a freshly generated summary appears without
    * reopening the page. */
@@ -24,10 +34,17 @@ function messageOf(error: unknown): string {
  * feature), or by hand; `summary.md` has been a reserved vault name since
  * F1's first spec, so both read identically here.
  *
- * The empty state names the exact path a summary would live at and points
- * at the Summarize button, so an empty tab is actionable rather than dead.
+ * The empty state carries its own Generate button and names the exact path
+ * a summary would live at, so an empty tab is actionable rather than dead.
  */
-export function SummaryPanel({ entryId, onLoad, reloadToken = 0 }: SummaryPanelProps) {
+export function SummaryPanel({
+  entryId,
+  onLoad,
+  onGenerate,
+  busy = false,
+  onContentChange,
+  reloadToken = 0,
+}: SummaryPanelProps) {
   const [summary, setSummary] = useState<SummaryView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,10 +55,14 @@ export function SummaryPanel({ entryId, onLoad, reloadToken = 0 }: SummaryPanelP
     setError(null);
     onLoad(entryId)
       .then((loaded) => {
-        if (!cancelled) setSummary(loaded);
+        if (cancelled) return;
+        setSummary(loaded);
+        onContentChange?.(loaded.markdown ?? null);
       })
       .catch((caught: unknown) => {
-        if (!cancelled) setError(messageOf(caught));
+        if (cancelled) return;
+        setError(messageOf(caught));
+        onContentChange?.(null);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -49,7 +70,7 @@ export function SummaryPanel({ entryId, onLoad, reloadToken = 0 }: SummaryPanelP
     return () => {
       cancelled = true;
     };
-  }, [entryId, onLoad, reloadToken]);
+  }, [entryId, onLoad, onContentChange, reloadToken]);
 
   if (loading) {
     return (
@@ -74,9 +95,12 @@ export function SummaryPanel({ entryId, onLoad, reloadToken = 0 }: SummaryPanelP
   return (
     <div className={styles.empty}>
       <p className={styles.emptyLead}>No summary for this meeting yet.</p>
+      <button type="button" className="btn" disabled={busy} onClick={onGenerate}>
+        {busy ? "Summarizing…" : "Generate summary"}
+      </button>
       <p className={styles.emptyDetail}>
-        Use <strong>Summarize</strong> above to generate one with the local language model. Anything
-        written to <span className="mono">{summary?.path ?? "summary.md"}</span> shows up here.
+        Generated with the local language model. Anything written to{" "}
+        <span className="mono">{summary?.path ?? "summary.md"}</span> shows up here.
       </p>
     </div>
   );

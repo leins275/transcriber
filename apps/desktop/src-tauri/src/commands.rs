@@ -50,7 +50,7 @@ pub mod ledger;
 pub mod meetings;
 
 /// The LLM feature's commands (`src/commands/llm.rs`): derived jobs
-/// (summary, action items, facts, per-recording exports) and the GGUF
+/// (summary, action items, per-recording exports) and the GGUF
 /// model-download trio.
 pub mod llm;
 

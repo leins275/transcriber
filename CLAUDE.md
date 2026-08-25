@@ -1,0 +1,75 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+Transcriber: a local-first, single-user desktop app that turns dropped meeting recordings into transcripts (faster-whisper large-v3, CUDA-first) plus LLM-generated summaries and action items, filed into a per-project meetings vault. (A separate facts extraction existed once; it was retired — the summary carries the notable facts, and legacy `facts/` trees stay on disk unread.) **Everything runs locally — no cloud LLM, no cloud STT, no external integrations, ever.** KISS/YAGNI; Windows is the primary platform (macOS installer exists but is less tested).
+
+## Monorepo layout — three payloads
+
+| Path | Payload | Toolchain |
+|---|---|---|
+| `apps/desktop/` | Tauri 2 + React UI; `src-tauri/` is the Rust shell | npm + cargo |
+| `services/transcription/` | Python transcription/LLM service (FastAPI + CLI) | `uv` only — never system `python` |
+| `crates/vault/` | Rust library: vault naming/routing rules | cargo |
+
+Supporting: `installer/` (NSIS hooks), `scripts/` (bootstrap, build, version sync — has its own pytest suite in `scripts/tests/`), `docs/` (setup, config contract, releasing, smoke checklists), `specs/` (per-feature spec/plan/verification documents — the design history).
+
+Local-only, not part of the build: `vexa/` (gitignored reference repo), `local/` (zips), `crates/whisper-sys` (empty untracked leftover of the paused Rust-only migration — main still ships the Python service).
+
+## Commands
+
+QA fans out across all three payloads via the root `Makefile` (`make` exists only after `scripts/bootstrap.ps1` has run once; every target's direct equivalents are commented in the Makefile):
+
+```
+make format   # cargo fmt --all | prettier | ruff format
+make lint     # clippy -D warnings | eslint | ruff check | sync_version --check | verify_locks --check
+make type     # cargo check | tsc --noEmit | mypy src
+make test     # cargo test --workspace | vitest | pytest | pytest scripts/tests
+```
+
+PowerShell 5.1 has no `&&` — run chained commands one at a time.
+
+Single tests:
+
+- Python: `uv run --directory services/transcription pytest tests/test_llm_units.py -q` (add `-k name` to narrow). The default run is model-free, GPU-free and network-free (<30 s); the opt-in GPU integration test is `uv run pytest -m gpu` from `services/transcription/` and self-skips without a configured sample.
+- Rust: `cargo test -p vault <name>` / `cargo test -p transcriber-desktop <name>` (workspace members are `vault` and `transcriber-desktop`)
+- TS: `npm --prefix apps/desktop run test -- src/App.test.tsx`
+- Build scripts: `uv run --with pytest -- pytest scripts/tests -q`
+
+Dev inner loop (spawns the Python sidecar automatically; app opens even if the sidecar never gets ready):
+
+```
+cd apps/desktop && npm run tauri dev
+```
+
+Installer build: `make installer` → `dist/Transcriber_<version>_x64-setup.exe` (+ `.sha256`, `build-manifest.json`). It bakes a relocatable CPython into `apps/desktop/src-tauri/resources/pyenv/` and runs `tauri build -- --locked`. The bake is CPU-only by design — the CUDA runtime (~1.4 GB of `nvidia-*-cu12` wheels) is downloaded at first run into the install dir's `runtime\`, because 32-bit `makensis` cannot compile the CUDA-baked payload.
+
+## Architecture
+
+**App ↔ service split.** The Tauri Rust shell (`apps/desktop/src-tauri/src/`) spawns `services/transcription` as a localhost-HTTP sidecar (`sidecar.rs`) and talks to it from React via Tauri commands (`commands/`). A dropped recording runs the drop-to-insights chain automatically: transcribe → summarize → action items, chained app-side in `jobs.rs` (the service refuses a derived job until `transcript.json` exists, so stages submit as their predecessor lands `Done`). The chain is skipped when no LLM model is installed, advances only off a successful stage, and never fires for a manual re-transcribe (which would file duplicate item folders). The service does all ML work: transcription (faster-whisper), diarization (optional pyannote extra), LLM extraction (bundled llama.cpp), PDF/report export. `config.json`'s `service.base_url` set to a URL means "connect, don't spawn" — the dev/ops mode for running the service by hand. The Python package is deliberately self-contained: it imports nothing from the rest of the repo and QAs standalone.
+
+**Sidecar handshake (ready-line contract).** `serve` prints exactly **one** JSON line to stdout for the whole process lifetime — `{"event": "listening", "port": ..., "token": ..., "pid": ...}` — after the socket is bound; every other log line goes to stderr as JSON. The Rust sidecar spawner depends on this; never add stdout prints to the service. It binds `127.0.0.1` only, with a bearer token.
+
+**One serial worker.** All job types (transcribe, summarize, action_items, export) share a single serial queue — whisper and the LLM never infer concurrently, and with the default `llm_keep_loaded: false` the GGUF working set is released after each LLM job. Degradation over failure is the pattern throughout: diarization failures, missing screenshots, and PDF render errors record warnings and still write the primary artifact. Action-item screenshots are model-judged (captured only at `screenshot_timestamps` the model marks as visually relevant); the app's per-item "Capture screenshots" button hits the synchronous `POST /v1/items/screenshots` endpoint, which runs outside the job queue.
+
+**Service config layering** (lowest to highest): built-in defaults < `config.json` < `TRANSCRIBER_*` env vars < CLI flags. Full key table in `services/transcription/README.md`. Secrets (`token`, `hf_token`) never travel via argv and never appear in `/health` output.
+
+**Shared config file.** App and service share `%APPDATA%\com.transcriber.desktop\config.json` (schema in `docs/config-contract.md` — the code in `config.rs` is the contract's authority). Key mechanism: the Rust `Settings` structs `#[serde(flatten)]` unknown keys at every level, so the Python service reads service-only flat keys (`diarize`, `llm_model`, `llm_ctx`, `llm_gpu_layers`, …) from the same file without the app schema knowing them. The app writes one of them itself: model selection inserts `llm_model` (a curated-catalog id from `llm_catalog.py`) and restarts the sidecar.
+
+**LLM catalog.** `services/transcription/src/transcription/llm_catalog.py` pins exactly two GGUF models: Qwen3.5-9B (default — fits a 12 GB GPU fully) and Qwen3.6-35B-A3B (higher quality, mostly CPU-bound on 12 GB). Config load migrates legacy hardcoded-35B installs to catalog ids. `llama-cpp-python` ships as two mutually exclusive uv extras of the same pinned version — `llm-cpu` (what the installer bakes) and `llm-cuda`; because the wheels share name+version, switching by hand needs `uv sync --extra llm-cuda --reinstall-package llama-cpp-python` once. `llm_gpu_layers: -1` auto-fits whole layers to free VRAM via NVML.
+
+**Whisper weights are a prerequisite, not the service's job.** The local provider always loads with `local_files_only=True` and never downloads weights; a missing `large-v3` snapshot under `model_path` fails every job with `error_kind="model_load"`. Model/CUDA-runtime downloads happen through the app's first-run wizard and download endpoints, not inside the provider.
+
+**Vault rules live in Rust.** `crates/vault` owns naming/routing of recordings and artifacts into the meetings vault; the app consumes it. Don't reimplement path logic elsewhere.
+
+**Version.** `version.txt` is the single source of truth. Never hand-edit versions in the five manifests or `Cargo.lock` — use `uv run scripts/sync_version.py --set X.Y.Z`; `--check` (run by `make lint`) fails on drift.
+
+## Releasing — commit subjects are load-bearing
+
+Merging to `main` **is** the ship decision (no release PRs). `tag.yml` computes the next version from conventional-commit subjects since the last `v*` tag: `feat:` → minor, `fix:`/`perf:` → patch, `feat!:`/`BREAKING CHANGE:` → major, everything else → no release. CI then commits the bump + CHANGELOG to `main`, tags `vX.Y.Z`, and `release.yml` builds both installers (Windows NSIS + macOS dmg) and publishes one GitHub Release. A failed build leaves a tag with no release — re-run `release.yml` on the tag, it's idempotent. Details in `docs/releasing.md`.
+
+## Specs
+
+Each feature under `specs/<name>/` carries spec/plan/verification docs. When code and a spec disagree, code wins, but the docs in `docs/` are kept current — update them when behavior they describe changes.

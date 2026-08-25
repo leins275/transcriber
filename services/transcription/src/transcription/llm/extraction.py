@@ -12,6 +12,8 @@ import re
 
 from pydantic import BaseModel
 
+from transcription.llm.shapes import MAX_ITEM_SCREENSHOT_TIMESTAMPS
+
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -25,7 +27,9 @@ def merge_items[ItemT: BaseModel](per_chunk: list[list[ItemT]]) -> list[ItemT]:
 
     Duplicates are items whose normalized titles match -- the same action
     item restated in two chunks. The first occurrence wins; its timestamp
-    list absorbs the duplicate's timestamps so no cited moment is lost.
+    lists (cited moments and nominated screenshot moments alike) absorb the
+    duplicate's so no cited moment is lost. The screenshot union keeps the
+    schema's per-item cap: capture plans at most that many frames anyway.
     """
     merged: list[ItemT] = []
     by_title: dict[str, ItemT] = {}
@@ -37,12 +41,20 @@ def merge_items[ItemT: BaseModel](per_chunk: list[list[ItemT]]) -> list[ItemT]:
                 by_title[key] = item
                 merged.append(item)
                 continue
-            existing_stamps = list(getattr(existing, "timestamps", []))
-            for stamp in getattr(item, "timestamps", []):
-                if stamp not in existing_stamps:
-                    existing_stamps.append(stamp)
-            # pydantic models are mutable by default; timestamps is a plain list field.
-            existing.timestamps = existing_stamps  # type: ignore[attr-defined]
+            for field, cap in (
+                ("timestamps", None),
+                ("screenshot_timestamps", MAX_ITEM_SCREENSHOT_TIMESTAMPS),
+            ):
+                if not hasattr(existing, field):
+                    continue
+                existing_stamps = list(getattr(existing, field))
+                for stamp in getattr(item, field, []):
+                    if stamp not in existing_stamps:
+                        existing_stamps.append(stamp)
+                if cap is not None:
+                    existing_stamps = existing_stamps[:cap]
+                # pydantic models are mutable by default; both are plain list fields.
+                setattr(existing, field, existing_stamps)
     return merged
 
 

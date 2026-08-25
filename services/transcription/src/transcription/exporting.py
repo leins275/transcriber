@@ -2,9 +2,8 @@
 
 Builds one Markdown document from a meeting folder's existing materials, in
 the fixed order the operator specified: Summary, then this recording's
-action items, then its facts, then the full speaker-labelled transcript.
-The PDF render of this document is the deliverable; the ``.md`` sits next
-to it as the source.
+action items, then the full speaker-labelled transcript. The PDF render of
+this document is the deliverable; the ``.md`` sits next to it as the source.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from typing import Any
 
 from transcription.artifacts import (
     ACTION_ITEMS_DIR_NAME,
-    FACTS_DIR_NAME,
     StoredItem,
     list_items,
 )
@@ -97,6 +95,17 @@ def _item_section(item: StoredItem, export_dir: Path) -> str:
     # The stored body opens with its own `# title` heading; drop it so the
     # export document keeps one coherent outline under our `###` heading.
     body = re.sub(r"\A# [^\n]*\n+", "", body).strip()
+    # Screenshots captured after the item was written (the app's on-demand
+    # capture) sit in the item directory without a body link; append them so
+    # the export shows everything the folder holds. The `.md` itself is
+    # never rewritten -- that is this document's job.
+    referenced = set(_SCREENSHOT_LINK.findall(item.body))
+    extra = [name for name in item.screenshot_names if name not in referenced]
+    if extra:
+        links = "\n".join(
+            _relocate_screenshot_links(f"![{name}]({name})", item.dir, export_dir) for name in extra
+        )
+        body = f"{body}\n\n{links}" if body else links
     return f"{heading}\n\n{body}\n" if body else f"{heading}\n"
 
 
@@ -120,19 +129,15 @@ def build_export_md(
         sections.append("_No summary has been generated for this recording yet._")
     sections.append("")
 
-    for heading, kind_dir_name in (
-        ("Action items", ACTION_ITEMS_DIR_NAME),
-        ("Facts", FACTS_DIR_NAME),
-    ):
-        sections.append(f"## {heading}")
+    sections.append("## Action items")
+    sections.append("")
+    items = items_for_meeting(meeting_dir, ACTION_ITEMS_DIR_NAME)
+    if items:
+        for item in items:
+            sections.append(_item_section(item, export_dir))
+    else:
+        sections.append("_No action items recorded for this recording._")
         sections.append("")
-        items = items_for_meeting(meeting_dir, kind_dir_name)
-        if items:
-            for item in items:
-                sections.append(_item_section(item, export_dir))
-        else:
-            sections.append(f"_No {heading.lower()} recorded for this recording._")
-            sections.append("")
 
     sections.append("## Transcript")
     sections.append("")

@@ -3,16 +3,18 @@
 Owns the on-disk conventions for derived knowledge:
 
 - ``<meeting>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
-- ``<meeting>/facts/<slug>/<slug>.md``        (+ ``screenshot-*.png``)
 - ``<meeting>/exports/<YYMMDD>/export.md``    (+ ``<project> - <date> - <title>.pdf``,
   see :func:`export_pdf_filename`)
 
 Extracted items live *inside the recording's own folder*, alongside its
 ``transcript.json``, ``summary.md`` and ``exports/`` -- so they travel with
 the recording when it is filed, renamed or synced, and unfiled (``unsorted/``)
-recordings can be extracted too. Legacy project-level ``<PROJECT>/action
-items/`` and ``<PROJECT>/facts/`` trees from before the move are never read
-and never written here; they stay on disk untouched for external tools.
+recordings can be extracted too. Two legacy trees are never read and never
+written here; they stay on disk untouched for external tools: the
+project-level ``<PROJECT>/action items/`` and ``<PROJECT>/facts/`` trees
+from before the per-meeting move, and the per-meeting ``<meeting>/facts/``
+trees from before the facts job was retired (summaries carry the notable
+facts now; the directory name stays reserved in the vault crate).
 
 The directory *names* are a cross-language contract shared with the vault
 crate (``crates/vault/src/paths.rs``); both sides pin the exact strings with
@@ -44,8 +46,9 @@ Every key is written on every extraction item by ``jobs._extract_sync``:
 ===================  ==================  =====  =================================
 key                  JSON type           null?  notes
 ===================  ==================  =====  =================================
-``type`` / ``kind``  string              no     ``type`` for action items,
-                                                ``kind`` for facts
+``type``             string              no     the action-item type (legacy
+                                                facts items carry ``kind``
+                                                instead)
 ``title``            string              no
 ``archived``         boolean             no     always written ``false``; flipped
                                                 only by external editors; an
@@ -99,9 +102,10 @@ from typing import Any
 from transcription.errors import ErrorKind, ServiceError
 
 # Reserved inside a meeting folder, alongside exports/ (mirrored in
-# crates/vault/src/paths.rs; the exact strings are the cross-language contract).
+# crates/vault/src/paths.rs; the exact strings are the cross-language
+# contract). `facts` is also still reserved over there, but only as a legacy
+# name nothing here writes or reads any more.
 ACTION_ITEMS_DIR_NAME = "action items"
-FACTS_DIR_NAME = "facts"
 # Reserved inside a meeting folder (per-recording exports).
 EXPORTS_DIR_NAME = "exports"
 
@@ -326,8 +330,34 @@ class StoredItem:
     screenshot_names: list[str]
 
 
+def read_item(item_dir: Path) -> StoredItem | None:
+    """Read one ``<kind>/<slug>/`` item directory; ``None`` when it holds no
+    readable ``<slug>.md`` (best-effort, like the listing)."""
+    if not item_dir.is_dir():
+        return None
+    md_path = item_dir / f"{item_dir.name}.md"
+    if not md_path.is_file():
+        return None
+    try:
+        meta, body = parse_front_matter(md_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    screenshots = sorted(
+        entry.name
+        for entry in item_dir.iterdir()
+        if entry.is_file() and entry.suffix.lower() == ".png"
+    )
+    return StoredItem(
+        dir=item_dir,
+        md_path=md_path,
+        meta=meta,
+        body=body,
+        screenshot_names=screenshots,
+    )
+
+
 def list_items(kind_dir: Path) -> list[StoredItem]:
-    """Read every item under a ``action items/``/``facts/`` directory.
+    """Read every item under an ``action items/`` directory.
 
     Best-effort like the vault crate's listing: a subdirectory without a
     readable ``.md`` is skipped, never an error. Sorted by folder name for
@@ -337,27 +367,7 @@ def list_items(kind_dir: Path) -> list[StoredItem]:
         return []
     items: list[StoredItem] = []
     for child in sorted(kind_dir.iterdir(), key=lambda p: p.name.casefold()):
-        if not child.is_dir():
-            continue
-        md_path = child / f"{child.name}.md"
-        if not md_path.is_file():
-            continue
-        try:
-            meta, body = parse_front_matter(md_path.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        screenshots = sorted(
-            entry.name
-            for entry in child.iterdir()
-            if entry.is_file() and entry.suffix.lower() == ".png"
-        )
-        items.append(
-            StoredItem(
-                dir=child,
-                md_path=md_path,
-                meta=meta,
-                body=body,
-                screenshot_names=screenshots,
-            )
-        )
+        item = read_item(child)
+        if item is not None:
+            items.append(item)
     return items

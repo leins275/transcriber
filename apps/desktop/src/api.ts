@@ -16,8 +16,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
+  ActionItemsView,
   AppError,
   ArtifactKind,
+  ItemScreenshotView,
+  ItemScreenshotsView,
   JobSnapshot,
   LedgerJobView,
   LlmModelDownloadStatus,
@@ -121,15 +124,25 @@ export const api = {
   cancelModelDownload: (): Promise<ModelDownloadStatus> =>
     call<ModelDownloadStatus>("cancel_model_download"),
   // LLM feature (additive): derived jobs over already-transcribed material,
-  // plus the GGUF model-download trio. Meetings are named by their
-  // vault-entry id -- never by a path. What those jobs write is read in the
-  // vault folder itself; the app browses none of it.
+  // the action-items read/capture surface, plus the GGUF model-download
+  // trio. Meetings are named by their vault-entry id -- never by a path.
   summarizeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("summarize_vault_entry", { entryId }),
   extractVaultEntry: (entryId: string, kind: ArtifactKind): Promise<JobSnapshot> =>
     call<JobSnapshot>("extract_vault_entry", { entryId, kind }),
   exportRecording: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("export_recording", { entryId }),
+  /** This recording's extracted action items, straight off the vault folder
+   * (readable the moment anything writes them, service running or not). */
+  readActionItems: (entryId: string): Promise<ActionItemsView> =>
+    call<ActionItemsView>("read_action_items", { entryId }),
+  /** On-demand frame capture for one item at its cited timestamps — the
+   * operator's counterpart to extraction's model-judged auto-capture. */
+  captureItemScreenshots: (entryId: string, itemDirName: string): Promise<ItemScreenshotsView> =>
+    call<ItemScreenshotsView>("capture_item_screenshots", { entryId, itemDirName }),
+  /** One item's screenshots as data URLs, loaded on demand per item. */
+  readItemScreenshots: (entryId: string, itemDirName: string): Promise<ItemScreenshotView[]> =>
+    call<ItemScreenshotView[]>("read_item_screenshots", { entryId, itemDirName }),
   llmModelDownloadStatus: (): Promise<LlmModelDownloadStatus> =>
     call<LlmModelDownloadStatus>("llm_model_download_status"),
   startLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>

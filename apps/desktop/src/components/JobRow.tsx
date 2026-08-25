@@ -28,7 +28,6 @@ const RUNNING_TEXT: Record<JobType, string> = {
   transcribe: "Transcribing",
   summarize: "Summarizing",
   action_items: "Extracting action items",
-  facts: "Extracting facts",
   export: "Exporting PDF",
 };
 
@@ -39,7 +38,6 @@ const FAILED_TEXT: Record<JobType, string> = {
   transcribe: STATE_TEXT.failed,
   summarize: "Summary failed.",
   action_items: "Action-item extraction failed.",
-  facts: "Fact extraction failed.",
   export: "Export failed.",
 };
 

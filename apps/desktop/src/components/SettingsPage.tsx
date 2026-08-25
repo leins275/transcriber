@@ -237,7 +237,7 @@ export function SettingsPage({
                   ? "Summaries currently run on CPU. Enabling GPU acceleration downloads the " +
                     "CUDA build of the local runtime and offloads as much of the model as " +
                     "fits in your GPU's memory."
-                  : "Summaries, action items and facts run on this machine. Switching the " +
+                  : "Summaries and action items run on this machine. Switching the " +
                     "active model restarts the local service."}
               </p>
             </>

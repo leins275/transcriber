@@ -13,6 +13,7 @@ returned (FR-8: never a generic message, never a leaked traceback).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -42,7 +43,12 @@ from transcription.jobs import JobManager, JobNotFoundError
 from transcription.ledger import Ledger
 from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
-from transcription.schema import JobCreate, JobStatus
+from transcription.schema import (
+    ItemScreenshotsRequest,
+    ItemScreenshotsResult,
+    JobCreate,
+    JobStatus,
+)
 
 _logger = logging.getLogger("transcription")
 
@@ -293,6 +299,14 @@ def create_app(
     async def cancel_job(job_id: str) -> dict[str, str]:
         await job_manager.cancel(job_id)
         return {"status": "cancelled"}
+
+    @app.post("/v1/items/screenshots", response_model=ItemScreenshotsResult, dependencies=v1_deps)
+    async def capture_item_screenshots(payload: ItemScreenshotsRequest) -> ItemScreenshotsResult:
+        # Synchronous by design (no job row): a bounded frame grab the
+        # operator is watching, run off the event loop but outside the
+        # serial worker so it never queues behind a transcription.
+        result = await asyncio.to_thread(job_manager.capture_item_screenshots, payload.item_dir)
+        return ItemScreenshotsResult(**result)
 
     app.include_router(build_model_router(require_token))
     app.include_router(

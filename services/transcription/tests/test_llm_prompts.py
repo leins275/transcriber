@@ -20,7 +20,6 @@ from transcription.llm.prompts import (
     Message,
     action_items_messages,
     chunk_summary_messages,
-    facts_messages,
     merge_summaries_messages,
     repair_messages,
     summary_messages,
@@ -31,14 +30,13 @@ TERMS_CLAUSE = "Keep technical terms, product names and code identifiers as they
 
 TRANSCRIPT = "[0:01] A: hello"
 
-# The five per-meeting builders paired with their non-language arguments; the
+# The four per-meeting builders paired with their non-language arguments; the
 # language is threaded in as a keyword by the tests.
 BUILDERS: dict[str, tuple[Callable[..., list[Message]], tuple[Any, ...]]] = {
     "summary_messages": (summary_messages, (TRANSCRIPT,)),
     "chunk_summary_messages": (chunk_summary_messages, (TRANSCRIPT, 0, 3)),
     "merge_summaries_messages": (merge_summaries_messages, (["part one"],)),
     "action_items_messages": (action_items_messages, (TRANSCRIPT,)),
-    "facts_messages": (facts_messages, (TRANSCRIPT,)),
 }
 
 BUILDER_NAMES = sorted(BUILDERS)
@@ -120,7 +118,7 @@ def test_language_is_a_keyword_parameter_with_a_default(name: str) -> None:
 
 
 def test_repair_replays_the_pinned_system_message_verbatim() -> None:
-    original = facts_messages("[0:01] A: hello", language="ru")
+    original = action_items_messages("[0:01] A: hello", language="ru")
     repaired = repair_messages(
         original,
         "not json",

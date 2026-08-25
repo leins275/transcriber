@@ -81,13 +81,27 @@ pub trait TranscriptionService: Send + Sync {
     }
 
     /// `POST /v1/jobs` with a derived (LLM) job type -- summarize / extract
-    /// action items / extract facts / per-recording export.
+    /// action items / per-recording export.
     /// Returns F2's `job_id`, polled through the same `status()` as a
     /// transcription. Default: unsupported (the house rule -- pipeline
     /// fakes must not need an edit to keep compiling).
     async fn submit_llm(&self, _req: LlmSubmitRequest) -> Result<String, ServiceError> {
         Err(ServiceError::Unavailable {
             detail: "llm jobs are not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/items/screenshots` -- on-demand frame capture for one
+    /// already-extracted action item, at its cited timestamps. Synchronous
+    /// on F2's side (no job row) -- a bounded PyAV grab the operator is
+    /// watching. Default: unsupported (the house rule -- pipeline fakes
+    /// must not need an edit to keep compiling).
+    async fn capture_item_screenshots(
+        &self,
+        _item_dir: &str,
+    ) -> Result<ItemScreenshots, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "item screenshot capture is not supported by this service".to_string(),
         })
     }
 
@@ -157,10 +171,8 @@ pub trait TranscriptionService: Send + Sync {
 pub enum LlmJobKind {
     /// Write `<meeting>/summary.md` from the transcript.
     Summarize,
-    /// Extract typed action items into `<project>/action items/`.
+    /// Extract typed action items into `<meeting>/action items/`.
     ActionItems,
-    /// Extract facts / answered questions into `<project>/facts/`.
-    Facts,
     /// Deterministic per-recording export into `<meeting>/exports/<date>/`.
     Export,
 }
@@ -171,10 +183,17 @@ impl LlmJobKind {
         match self {
             LlmJobKind::Summarize => "summarize",
             LlmJobKind::ActionItems => "action_items",
-            LlmJobKind::Facts => "facts",
             LlmJobKind::Export => "export",
         }
     }
+}
+
+/// `POST /v1/items/screenshots` response: what the on-demand capture wrote,
+/// and every screenshot the item directory holds afterwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemScreenshots {
+    pub written: Vec<String>,
+    pub screenshots: Vec<String>,
 }
 
 /// `POST /v1/jobs` request body for a derived job: F2 takes the meeting

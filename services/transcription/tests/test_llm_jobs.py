@@ -58,7 +58,6 @@ ACTION_ITEM_META_KEYS = {
     "job_id",
     "screenshots",
 }
-FACT_META_KEYS = (ACTION_ITEM_META_KEYS - {"type"}) | {"kind"}
 
 
 @pytest.fixture
@@ -359,7 +358,7 @@ async def test_cancelling_a_queued_derived_job_never_runs_it(
         await manager.aclose()
 
 
-# ------------------------------------------------------- action items / facts
+# ------------------------------------------------------------- action items
 
 
 def _items_json(items: list[dict[str, Any]]) -> str:
@@ -376,12 +375,15 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
                 "title": "Fix the login flow",
                 "description_md": "The login flow breaks on refresh.",
                 "timestamps": [10.0, 20.0],
+                # The model judged both moments visually load-bearing.
+                "screenshot_timestamps": [10.0, 20.0],
             },
             {
                 "type": "spike",
                 "title": "Investigate caching",
                 "description_md": "Unclear which layer to cache in.",
                 "timestamps": [20.0],
+                # No visual moment nominated: auto-capture must skip it.
             },
         ]
     )
@@ -425,6 +427,15 @@ async def test_action_items_are_written_with_screenshots_and_front_matter(
         assert "![screenshot-0010.png](screenshot-0010.png)" in body
 
         assert (items_dir / "investigate-caching" / "investigate-caching.md").is_file()
+        # An item without nominated visual moments gets no auto-captured
+        # frames, and honestly reports `screenshots: "none"`.
+        spike_meta, _ = parse_front_matter(
+            (items_dir / "investigate-caching" / "investigate-caching.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert spike_meta["screenshots"] == "none"
+        assert not list((items_dir / "investigate-caching").glob("*.png"))
         # Nothing is written to the legacy project-level tree (FR-1, FR-6).
         assert not (meeting_dir.parent / "action items").exists()
 
@@ -461,18 +472,20 @@ async def test_extraction_repairs_invalid_json_once(
 # -------------------------------------------------- extraction language pinning
 
 
-async def test_facts_pin_russian_for_every_chunk_of_a_long_transcript(
+async def test_extraction_pins_russian_for_every_chunk_of_a_long_transcript(
     config: Config, ledger: Ledger, tmp_app_dir: Path
 ) -> None:
     meeting = _meeting_with_language(tmp_app_dir, "ru", segment_count=200, repeat_text=3)
     response = _items_json(
-        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": []}]
     )
     llm = FakeLlm(responses=[response])
     manager = _manager(_small_ctx(config), ledger, llm)
-    facts_dir = meeting / "facts"
+    items_dir = meeting / "action items"
     try:
-        job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
         assert manager.status(job_id).status == "succeeded"
 
         prompts = _system_prompts(llm)
@@ -510,14 +523,14 @@ async def test_a_transcript_without_a_language_key_keeps_the_soft_rule(
     config: Config, ledger: Ledger, meeting_dir: Path
 ) -> None:
     response = _items_json(
-        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": []}]
     )
     llm = FakeLlm(responses=[response])
     manager = _manager(config, ledger, llm)
-    facts_dir = meeting_dir / "facts"
+    items_dir = meeting_dir / "action items"
     try:
         job_id = await _run_job(
-            manager, job_type="facts", input_path=meeting_dir, output_dir=facts_dir
+            manager, job_type="action_items", input_path=meeting_dir, output_dir=items_dir
         )
         assert manager.status(job_id).status == "succeeded"
 
@@ -534,13 +547,15 @@ async def test_a_null_or_unsupported_language_keeps_the_soft_rule(
 ) -> None:
     meeting = _meeting_with_language(tmp_app_dir, language)
     response = _items_json(
-        [{"kind": "fact", "title": "A fact", "description_md": "d", "timestamps": []}]
+        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": []}]
     )
     llm = FakeLlm(responses=[response])
     manager = _manager(config, ledger, llm)
-    facts_dir = meeting / "facts"
+    items_dir = meeting / "action items"
     try:
-        job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
         assert manager.status(job_id).status == "succeeded", "the language field never fails a job"
 
         prompts = _system_prompts(llm)
@@ -958,7 +973,15 @@ async def test_screenshot_failure_degrades_but_items_are_still_written(
     config: Config, ledger: Ledger, meeting_dir: Path
 ) -> None:
     response = _items_json(
-        [{"type": "task", "title": "A task", "description_md": "d", "timestamps": [10.0]}]
+        [
+            {
+                "type": "task",
+                "title": "A task",
+                "description_md": "d",
+                "timestamps": [10.0],
+                "screenshot_timestamps": [10.0],
+            }
+        ]
     )
     llm = FakeLlm(responses=[response])
     extractor = FakeFrameExtractor(raise_kind=ErrorKind.AUDIO_DECODE)
@@ -980,7 +1003,7 @@ async def test_screenshot_failure_degrades_but_items_are_still_written(
         await manager.aclose()
 
 
-async def test_facts_use_the_kind_key_and_audio_only_recordings_get_no_screenshots(
+async def test_audio_only_recordings_get_no_screenshots(
     config: Config, ledger: Ledger, tmp_app_dir: Path
 ) -> None:
     meeting = tmp_app_dir / "vault" / "ELS" / MEETING_NAME
@@ -991,33 +1014,51 @@ async def test_facts_use_the_kind_key_and_audio_only_recordings_get_no_screensho
     response = _items_json(
         [
             {
-                "kind": "answered_question",
-                "title": "Which database do we use?",
-                "description_md": "Postgres, decided last sprint.",
+                "type": "task",
+                "title": "A task",
+                "description_md": "d",
                 "timestamps": [10.0],
+                "screenshot_timestamps": [10.0],
             }
         ]
     )
     llm = FakeLlm(responses=[response])
     extractor = FakeFrameExtractor(no_video=True)
     manager = _manager(config, ledger, llm, extractor)
-    facts_dir = meeting / "facts"
+    items_dir = meeting / "action items"
     try:
-        job_id = await _run_job(manager, job_type="facts", input_path=meeting, output_dir=facts_dir)
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
         assert manager.status(job_id).status == "succeeded"
 
-        item_dirs = [p for p in facts_dir.iterdir() if p.is_dir()]
+        item_dirs = [p for p in items_dir.iterdir() if p.is_dir()]
         assert len(item_dirs) == 1
         md_text = (item_dirs[0] / f"{item_dirs[0].name}.md").read_text(encoding="utf-8")
         meta, _ = parse_front_matter(md_text)
-        assert meta["kind"] == "answered_question"
         assert meta["screenshots"] == "none"
         assert not list(item_dirs[0].glob("*.png"))
-        # FR-1: facts share the writer, so they share the `archived` field.
-        assert "\narchived: false\n" in md_text
-        assert meta["archived"] is False
-        # FR-6: the facts key set is the action-item set with `kind` for `type`.
-        assert set(meta) == FACT_META_KEYS
+    finally:
+        await manager.aclose()
+
+
+async def test_the_retired_facts_job_type_is_rejected_at_submission(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    """The facts job was retired (the summary carries the notable facts);
+    submitting one must answer `invalid_request` and leave no ledger row."""
+    from transcription.errors import ServiceError
+
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        with pytest.raises(ServiceError) as excinfo:
+            await manager.submit(
+                job_type="facts",
+                input_path=str(meeting_dir),
+                output_dir=str(meeting_dir / "facts"),
+            )
+        assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
+        assert ledger.list_jobs(limit=10) == []
     finally:
         await manager.aclose()
 
@@ -1113,6 +1154,88 @@ async def test_duplicate_titles_get_collision_suffixed_folders(
         await manager.aclose()
 
 
+# -------------------------------------------------- on-demand screenshot capture
+
+
+async def test_capture_item_screenshots_writes_missing_frames_and_skips_existing(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    """The operator's per-item capture: frames land at the item's cited
+    timestamps, moments already on disk are skipped, and the item's `.md`
+    is never rewritten (the artifact contract)."""
+    md_path = write_item(
+        meeting_dir / "action items",
+        title="A task",
+        meta={"type": "task", "title": "A task", "timestamps": [10.0, 20.0]},
+        body_md="d",
+        images=[("screenshot-0010.png", b"\x89PNGoriginal")],
+    )
+    item_dir = md_path.parent
+    md_before = md_path.read_bytes()
+
+    extractor = FakeFrameExtractor()
+    manager = _manager(config, ledger, FakeLlm(), extractor)
+    try:
+        result = manager.capture_item_screenshots(str(item_dir))
+    finally:
+        await manager.aclose()
+
+    assert result["written"] == ["screenshot-0020.png"]
+    assert result["screenshots"] == ["screenshot-0010.png", "screenshot-0020.png"]
+    # Only the missing moment was decoded.
+    assert extractor.calls == [(meeting_dir / "source.mp4", [20.0])]
+    assert (item_dir / "screenshot-0020.png").is_file()
+    assert md_path.read_bytes() == md_before, "the item markdown is read-only"
+
+    # Idempotent: a second click has nothing left to capture.
+    manager2 = _manager(config, ledger, FakeLlm(), extractor)
+    try:
+        again = manager2.capture_item_screenshots(str(item_dir))
+    finally:
+        await manager2.aclose()
+    assert again["written"] == []
+    assert again["screenshots"] == ["screenshot-0010.png", "screenshot-0020.png"]
+
+
+async def test_capture_item_screenshots_requires_a_source_recording(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    from transcription.errors import ServiceError
+
+    meeting = tmp_app_dir / "vault" / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    md_path = write_item(
+        meeting / "action items",
+        title="A task",
+        meta={"type": "task", "title": "A task", "timestamps": [10.0]},
+        body_md="d",
+        images=[],
+    )
+
+    manager = _manager(config, ledger, FakeLlm(), FakeFrameExtractor())
+    try:
+        with pytest.raises(ServiceError) as excinfo:
+            manager.capture_item_screenshots(str(md_path.parent))
+        assert excinfo.value.kind is ErrorKind.UNSUPPORTED_INPUT
+    finally:
+        await manager.aclose()
+
+
+async def test_capture_item_screenshots_rejects_a_non_item_directory(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    from transcription.errors import ServiceError
+
+    manager = _manager(config, ledger, FakeLlm(), FakeFrameExtractor())
+    try:
+        # The meeting folder itself is not an item under `action items/`.
+        with pytest.raises(ServiceError) as excinfo:
+            manager.capture_item_screenshots(str(meeting_dir))
+        assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
+    finally:
+        await manager.aclose()
+
+
 # --------------------------------------------------------------------- export
 
 
@@ -1155,14 +1278,15 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
         assert "must not appear" not in export_md
         assert legacy_md.is_file(), "legacy items are left on disk, never deleted"
         assert "segment 0 discussing the plan" in export_md
-        # Fixed section order: Summary -> Action items -> Facts -> Transcript.
+        # Fixed section order: Summary -> Action items -> Transcript. The
+        # retired facts job left no section behind.
         positions = [
             export_md.index("## Summary"),
             export_md.index("## Action items"),
-            export_md.index("## Facts"),
             export_md.index("## Transcript"),
         ]
         assert positions == sorted(positions)
+        assert "## Facts" not in export_md
 
         pdf_bytes = (export_dir / EXPORT_PDF_NAME).read_bytes()
         assert pdf_bytes.startswith(b"%PDF"), "a real PDF was rendered"
@@ -1183,11 +1307,13 @@ async def test_export_of_an_unsorted_meeting_includes_its_meeting_level_items(
         body_md="an unfiled action item",
         images=[],
     )
-    write_item(
+    # A legacy facts item from before the facts job was retired: left on
+    # disk untouched, never read into an export.
+    legacy_fact_md = write_item(
         meeting / "facts",
         title="Unfiled fact",
         meta={"kind": "answered_question", "title": "Unfiled fact"},
-        body_md="an unfiled fact",
+        body_md="a legacy fact",
         images=[],
     )
 
@@ -1201,9 +1327,9 @@ async def test_export_of_an_unsorted_meeting_includes_its_meeting_level_items(
 
         export_md = (export_dir / "export.md").read_text(encoding="utf-8")
         assert "an unfiled action item" in export_md
-        assert "an unfiled fact" in export_md
         assert "_No action items recorded" not in export_md
-        assert "_No facts recorded" not in export_md
+        assert "a legacy fact" not in export_md, "legacy facts items are unread"
+        assert legacy_fact_md.is_file(), "legacy facts items stay on disk, never deleted"
     finally:
         await manager.aclose()
 
@@ -1304,14 +1430,6 @@ async def test_export_renders_cyrillic_with_embedded_fonts(
         body_md="Нужно собрать инсталлятор до пятницы.",
         images=[],
     )
-    write_item(
-        meeting_dir / "facts",
-        title="Сроки согласованы",
-        meta={"kind": "decision", "title": "Сроки согласованы", "source_meeting": MEETING_NAME},
-        body_md="Релиз назначен на конец месяца.",
-        images=[],
-    )
-
     manager = _manager(config, ledger, FakeLlm())
     export_dir = meeting_dir / "exports" / "260104"
     try:
@@ -1331,7 +1449,6 @@ async def test_export_renders_cyrillic_with_embedded_fonts(
         for section, needle in (
             ("Summary", "Обсудили план релиза"),
             ("Action items", "Нужно собрать инсталлятор"),
-            ("Facts", "Релиз назначен"),
             ("Transcript", "Проверили статус переводов"),
         ):
             assert needle in text, f"{section}: {needle!r} missing from the export text: {text!r}"

@@ -14,8 +14,8 @@ export type MarkdownProps = {
 };
 
 /**
- * The one markdown renderer in this app (summaries, action items, facts,
- * reports). Raw HTML stays disabled — react-markdown's default — so a
+ * The one markdown renderer in this app (summaries, action items).
+ * Raw HTML stays disabled — react-markdown's default — so a
  * model-generated document can never inject markup; GFM tables/strikethrough
  * are on because models emit them.
  */

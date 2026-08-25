@@ -75,6 +75,9 @@ function App() {
     reveal: revealVaultEntry,
     readTranscript,
     readSummary,
+    readActionItems,
+    captureItemScreenshots,
+    readItemScreenshots,
     saveSpeakers,
     update: updateVaultEntry,
     remove: deleteVaultEntry,
@@ -451,6 +454,14 @@ function App() {
           job.source_path === openEntry.meeting_dir,
       ).length
     : 0;
+  const actionItemsReloadToken = openEntry
+    ? jobs.filter(
+        (job) =>
+          job.job_type === "action_items" &&
+          job.state === "done" &&
+          job.source_path === openEntry.meeting_dir,
+      ).length
+    : 0;
 
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
@@ -534,8 +545,12 @@ function App() {
                   onSummarize={handleSummarize}
                   onExtract={handleExtract}
                   onExportPdf={handleExportPdf}
+                  onReadActionItems={readActionItems}
+                  onCaptureItemScreenshots={captureItemScreenshots}
+                  onReadItemScreenshots={readItemScreenshots}
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
+                  actionItemsReloadToken={actionItemsReloadToken}
                 />
               ) : openProject ? (
                 <ProjectPage

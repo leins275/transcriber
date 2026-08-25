@@ -13,7 +13,6 @@ import yaml
 
 from transcription.artifacts import (
     ACTION_ITEMS_DIR_NAME,
-    FACTS_DIR_NAME,
     MAX_PATH_LEN,
     UNSORTED_DIR_NAME,
     export_pdf_filename,
@@ -44,9 +43,9 @@ from transcription.llm.gguf_meta import (
 )
 from transcription.llm.prompts import format_timestamp, render_transcript_lines
 from transcription.llm.shapes import (
+    MAX_ITEM_SCREENSHOT_TIMESTAMPS,
     MAX_ITEM_TIMESTAMPS,
     ActionItemsOut,
-    FactsOut,
     LlmOutputError,
     parse_llm_json,
 )
@@ -159,7 +158,7 @@ def test_parse_llm_json_tolerates_code_fences() -> None:
 
 def test_parse_llm_json_raises_with_the_raw_output_attached() -> None:
     with pytest.raises(LlmOutputError) as excinfo:
-        parse_llm_json("not json at all", FactsOut)
+        parse_llm_json("not json at all", ActionItemsOut)
     assert excinfo.value.raw == "not json at all"
 
     with pytest.raises(LlmOutputError):
@@ -170,14 +169,33 @@ def test_item_timestamps_are_capped_in_the_schema_and_on_validation() -> None:
     # The 260825 field report: an unbounded timestamps array let the model
     # cite every segment of the meeting (~300 stamps on one item), flooding
     # the output-token cap. The cap must reach the grammar via `maxItems`.
-    for wrapper in (ActionItemsOut, FactsOut):
-        schema = wrapper.model_json_schema()
-        item_schema = next(iter(schema["$defs"].values()))
-        assert item_schema["properties"]["timestamps"]["maxItems"] == MAX_ITEM_TIMESTAMPS
+    schema = ActionItemsOut.model_json_schema()
+    item_schema = next(iter(schema["$defs"].values()))
+    assert item_schema["properties"]["timestamps"]["maxItems"] == MAX_ITEM_TIMESTAMPS
     flood = [float(i) for i in range(MAX_ITEM_TIMESTAMPS + 1)]
     with pytest.raises(LlmOutputError):
         parse_llm_json(
             json.dumps({"items": [{"type": "task", "title": "T", "timestamps": flood}]}),
+            ActionItemsOut,
+        )
+
+
+def test_screenshot_timestamps_are_optional_and_capped_at_the_frame_budget() -> None:
+    # Model-judged auto-capture: the field defaults to empty (most items
+    # have no visual moment), and the grammar bounds it at the same per-item
+    # cap `frames.plan_screenshots` enforces at capture time.
+    schema = ActionItemsOut.model_json_schema()
+    item_schema = next(iter(schema["$defs"].values()))
+    cap = item_schema["properties"]["screenshot_timestamps"]["maxItems"]
+    assert cap == MAX_ITEM_SCREENSHOT_TIMESTAMPS
+
+    parsed = parse_llm_json('{"items": [{"type": "task", "title": "T"}]}', ActionItemsOut)
+    assert parsed.items[0].screenshot_timestamps == []
+
+    flood = [float(i) for i in range(MAX_ITEM_SCREENSHOT_TIMESTAMPS + 1)]
+    with pytest.raises(LlmOutputError):
+        parse_llm_json(
+            json.dumps({"items": [{"type": "task", "title": "T", "screenshot_timestamps": flood}]}),
             ActionItemsOut,
         )
 
@@ -192,6 +210,35 @@ def test_merge_items_dedupes_on_normalized_title_and_unions_timestamps() -> None
     merged = merge_items([first, second])
     assert len(merged) == 1
     assert merged[0].timestamps == [1.0, 2.0]
+
+
+def test_merge_items_unions_screenshot_timestamps_up_to_the_frame_cap() -> None:
+    first = ActionItemsOut.model_validate(
+        {
+            "items": [
+                {
+                    "type": "task",
+                    "title": "Fix login",
+                    "screenshot_timestamps": [1.0, 2.0, 3.0, 4.0],
+                }
+            ]
+        }
+    ).items
+    second = ActionItemsOut.model_validate(
+        {
+            "items": [
+                {
+                    "type": "task",
+                    "title": "fix login",
+                    "screenshot_timestamps": [3.0, 5.0, 6.0, 7.0],
+                }
+            ]
+        }
+    ).items
+    merged = merge_items([first, second])
+    assert len(merged) == 1
+    # Union without duplicates, cut at the per-item frame cap.
+    assert merged[0].screenshot_timestamps == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 
 def test_snap_timestamps_clamps_and_snaps_to_segment_starts() -> None:
@@ -342,7 +389,6 @@ def test_artifact_dir_names_pin_the_cross_language_contract() -> None:
     (``crates/vault/src/paths.rs``). Their anchor moved to the meeting folder;
     the strings themselves must never drift on either side."""
     assert ACTION_ITEMS_DIR_NAME == "action items"
-    assert FACTS_DIR_NAME == "facts"
 
 
 def test_slugify_is_windows_safe_and_keeps_non_latin_text() -> None:
@@ -670,11 +716,11 @@ def test_repair_keeps_the_system_message_and_drops_the_transcript() -> None:
 
 
 def test_repair_truncates_a_huge_echoed_output_to_the_budget() -> None:
-    from transcription.llm.prompts import facts_messages, repair_messages
+    from transcription.llm.prompts import action_items_messages, repair_messages
 
     huge = "x" * 40_000
     repair = repair_messages(
-        facts_messages("transcript"),
+        action_items_messages("transcript"),
         huge,
         "err",
         output_budget_tokens=100,

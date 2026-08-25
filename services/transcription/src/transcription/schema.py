@@ -17,10 +17,12 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 
 # The job-type discriminator. `transcribe` is the original (and default) job;
 # the rest are the derived-knowledge jobs added by the LLM feature:
-# `summarize`/`action_items`/`facts` read a meeting folder's transcript.json,
-# and `export` deterministically assembles one meeting's existing materials
-# into a PDF (no LLM call).
-JobType = Literal["transcribe", "summarize", "action_items", "facts", "export"]
+# `summarize`/`action_items` read a meeting folder's transcript.json, and
+# `export` deterministically assembles one meeting's existing materials into
+# a PDF (no LLM call). A `facts` job existed once; it was retired in favour
+# of the summary carrying the notable facts, and submitting one now answers
+# `invalid_request`.
+JobType = Literal["transcribe", "summarize", "action_items", "export"]
 
 
 class Segment(BaseModel):
@@ -123,8 +125,8 @@ class JobCreate(BaseModel):
 
     A ``transcribe`` job (the default, so pre-feature clients are untouched)
     takes ``audio_path``; every other job type takes ``input_path`` -- the
-    meeting folder (``summarize``/``action_items``/``facts``/``export``) it
-    reads. Exactly one of the two must be supplied, matching the job type.
+    meeting folder (``summarize``/``action_items``/``export``) it reads.
+    Exactly one of the two must be supplied, matching the job type.
     """
 
     job_type: JobType = "transcribe"
@@ -174,6 +176,29 @@ class JobStatus(BaseModel):
     @classmethod
     def _clamp_progress(cls, value: float) -> float:
         return max(0.0, min(1.0, value))
+
+
+class ItemScreenshotsRequest(BaseModel):
+    """``POST /v1/items/screenshots`` request body.
+
+    ``item_dir`` is one extracted item's directory
+    (``<meeting>/action items/<slug>``), validated against the same
+    allowed-roots containment as job paths.
+    """
+
+    item_dir: str = Field(min_length=1)
+
+
+class ItemScreenshotsResult(BaseModel):
+    """``POST /v1/items/screenshots`` response body.
+
+    ``written`` is what this call captured; ``screenshots`` is every
+    screenshot the item directory holds afterwards (the app's view refresh
+    in one round trip).
+    """
+
+    written: list[str]
+    screenshots: list[str]
 
 
 class Health(BaseModel):

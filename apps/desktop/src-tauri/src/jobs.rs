@@ -21,13 +21,13 @@ use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-use vault::{Classification, CollisionOutcome};
+use vault::{Classification, CollisionOutcome, ACTION_ITEMS_DIR_NAME};
 
 use crate::ingest;
 use crate::paths;
 use crate::service::{
-    JobState as ServiceJobState, JobStatus, LlmSubmitRequest, ServiceError, SubmitRequest,
-    TranscriptionService,
+    JobState as ServiceJobState, JobStatus, LlmJobKind, LlmSubmitRequest, ServiceError,
+    SubmitRequest, TranscriptionService,
 };
 
 /// How often a job's status is polled once it has been submitted.
@@ -70,7 +70,7 @@ pub struct JobSnapshot {
     pub file_name: String,
     /// Which pipeline this job runs: `"transcribe"` (the default, so an
     /// older frontend build sees no change) or one of F2's derived job
-    /// types (`"summarize"`, `"action_items"`, `"facts"`, `"export"`).
+    /// types (`"summarize"`, `"action_items"`, `"export"`).
     /// Additive to the frozen IPC contract.
     pub job_type: String,
     pub state: JobState,
@@ -111,6 +111,26 @@ pub trait ServiceUnavailableSink: Send + Sync {
 struct PendingJob {
     snapshot: JobSnapshot,
     work: PendingWork,
+    /// What to auto-enqueue once this job lands `Done` — the drop-to-insights
+    /// chain (a dropped recording runs transcribe → summarize →
+    /// action items without the operator touching a button). `None` for
+    /// every manually triggered job: a re-transcribe or a button press runs
+    /// exactly what was asked, nothing more.
+    follow_up: Option<FollowUp>,
+}
+
+/// The next stage of the drop-to-insights chain.
+///
+/// Deliberately not a generic "queue of next jobs": the chain is a fixed
+/// two-step ladder, and each stage names its successor so the whole plan
+/// never has to be carried around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FollowUp {
+    /// Summarize the meeting the finished transcription wrote; then chain
+    /// the action-items extraction.
+    Summarize,
+    /// Extract action items; the chain ends here.
+    ActionItems,
 }
 
 /// What the worker has to do before it can submit a job.
@@ -169,6 +189,11 @@ struct Shared {
     /// the UI to start naming service jobs directly.
     service_job_ids: RwLock<HashMap<String, String>>,
     poll_interval: Duration,
+    /// The worker queue's sender, here (not only on `JobRegistry`) so a
+    /// poll task can enqueue the drop-to-insights chain's next stage when
+    /// it observes `Done` — through the same serial queue as everything
+    /// else, so the chain inherits FR-8's ordering.
+    queue_tx: mpsc::UnboundedSender<PendingJob>,
 }
 
 impl Shared {
@@ -242,6 +267,7 @@ impl JobRegistry {
         sink: Arc<dyn EventSink>,
         poll_interval: Duration,
     ) -> Self {
+        let (queue_tx, queue_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
             root: RwLock::new(root),
             service: RwLock::new(service),
@@ -250,8 +276,8 @@ impl JobRegistry {
             jobs: RwLock::new(HashMap::new()),
             service_job_ids: RwLock::new(HashMap::new()),
             poll_interval,
+            queue_tx: queue_tx.clone(),
         });
-        let (queue_tx, queue_rx) = mpsc::unbounded_channel();
         tokio::spawn(worker_loop(shared.clone(), queue_rx));
         JobRegistry { shared, queue_tx }
     }
@@ -299,6 +325,13 @@ impl JobRegistry {
     /// snapshots immediately — before any ingest or network IO happens
     /// (NFR-1). Actual processing happens serially in the background
     /// worker task.
+    ///
+    /// A drop is the start of the drop-to-insights chain: once its
+    /// transcription lands `Done`, a summarize is auto-enqueued, and once
+    /// that lands, an action-items extraction — so a dropped recording
+    /// comes out the other end with a transcript, a summary and its action
+    /// items without another click. (The chain is skipped while no LLM
+    /// model is installed; see `queue_follow_up`.)
     pub async fn enqueue(&self, paths: Vec<PathBuf>) -> Vec<JobSnapshot> {
         let mut snapshots = Vec::with_capacity(paths.len());
         for source_path in paths {
@@ -311,6 +344,7 @@ impl JobRegistry {
             let _ = self.queue_tx.send(PendingJob {
                 snapshot,
                 work: PendingWork::Ingest { source_path },
+                follow_up: Some(FollowUp::Summarize),
             });
         }
         snapshots
@@ -355,6 +389,11 @@ impl JobRegistry {
                 classification,
                 language,
             },
+            // Deliberately un-chained: a re-transcribe refreshes the
+            // transcript the operator asked about, and auto-re-extracting
+            // would file duplicate (suffixed) action-item folders. The
+            // Summarize / Action items buttons cover the follow-up.
+            follow_up: None,
         });
         snapshot
     }
@@ -376,6 +415,7 @@ impl JobRegistry {
         let _ = self.queue_tx.send(PendingJob {
             snapshot: snapshot.clone(),
             work: PendingWork::Llm { request },
+            follow_up: None,
         });
         snapshot
     }
@@ -411,18 +451,16 @@ impl JobRegistry {
     }
 
     /// True while any non-terminal *model-loading* LLM job (summarize /
-    /// action items / facts) exists -- the model-delete guard's question:
+    /// action items) exists -- the model-delete guard's question:
     /// never ask the service to unlink a GGUF a job may be about to mmap.
     /// (`export` is LLM-flavored but never touches the model.)
     pub async fn has_active_llm_job(&self) -> bool {
         self.shared.jobs.read().await.values().any(|job| {
-            matches!(
-                job.job_type.as_str(),
-                "summarize" | "action_items" | "facts"
-            ) && !matches!(
-                job.state,
-                JobState::Done | JobState::Failed | JobState::Rejected
-            )
+            matches!(job.job_type.as_str(), "summarize" | "action_items")
+                && !matches!(
+                    job.state,
+                    JobState::Done | JobState::Failed | JobState::Rejected
+                )
         })
     }
 
@@ -467,13 +505,17 @@ async fn worker_loop(shared: Arc<Shared>, mut queue_rx: mpsc::UnboundedReceiver<
 }
 
 async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
-    let PendingJob { mut snapshot, work } = pending;
+    let PendingJob {
+        mut snapshot,
+        work,
+        follow_up,
+    } = pending;
 
     // A derived (LLM) job has nothing to ingest and no transcription
     // bookkeeping: submit it, then join the same poll loop.
     let work = match work {
         PendingWork::Llm { request } => {
-            submit_llm_and_poll(shared, snapshot, request).await;
+            submit_llm_and_poll(shared, snapshot, request, follow_up).await;
             return;
         }
         other => other,
@@ -587,6 +629,7 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
         service,
         snapshot,
         service_job_id,
+        follow_up,
     ));
 }
 
@@ -596,6 +639,7 @@ async fn submit_llm_and_poll(
     shared: Arc<Shared>,
     mut snapshot: JobSnapshot,
     request: LlmSubmitRequest,
+    follow_up: Option<FollowUp>,
 ) {
     let service = shared.service.read().await.clone();
     let service_job_id = match service.submit_llm(request).await {
@@ -624,6 +668,7 @@ async fn submit_llm_and_poll(
         service,
         snapshot,
         service_job_id,
+        follow_up,
     ));
 }
 
@@ -642,6 +687,7 @@ async fn poll_until_terminal(
     service: Arc<dyn TranscriptionService>,
     mut snapshot: JobSnapshot,
     service_job_id: String,
+    follow_up: Option<FollowUp>,
 ) {
     let mut consecutive_errors = 0u32;
     loop {
@@ -655,6 +701,14 @@ async fn poll_until_terminal(
                     status.state,
                     ServiceJobState::Done | ServiceJobState::Failed
                 ) {
+                    // The chain advances only off a clean `Done`: a failed
+                    // (or cancelled) stage would only cascade the same
+                    // failure, and the operator's buttons stay available.
+                    if status.state == ServiceJobState::Done {
+                        if let Some(next) = follow_up {
+                            queue_follow_up(&shared, &snapshot, next).await;
+                        }
+                    }
                     return;
                 }
             }
@@ -684,6 +738,68 @@ async fn poll_until_terminal(
             }
         }
     }
+}
+
+/// Enqueues the drop-to-insights chain's next stage after `finished`
+/// landed `Done`.
+///
+/// The meeting folder is read off the finished job's own snapshot: a
+/// transcription's `meeting_dir` is the folder it wrote `transcript.json`
+/// into, and the chained summarize's `meeting_dir` is its output dir --
+/// which is that same folder. New work goes through the current
+/// `shared.service`/`shared.queue_tx` (not the instance the finished job
+/// was polled on), the same rule every fresh submission follows (E2).
+///
+/// Skipped entirely -- silently, not as a failed job -- while `/health`
+/// reports no LLM model on disk: auto-spawning two guaranteed `model_load`
+/// failures per drop would turn a fresh install's job feed into noise. The
+/// operator's Summarize / Action items buttons still work the moment a
+/// model is installed.
+async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: FollowUp) {
+    let Some(meeting_dir) = finished.meeting_dir.clone() else {
+        return;
+    };
+
+    let service = shared.service.read().await.clone();
+    let llm_model_present = service
+        .health()
+        .await
+        .ok()
+        .and_then(|health| health.llm_model_present)
+        .unwrap_or(false);
+    if !llm_model_present {
+        return;
+    }
+
+    let (kind, output_dir, follow_up) = match next {
+        FollowUp::Summarize => (
+            LlmJobKind::Summarize,
+            meeting_dir.clone(),
+            Some(FollowUp::ActionItems),
+        ),
+        FollowUp::ActionItems => (
+            LlmJobKind::ActionItems,
+            path_string(&Path::new(&meeting_dir).join(ACTION_ITEMS_DIR_NAME)),
+            None,
+        ),
+    };
+    let request = LlmSubmitRequest {
+        kind,
+        input_path: meeting_dir,
+        output_dir,
+    };
+
+    // The same registration `enqueue_llm` performs: a `Pending` snapshot
+    // emitted immediately, then the serial worker submits it in turn.
+    let mut snapshot = new_pending_snapshot(Path::new(&request.input_path));
+    snapshot.job_type = request.kind.wire_name().to_string();
+    snapshot.meeting_dir = Some(request.output_dir.clone());
+    shared.store_and_emit(snapshot.clone()).await;
+    let _ = shared.queue_tx.send(PendingJob {
+        snapshot,
+        work: PendingWork::Llm { request },
+        follow_up,
+    });
 }
 
 /// Whether any path recorded on `job` is `dir` itself or lives inside it.
@@ -1088,6 +1204,162 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Polls the fake until its `llm_submissions` list holds `count`
+    /// entries, panicking on `timeout`.
+    async fn wait_for_llm_submissions(
+        fake: &FakeService,
+        count: usize,
+        timeout: Duration,
+    ) -> Vec<crate::service::LlmSubmitRequest> {
+        let start = Instant::now();
+        loop {
+            let submissions = fake.llm_submissions();
+            if submissions.len() >= count {
+                return submissions;
+            }
+            if start.elapsed() > timeout {
+                panic!(
+                    "expected {count} llm submissions, saw {} within {timeout:?}",
+                    submissions.len()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
+    fn a_drop_chains_summarize_then_action_items_in_order() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            // The chain: summarize first, action items second, both over
+            // the transcription's meeting folder.
+            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Summarize);
+            assert_eq!(submissions[1].kind, crate::service::LlmJobKind::ActionItems);
+
+            let meeting_dir = snapshot_meeting_dir(&registry, &snapshot.id).await;
+            assert_eq!(submissions[0].input_path, meeting_dir);
+            assert_eq!(submissions[0].output_dir, meeting_dir);
+            assert_eq!(submissions[1].input_path, meeting_dir);
+            assert!(
+                submissions[1].output_dir.ends_with("action items"),
+                "action items must land in the meeting's own artifact dir, got {:?}",
+                submissions[1].output_dir
+            );
+
+            // Every chained stage is a tracked, visible job that reaches Done.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let jobs = registry.list().await;
+                let mut types: Vec<&str> = jobs.iter().map(|j| j.job_type.as_str()).collect();
+                types.sort_unstable();
+                if types == ["action_items", "summarize", "transcribe"]
+                    && jobs.iter().all(|j| j.state == JobState::Done)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "chain never completed; jobs: {jobs:?}"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+    }
+
+    async fn snapshot_meeting_dir(registry: &JobRegistry, id: &str) -> String {
+        registry
+            .get(id)
+            .await
+            .expect("job exists")
+            .meeting_dir
+            .expect("meeting dir recorded")
+    }
+
+    #[test]
+    fn the_chain_is_skipped_while_no_llm_model_is_installed() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
+            let fake = Arc::new(FakeService::with_llm_model_absent());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            // Give the would-be chain ample time to (not) fire: no llm
+            // submission and no extra job may appear -- silence, not a
+            // pair of failed model_load jobs on every drop.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(fake.llm_submissions().is_empty());
+            assert_eq!(registry.list().await.len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_manual_retranscribe_never_chains() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let meeting_dir = dir.path().join("ELS").join("260101 - Planning");
+            fs::create_dir_all(&meeting_dir).expect("mkdir");
+            let source_dest = meeting_dir.join("source.mp4");
+            fs::write(&source_dest, b"bytes").expect("write source");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+
+            let snapshot = registry
+                .enqueue_filed(meeting_dir, source_dest, Some("sorted".to_string()), None)
+                .await;
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            // A re-transcribe refreshes the transcript, nothing more:
+            // auto-extraction would file duplicate suffixed item folders.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert!(fake.llm_submissions().is_empty());
+            assert_eq!(registry.list().await.len(), 1);
+        });
     }
 
     fn write_recording(dir: &std::path::Path, name: &str) -> PathBuf {

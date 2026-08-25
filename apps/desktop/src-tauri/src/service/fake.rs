@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    JobState, JobStatus, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
-    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ItemScreenshots, JobState, JobStatus, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest,
+    ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest,
+    TranscriptionService,
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
@@ -215,6 +216,9 @@ struct Inner {
     llm_active: String,
     /// Every derived-job submission this fake accepted, for assertions.
     llm_submissions: Vec<LlmSubmitRequest>,
+    /// Every on-demand screenshot capture this fake accepted (the
+    /// `item_dir` values), for assertions.
+    capture_calls: Vec<String>,
     /// Every transcription submission this fake accepted, for assertions --
     /// the only place a caller can observe what actually went on the wire
     /// (per-job `language`, FR-5), since `submit()` itself only returns an id.
@@ -298,6 +302,7 @@ impl FakeService {
                     .collect(),
                 llm_active: FAKE_LLM_CATALOG[0].0.to_string(),
                 llm_submissions: Vec::new(),
+                capture_calls: Vec::new(),
                 submissions: Vec::new(),
             }),
         }
@@ -342,6 +347,15 @@ impl FakeService {
             .lock()
             .expect("fake service mutex poisoned")
             .llm_submissions
+            .clone()
+    }
+
+    /// Every on-demand screenshot capture this fake has accepted, in order.
+    pub fn capture_calls(&self) -> Vec<String> {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .capture_calls
             .clone()
     }
 
@@ -545,6 +559,23 @@ impl TranscriptionService for FakeService {
             },
         );
         Ok(job_id)
+    }
+
+    async fn capture_item_screenshots(
+        &self,
+        item_dir: &str,
+    ) -> Result<ItemScreenshots, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        inner.capture_calls.push(item_dir.to_string());
+        Ok(ItemScreenshots {
+            written: vec!["screenshot-0010.png".to_string()],
+            screenshots: vec!["screenshot-0010.png".to_string()],
+        })
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

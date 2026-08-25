@@ -85,6 +85,43 @@ def _wait_terminal(client: TestClient, job_id: str, timeout: float = 30.0) -> di
         time.sleep(0.01)
 
 
+def test_item_screenshots_endpoint_captures_and_is_authed(
+    config: Config, meeting_dir: Path
+) -> None:
+    from transcription.artifacts import write_item
+
+    (meeting_dir / "source.mp4").write_bytes(b"fake-video")
+    md_path = write_item(
+        meeting_dir / "action items",
+        title="A task",
+        meta={"type": "task", "title": "A task", "timestamps": [2.0, 5.0]},
+        body_md="d",
+        images=[],
+    )
+    app = _app_with_fake_llm(config, FakeLlm())
+    with TestClient(app) as client:
+        body = {"item_dir": str(md_path.parent)}
+        assert client.post("/v1/items/screenshots", json=body).status_code == 401
+        assert (
+            client.post("/v1/items/screenshots", json=body, headers=WRONG_AUTH).status_code == 401
+        )
+
+        response = client.post("/v1/items/screenshots", json=body, headers=AUTH)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["written"] == ["screenshot-0002.png", "screenshot-0005.png"]
+        assert result["screenshots"] == ["screenshot-0002.png", "screenshot-0005.png"]
+
+        # A directory outside the allowed roots is refused before any read.
+        outside = client.post(
+            "/v1/items/screenshots",
+            json={"item_dir": "C:\\Windows\\action items\\x"},
+            headers=AUTH,
+        )
+        assert outside.status_code == 400
+        assert outside.json()["error_kind"] == "invalid_request"
+
+
 def test_summarize_over_http_reports_job_type_and_a_manifest_result(
     config: Config, meeting_dir: Path
 ) -> None:
