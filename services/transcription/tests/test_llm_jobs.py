@@ -725,6 +725,60 @@ async def test_a_truncated_extraction_is_split_not_repaired(
         await manager.aclose()
 
 
+async def test_a_truncated_summary_far_below_the_budget_is_still_split(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # The 260825 field report: with the default 32k context the whole
+    # transcript sits in one chunk far below the input budget. Splitting
+    # used to halve the *budget* only, which handed back the same single
+    # chunk and turned the first truncated call into a hard failure.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=30, repeat_text=3)
+    llm = FakeLlm(responses=[("Okay, let me think", "length"), "half one", "half two", "merged"])
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting, output_dir=meeting
+        )
+        assert manager.status(job_id).status == "succeeded"
+        assert len(llm.calls) == 4, "one truncated call, two map retries, one reduce"
+        assert (meeting / "summary.md").read_text(encoding="utf-8").strip() == "merged"
+    finally:
+        await manager.aclose()
+
+
+async def test_a_truncated_extraction_far_below_the_budget_is_still_split(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # The extraction half of the same field report: the split-and-retry
+    # ladder must engage even when the truncated chunk is far smaller than
+    # the configured budget, instead of failing with a false "minimal
+    # transcript chunk" error after the very first call.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=30, repeat_text=3)
+    half_a = _items_json(
+        [{"type": "task", "title": "From half A", "description_md": "d", "timestamps": []}]
+    )
+    half_b = _items_json(
+        [{"type": "task", "title": "From half B", "description_md": "d", "timestamps": []}]
+    )
+    llm = FakeLlm(responses=[('{"items": [{"ti', "length"), half_a, half_b])
+    manager = _manager(config, ledger, llm)
+    items_dir = meeting / "action items"
+    try:
+        job_id = await _run_job(
+            manager, job_type="action_items", input_path=meeting, output_dir=items_dir
+        )
+        job = manager.status(job_id)
+        assert job.status == "succeeded"
+        assert len(llm.calls) == 3, "one truncated call, two split retries"
+        titles = {
+            parse_front_matter(md.read_text(encoding="utf-8"))[0]["title"]
+            for md in items_dir.rglob("*.md")
+        }
+        assert titles == {"From half A", "From half B"}
+    finally:
+        await manager.aclose()
+
+
 class _ProgressProbeLlm(FakeLlm):
     """A `FakeLlm` that samples the job's *reported* progress at every
     progress callback, so a test can assert the bar never runs backwards."""
