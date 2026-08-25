@@ -21,7 +21,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-use vault::{Classification, CollisionOutcome, ACTION_ITEMS_DIR_NAME};
+use vault::{Classification, CollisionOutcome, ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME};
 
 use crate::ingest;
 use crate::paths;
@@ -113,24 +113,27 @@ struct PendingJob {
     work: PendingWork,
     /// What to auto-enqueue once this job lands `Done` — the drop-to-insights
     /// chain (a dropped recording runs transcribe → summarize →
-    /// action items without the operator touching a button). `None` for
-    /// every manually triggered job: a re-transcribe or a button press runs
-    /// exactly what was asked, nothing more.
+    /// action items → export without the operator touching a button). `None`
+    /// for every manually triggered job: a re-transcribe or a button press
+    /// runs exactly what was asked, nothing more.
     follow_up: Option<FollowUp>,
 }
 
 /// The next stage of the drop-to-insights chain.
 ///
 /// Deliberately not a generic "queue of next jobs": the chain is a fixed
-/// two-step ladder, and each stage names its successor so the whole plan
-/// never has to be carried around.
+/// ladder, and each stage names its successor so the whole plan never has
+/// to be carried around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FollowUp {
     /// Summarize the meeting the finished transcription wrote; then chain
     /// the action-items extraction.
     Summarize,
-    /// Extract action items; the chain ends here.
+    /// Extract action items; then chain the export document.
     ActionItems,
+    /// Assemble the share-ready export document (no LLM call); the chain
+    /// ends here.
+    Export,
 }
 
 /// What the worker has to do before it can submit a job.
@@ -327,10 +330,11 @@ impl JobRegistry {
     /// worker task.
     ///
     /// A drop is the start of the drop-to-insights chain: once its
-    /// transcription lands `Done`, a summarize is auto-enqueued, and once
-    /// that lands, an action-items extraction — so a dropped recording
-    /// comes out the other end with a transcript, a summary and its action
-    /// items without another click. (The chain is skipped while no LLM
+    /// transcription lands `Done`, a summarize is auto-enqueued; once that
+    /// lands, an action-items extraction; and once that lands, the export
+    /// document — so a dropped recording comes out the other end with a
+    /// transcript, a summary, its action items and a share-ready export
+    /// without another click. (The LLM stages are skipped while no LLM
     /// model is installed; see `queue_follow_up`.)
     pub async fn enqueue(&self, paths: Vec<PathBuf>) -> Vec<JobSnapshot> {
         let mut snapshots = Vec::with_capacity(paths.len());
@@ -750,25 +754,39 @@ async fn poll_until_terminal(
 /// `shared.service`/`shared.queue_tx` (not the instance the finished job
 /// was polled on), the same rule every fresh submission follows (E2).
 ///
-/// Skipped entirely -- silently, not as a failed job -- while `/health`
-/// reports no LLM model on disk: auto-spawning two guaranteed `model_load`
-/// failures per drop would turn a fresh install's job feed into noise. The
-/// operator's Summarize / Action items buttons still work the moment a
-/// model is installed.
+/// The LLM stages are skipped entirely -- silently, not as a failed job --
+/// while `/health` reports no LLM model on disk: auto-spawning two
+/// guaranteed `model_load` failures per drop would turn a fresh install's
+/// job feed into noise. The operator's Summarize / Action items buttons
+/// still work the moment a model is installed. The export stage makes no
+/// LLM call, so it carries no such gate -- and it is only ever reached
+/// through the LLM stages anyway.
 async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: FollowUp) {
-    let Some(meeting_dir) = finished.meeting_dir.clone() else {
+    let Some(finished_dir) = finished.meeting_dir.clone() else {
         return;
     };
 
-    let service = shared.service.read().await.clone();
-    let llm_model_present = service
-        .health()
-        .await
-        .ok()
-        .and_then(|health| health.llm_model_present)
-        .unwrap_or(false);
-    if !llm_model_present {
-        return;
+    // The meeting folder the next stage reads. A finished transcription's
+    // or summarize's `meeting_dir` is that folder itself; a finished
+    // action-items job's `meeting_dir` is its *output* folder
+    // (`<meeting>/action items`), while its `source_path` is the meeting
+    // folder it read.
+    let meeting_dir = match next {
+        FollowUp::Summarize | FollowUp::ActionItems => finished_dir,
+        FollowUp::Export => finished.source_path.clone(),
+    };
+
+    if next != FollowUp::Export {
+        let service = shared.service.read().await.clone();
+        let llm_model_present = service
+            .health()
+            .await
+            .ok()
+            .and_then(|health| health.llm_model_present)
+            .unwrap_or(false);
+        if !llm_model_present {
+            return;
+        }
     }
 
     let (kind, output_dir, follow_up) = match next {
@@ -780,6 +798,18 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         FollowUp::ActionItems => (
             LlmJobKind::ActionItems,
             path_string(&Path::new(&meeting_dir).join(ACTION_ITEMS_DIR_NAME)),
+            Some(FollowUp::Export),
+        ),
+        // The same `<meeting>/exports/<today>` folder `export_recording`
+        // uses (commands/llm.rs `dated_subdir`): one export per day,
+        // overwritten on re-run -- these are regenerable derived documents.
+        FollowUp::Export => (
+            LlmJobKind::Export,
+            path_string(
+                &Path::new(&meeting_dir)
+                    .join(EXPORTS_DIR_NAME)
+                    .join(today_yymmdd()),
+            ),
             None,
         ),
     };
@@ -1230,7 +1260,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_chains_summarize_then_action_items_in_order() {
+    fn a_drop_chains_summarize_action_items_then_export_in_order() {
         run(async {
             let dir = tempdir().expect("tempdir");
             let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
@@ -1251,11 +1281,12 @@ mod tests {
             )
             .await;
 
-            // The chain: summarize first, action items second, both over
-            // the transcription's meeting folder.
-            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            // The chain: summarize, then action items, then the export
+            // document -- all over the transcription's meeting folder.
+            let submissions = wait_for_llm_submissions(&fake, 3, Duration::from_secs(5)).await;
             assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Summarize);
             assert_eq!(submissions[1].kind, crate::service::LlmJobKind::ActionItems);
+            assert_eq!(submissions[2].kind, crate::service::LlmJobKind::Export);
 
             let meeting_dir = snapshot_meeting_dir(&registry, &snapshot.id).await;
             assert_eq!(submissions[0].input_path, meeting_dir);
@@ -1266,6 +1297,15 @@ mod tests {
                 "action items must land in the meeting's own artifact dir, got {:?}",
                 submissions[1].output_dir
             );
+            assert_eq!(submissions[2].input_path, meeting_dir);
+            let expected_export_dir = std::path::Path::new(&meeting_dir)
+                .join(vault::EXPORTS_DIR_NAME)
+                .join(crate::jobs::today_yymmdd());
+            assert_eq!(
+                std::path::Path::new(&submissions[2].output_dir),
+                expected_export_dir,
+                "the export must land in the meeting's dated exports folder"
+            );
 
             // Every chained stage is a tracked, visible job that reaches Done.
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1273,7 +1313,7 @@ mod tests {
                 let jobs = registry.list().await;
                 let mut types: Vec<&str> = jobs.iter().map(|j| j.job_type.as_str()).collect();
                 types.sort_unstable();
-                if types == ["action_items", "summarize", "transcribe"]
+                if types == ["action_items", "export", "summarize", "transcribe"]
                     && jobs.iter().all(|j| j.state == JobState::Done)
                 {
                     break;
