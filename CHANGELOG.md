@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.10.2 — 2026-08-25
+
+### Bug fixes
+
+- Block rename during active jobs, monotone extraction progress, thin vault rows
+
 ## 0.10.1 — 2026-08-24
 
 ### Bug fixes
