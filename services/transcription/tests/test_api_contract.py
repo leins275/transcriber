@@ -92,10 +92,10 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         "model_present": False,
         "cuda_runtime_present": None,
         # The LLM engine's counterpart fields (same E15 rule: reported from
-        # config, never by constructing an engine). There is no engine
-        # selector to report any more (FR-3): the built-in llama.cpp engine
-        # is the only one, and its GGUF is absent in a fresh tmp app dir.
-        "llm_model": "qwen3.6-35b-a3b",
+        # config, never by constructing an engine). The id is the curated
+        # catalog's default (`llm_catalog.DEFAULT_MODEL_ID`), and its GGUF
+        # is absent in a fresh tmp app dir.
+        "llm_model": "qwen3.5-9b",
         "llm_model_present": False,
         # `None` on this GPU-less-probed host, mirroring
         # `cuda_runtime_present`'s convention.

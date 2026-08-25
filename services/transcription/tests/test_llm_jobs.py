@@ -26,6 +26,9 @@ from transcription.jobs import TERMINAL_STATUSES, JobManager
 from transcription.ledger import Ledger
 
 MEETING_NAME = "260101 - Planning"
+# The share-ready export PDF name for `meeting_dir` (project `ELS`, the
+# meeting above): `<project> - <date> - <title>.pdf`.
+EXPORT_PDF_NAME = "ELS - 2026-01-01 - Planning.pdf"
 
 RUSSIAN_DIRECTIVE = "Write your entire answer in Russian."
 ENGLISH_DIRECTIVE = "Write your entire answer in English."
@@ -1107,7 +1110,7 @@ async def test_export_assembles_sections_in_order_and_renders_a_pdf(
         ]
         assert positions == sorted(positions)
 
-        pdf_bytes = (export_dir / "export.pdf").read_bytes()
+        pdf_bytes = (export_dir / EXPORT_PDF_NAME).read_bytes()
         assert pdf_bytes.startswith(b"%PDF"), "a real PDF was rendered"
     finally:
         await manager.aclose()
@@ -1204,7 +1207,7 @@ async def test_export_warns_on_the_job_when_the_pdf_font_degrades(
         job = manager.status(job_id)
 
         assert job.status == "succeeded"
-        assert (export_dir / "export.pdf").read_bytes().startswith(b"%PDF")
+        assert (export_dir / EXPORT_PDF_NAME).read_bytes().startswith(b"%PDF")
         assert [w for w in job.warnings if "latin" in w.lower()], (
             f"no font-degradation warning on the job: {job.warnings}"
         )
@@ -1264,7 +1267,7 @@ async def test_export_renders_cyrillic_with_embedded_fonts(
         job = manager.status(job_id)
         assert job.status == "succeeded", job.error_message
 
-        pdf_path = export_dir / "export.pdf"
+        pdf_path = export_dir / EXPORT_PDF_NAME
         base_fonts = embedded_base_fonts(pdf_path)
         assert any(name.endswith("+ArialMT") for name in base_fonts), (
             f"the export embeds no Cyrillic-capable Arial subset: {sorted(base_fonts)}"

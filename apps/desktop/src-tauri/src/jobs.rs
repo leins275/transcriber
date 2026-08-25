@@ -396,6 +396,36 @@ impl JobRegistry {
         })
     }
 
+    /// True while any non-terminal job exists at all. This is the
+    /// model-switch guard's question: selecting a different LLM model
+    /// restarts the sidecar, which would kill whatever is running --
+    /// transcriptions included, so this is deliberately stricter than the
+    /// per-meeting rename guard above.
+    pub async fn has_active_job(&self) -> bool {
+        self.shared.jobs.read().await.values().any(|job| {
+            !matches!(
+                job.state,
+                JobState::Done | JobState::Failed | JobState::Rejected
+            )
+        })
+    }
+
+    /// True while any non-terminal *model-loading* LLM job (summarize /
+    /// action items / facts) exists -- the model-delete guard's question:
+    /// never ask the service to unlink a GGUF a job may be about to mmap.
+    /// (`export` is LLM-flavored but never touches the model.)
+    pub async fn has_active_llm_job(&self) -> bool {
+        self.shared.jobs.read().await.values().any(|job| {
+            matches!(
+                job.job_type.as_str(),
+                "summarize" | "action_items" | "facts"
+            ) && !matches!(
+                job.state,
+                JobState::Done | JobState::Failed | JobState::Rejected
+            )
+        })
+    }
+
     /// Asks the service to cancel a job this app submitted.
     ///
     /// Returns `Ok(false)` when the job has no service-side id — it has not

@@ -153,6 +153,39 @@ export type LlmModelDownloadStatus = {
   gpu_build_present: boolean | null;
 };
 
+/** One curated model's download slot (the plain download fields; the
+ * health-derived extras live once on `LlmModelsView`). */
+export type LlmModelDownload = {
+  state: "idle" | "downloading" | "verifying" | "complete" | "cancelled" | "error";
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  error_kind: string | null;
+  error_message: string | null;
+};
+
+/** One row of the curated LLM model catalog. */
+export type LlmCatalogModel = {
+  id: string;
+  label: string;
+  file: string;
+  /** Approximate GGUF size for display; `null` for a hand-configured model
+   * outside the catalog. */
+  size_bytes: number | null;
+  catalog: boolean;
+  present: boolean;
+  active: boolean;
+  download: LlmModelDownload;
+};
+
+/** `list_llm_models` response: the catalog plus which model is active and
+ * the one machine-level field the rows share. */
+export type LlmModelsView = {
+  active: string;
+  gpu_build_present: boolean | null;
+  models: LlmCatalogModel[];
+};
+
 // Service-log extension to the IPC contract: one row of F2's own sqlite job
 // ledger (`GET /v1/jobs`), proxied through `list_service_jobs`. Every field
 // but `job_id`/`status` is nullable because the row is filled in over the

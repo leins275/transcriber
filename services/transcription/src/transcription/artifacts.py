@@ -4,7 +4,8 @@ Owns the on-disk conventions for derived knowledge:
 
 - ``<meeting>/action items/<slug>/<slug>.md`` (+ ``screenshot-*.png``)
 - ``<meeting>/facts/<slug>/<slug>.md``        (+ ``screenshot-*.png``)
-- ``<meeting>/exports/<YYMMDD>/export.md``    (+ ``export.pdf``)
+- ``<meeting>/exports/<YYMMDD>/export.md``    (+ ``<project> - <date> - <title>.pdf``,
+  see :func:`export_pdf_filename`)
 
 Extracted items live *inside the recording's own folder*, alongside its
 ``transcript.json``, ``summary.md`` and ``exports/`` -- so they travel with
@@ -174,6 +175,40 @@ def source_date_from_meeting_name(name: str) -> str | None:
     except ValueError:
         return None
     return parsed.isoformat()
+
+
+_MAX_EXPORT_STEM_CHARS = 120
+
+
+def _filename_part(part: str) -> str:
+    """One human-facing filename component: Windows-illegal characters
+    replaced, whitespace collapsed -- case, spaces and non-Latin text kept
+    (unlike ``slugify``, this names a file people share, not a machine
+    slug)."""
+    cleaned = _ILLEGAL.sub("-", part)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip("-. ")
+
+
+def export_pdf_filename(meeting_dir: Path) -> str:
+    """The export PDF's share-ready name: ``<project> - <date> - <title>.pdf``.
+
+    Anchored on the meeting folder exactly like ``jobs._extract_sync``'s
+    provenance fields: the project is the meeting's parent folder (dropped
+    for meetings under the reserved ``unsorted/`` root), the date is the
+    ISO form of the folder's leading ``YYMMDD``, and the title is the rest
+    of the folder name. Absent parts drop out of the name; if nothing
+    usable remains the historical ``export.pdf`` is the fallback.
+    """
+    parent_name = meeting_dir.parent.name
+    project = None if parent_name.casefold() == UNSORTED_DIR_NAME else parent_name
+    iso_date = source_date_from_meeting_name(meeting_dir.name)
+    title = meeting_dir.name
+    if iso_date is not None:
+        title = title[6:].lstrip(" -")
+    cleaned = [c for c in (_filename_part(p) for p in (project, iso_date, title) if p) if c]
+    stem = " - ".join(cleaned)[:_MAX_EXPORT_STEM_CHARS].rstrip("-. ")
+    return f"{stem}.pdf" if stem else "export.pdf"
 
 
 def fit_slug(parent: Path, slug: str) -> str:

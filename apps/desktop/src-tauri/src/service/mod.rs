@@ -113,6 +113,43 @@ pub trait TranscriptionService: Send + Sync {
             detail: "llm model download is not supported by this service".to_string(),
         })
     }
+
+    /// `GET /v1/llm-models` -- the curated LLM catalog with per-model
+    /// presence, active flag and download slot status. Default: unsupported
+    /// (see `model_download_status`).
+    async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the llm model catalog is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/llm-models/{id}/download`. Default: unsupported.
+    async fn start_llm_model_download_for(
+        &self,
+        _model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the llm model catalog is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/llm-models/{id}/download` (cancel). Default: unsupported.
+    async fn cancel_llm_model_download_for(
+        &self,
+        _model_id: &str,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the llm model catalog is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/llm-models/{id}` -- delete a downloaded model's file.
+    /// Default: unsupported.
+    async fn delete_llm_model(&self, _model_id: &str) -> Result<LlmModelsStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the llm model catalog is not supported by this service".to_string(),
+        })
+    }
 }
 
 /// The derived (LLM) job kinds F2 runs over already-transcribed material.
@@ -342,6 +379,29 @@ pub struct ModelDownloadStatus {
     /// CUDA-runtime phase has failed and the setup continued into the model
     /// phase anyway (E4). Verbatim backend text, never re-worded here.
     pub cuda_warning: Option<String>,
+}
+
+/// One curated model row from `GET /v1/llm-models`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LlmCatalogModel {
+    pub id: String,
+    pub label: String,
+    pub file: String,
+    /// Approximate GGUF size for UI display; `None` for the escape-hatch
+    /// row (a hand-configured model outside the catalog).
+    pub size_bytes: Option<u64>,
+    /// `false` for the escape-hatch row.
+    pub catalog: bool,
+    pub present: bool,
+    pub active: bool,
+    pub download: ModelDownloadStatus,
+}
+
+/// `GET /v1/llm-models` response: the catalog plus which model is active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LlmModelsStatus {
+    pub active: String,
+    pub models: Vec<LlmCatalogModel>,
 }
 
 /// Every way a `TranscriptionService` call can fail (FR-13, FR-14, NFR-6).

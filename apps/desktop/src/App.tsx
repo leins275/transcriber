@@ -34,7 +34,7 @@ import type {
   AppError,
   ArtifactKind,
   JobType,
-  LlmModelDownloadStatus,
+  LlmModelsView,
   MeetingUpdate,
   ServiceStatusView,
   SettingsView,
@@ -157,40 +157,76 @@ function App() {
       });
   }, [serviceStatus.state]);
 
-  // The assistant (GGUF) model's status, same gating; polled while a
-  // download is in flight so Settings shows live progress.
-  const [llmModelStatus, setLlmModelStatus] = useState<LlmModelDownloadStatus | null>(null);
+  // The assistant (LLM) model catalog, same gating; polled while any
+  // model's download is in flight so Settings shows live progress. The
+  // "ready" gate also refetches after a model switch: selecting a model
+  // restarts the sidecar, and the status walks back to ready.
+  const [llmModels, setLlmModels] = useState<LlmModelsView | null>(null);
   useEffect(() => {
     if (serviceStatus.state !== "ready") return;
     api
-      .llmModelDownloadStatus()
-      .then(setLlmModelStatus)
+      .listLlmModels()
+      .then(setLlmModels)
       .catch(() => {
         // Older service / unreachable: stays `null`, the row renders inert.
       });
   }, [serviceStatus.state]);
+  const anyLlmTransferring =
+    llmModels?.models.some(
+      (model) => model.download.state === "downloading" || model.download.state === "verifying",
+    ) ?? false;
   useEffect(() => {
-    if (llmModelStatus?.state !== "downloading" && llmModelStatus?.state !== "verifying") return;
+    if (!anyLlmTransferring) return;
     const handle = setInterval(() => {
       api
-        .llmModelDownloadStatus()
-        .then(setLlmModelStatus)
+        .listLlmModels()
+        .then(setLlmModels)
         .catch(() => {});
     }, 1500);
     return () => clearInterval(handle);
-  }, [llmModelStatus?.state]);
+  }, [anyLlmTransferring]);
 
-  const handleStartLlmDownload = useCallback(() => {
+  const handleStartLlmModelDownload = useCallback((modelId: string) => {
     api
-      .startLlmModelDownload()
-      .then(setLlmModelStatus)
+      .startLlmModelDownloadFor(modelId)
+      .then(setLlmModels)
       .catch((error: AppError) => setLastError(error));
   }, []);
 
-  const handleCancelLlmDownload = useCallback(() => {
+  const handleCancelLlmModelDownload = useCallback((modelId: string) => {
     api
-      .cancelLlmModelDownload()
-      .then(setLlmModelStatus)
+      .cancelLlmModelDownloadFor(modelId)
+      .then(setLlmModels)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+
+  const handleDeleteLlmModel = useCallback((modelId: string) => {
+    api
+      .deleteLlmModel(modelId)
+      .then(setLlmModels)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+
+  const handleSelectLlmModel = useCallback((modelId: string) => {
+    api
+      .selectLlmModel(modelId)
+      .then(() => {
+        // The sidecar restarts in the background; the service-status effect
+        // above refetches the catalog when it is back. Optimistically flip
+        // the active flag so the click lands immediately.
+        setLlmModels((current) =>
+          current
+            ? {
+                ...current,
+                active: modelId,
+                models: current.models.map((model) => ({
+                  ...model,
+                  active: model.id === modelId,
+                })),
+              }
+            : current,
+        );
+      })
       .catch((error: AppError) => setLastError(error));
   }, []);
 
@@ -464,12 +500,14 @@ function App() {
               settings={settings}
               serviceStatus={serviceStatus}
               modelStatus={modelStatus}
-              llmModelStatus={llmModelStatus}
+              llmModels={llmModels}
               appVersion={version}
               onBack={() => setSettingsOpen(false)}
               onChangeRoot={handleChooseFolder}
-              onStartLlmDownload={handleStartLlmDownload}
-              onCancelLlmDownload={handleCancelLlmDownload}
+              onStartLlmModelDownload={handleStartLlmModelDownload}
+              onCancelLlmModelDownload={handleCancelLlmModelDownload}
+              onDeleteLlmModel={handleDeleteLlmModel}
+              onSelectLlmModel={handleSelectLlmModel}
             />
           ) : inSetup ? (
             <FirstRun

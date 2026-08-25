@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from transcription import llm_catalog
 from transcription.config import Config, ConfigError, load_config
 
 # The cloud-only config surface removed with the cloud STT provider and the
@@ -504,3 +505,97 @@ def test_language_unset_stays_none(tmp_app_dir: Path) -> None:
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 
     assert load_config(env=env).language is None
+
+
+def test_llm_model_defaults_to_the_catalog_default_on_a_fresh_install(
+    tmp_app_dir: Path,
+) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    default = llm_catalog.get(llm_catalog.DEFAULT_MODEL_ID)
+    assert default is not None
+    assert cfg.llm_model == llm_catalog.DEFAULT_MODEL_ID
+    assert cfg.llm_model_repo == default.repo
+    assert cfg.llm_model_revision == default.revision
+    assert cfg.llm_model_file == default.file
+    assert cfg.llm_ctx == 32768
+
+
+def test_llm_model_migration_probe_keeps_a_legacy_install_on_its_model(
+    tmp_app_dir: Path,
+) -> None:
+    """An install from before the catalog: the 35B GGUF is on disk and
+    config.json has no `llm_model` key -- it must stay on that model, not
+    silently start needing a 6.6 GB download."""
+    legacy = llm_catalog.get(llm_catalog.LEGACY_MODEL_ID)
+    assert legacy is not None
+    llm_dir = tmp_app_dir / "models" / "llm"
+    llm_dir.mkdir(parents=True)
+    (llm_dir / legacy.file).write_bytes(b"weights")
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.llm_model == llm_catalog.LEGACY_MODEL_ID
+    assert cfg.llm_model_repo == legacy.repo
+    assert cfg.llm_model_revision == legacy.revision
+    assert cfg.llm_model_file == legacy.file
+
+
+def test_llm_model_id_from_the_config_file_resolves_against_the_catalog(
+    tmp_app_dir: Path,
+) -> None:
+    _write_config(tmp_app_dir, {"llm_model": llm_catalog.LEGACY_MODEL_ID})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    legacy = llm_catalog.get(llm_catalog.LEGACY_MODEL_ID)
+    assert legacy is not None
+    assert cfg.llm_model_file == legacy.file
+
+
+def test_llm_model_explicit_repo_and_file_beat_the_catalog(tmp_app_dir: Path) -> None:
+    """The hand-picked-GGUF escape hatch: explicit pins win over the catalog
+    entry the id would resolve to."""
+    _write_config(
+        tmp_app_dir,
+        {
+            "llm_model": llm_catalog.DEFAULT_MODEL_ID,
+            "llm_model_repo": "someone/custom-GGUF",
+            "llm_model_revision": "deadbeef",
+            "llm_model_file": "custom.gguf",
+        },
+    )
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.llm_model == llm_catalog.DEFAULT_MODEL_ID
+    assert cfg.llm_model_repo == "someone/custom-GGUF"
+    assert cfg.llm_model_revision == "deadbeef"
+    assert cfg.llm_model_file == "custom.gguf"
+
+
+def test_llm_model_outside_the_catalog_with_a_file_is_allowed(tmp_app_dir: Path) -> None:
+    _write_config(tmp_app_dir, {"llm_model": "my-model", "llm_model_file": "my-model.gguf"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.llm_model == "my-model"
+    assert cfg.llm_model_file == "my-model.gguf"
+
+
+def test_llm_model_unknown_id_without_a_file_raises_naming_the_catalog(
+    tmp_app_dir: Path,
+) -> None:
+    _write_config(tmp_app_dir, {"llm_model": "no-such-model"})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(env=env)
+    for model_id in llm_catalog.known_ids():
+        assert model_id in str(excinfo.value)

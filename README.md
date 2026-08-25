@@ -8,6 +8,16 @@ My setup (where this software kinda works):
 - Win 11 + RTX 4070 12GB VRAM + 64 GB ddr5 RAM 6000mhz (Primary machine)
 - MacBook Air M4 16 GB RAM, 256 GB ssd (Installer available, but less tested)
 
+# Models
+
+Everything runs locally; the app downloads the models on first use.
+
+- **Speech-to-text**: `faster-whisper large-v3` (~3 GB).
+- **Assistant LLM** (summaries, action items, facts) — pick one in Settings:
+  - **Qwen3.5 9B** Q5_K_M (~6.6 GB) — the default. Fits fully into a 12 GB GPU, so it's fast.
+  - **Qwen3.6 35B A3B** Q4_K_M (~20 GB) — higher quality, but on a 12 GB GPU most of it runs from RAM, so it's noticeably slower.
+- **GPU acceleration** (optional, NVIDIA): the CUDA build of the local llama.cpp runtime (~460 MB), offered in Settings.
+
 # Main Idea
 
 As a person that simultaneously handle several projects, I like to take the most of the all condacted & participated meetings.
