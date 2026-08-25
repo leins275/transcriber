@@ -17,6 +17,13 @@ from pydantic import BaseModel, Field, ValidationError
 ItemType = Literal["requirement", "epic", "task", "spike"]
 FactKind = Literal["fact", "answered_question"]
 
+# The most timestamps one item may cite. Becomes `maxItems` in the JSON
+# schema and so a hard bound in the compiled grammar: a small local model
+# left unbounded will happily cite every segment of the meeting (a 260825
+# field report saw ~300 citations on one item), flooding the output-token
+# cap with numbers nothing uses -- screenshots cap at 6 per item anyway.
+MAX_ITEM_TIMESTAMPS = 20
+
 
 class ActionItemOut(BaseModel):
     """One extracted action item, as the model reports it."""
@@ -25,7 +32,7 @@ class ActionItemOut(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description_md: str = ""
     # Seconds from the start of the recording, cited from the [m:ss] markers.
-    timestamps: list[float] = Field(default_factory=list)
+    timestamps: list[float] = Field(default_factory=list, max_length=MAX_ITEM_TIMESTAMPS)
 
 
 class ActionItemsOut(BaseModel):
@@ -38,7 +45,7 @@ class FactOut(BaseModel):
     kind: FactKind = "fact"
     title: str = Field(min_length=1, max_length=200)
     description_md: str = ""
-    timestamps: list[float] = Field(default_factory=list)
+    timestamps: list[float] = Field(default_factory=list, max_length=MAX_ITEM_TIMESTAMPS)
 
 
 class FactsOut(BaseModel):

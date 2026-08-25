@@ -870,7 +870,11 @@ class JobManager:
             return text
 
         def split_chunk(chunk: str, depth: int) -> list[str]:
-            piece_budget = max(64, budget >> (depth + 1))
+            # Halved against what the chunk actually holds, not just the
+            # configured budget: a transcript far below the budget would
+            # otherwise come back as one identical piece and the retry
+            # ladder would never run (the 260825 field report).
+            piece_budget = max(64, min(budget >> (depth + 1), provider.count_tokens(chunk) // 2))
             return chunk_lines(chunk.splitlines(), piece_budget, count_tokens=provider.count_tokens)
 
         try:
@@ -979,7 +983,11 @@ class JobManager:
                 job, provider, messages_fn(chunk), wrapper_cls, progress=progress
             )
         except LlmTruncatedError as truncated:
-            half_budget = max(64, budget_tokens // 2)
+            # Halved against the chunk's actual size, not just the budget it
+            # was cut under: with a large context the whole transcript can sit
+            # far below the budget, and halving the budget alone would return
+            # the same single chunk and end the ladder on its first rung.
+            half_budget = max(64, min(budget_tokens, provider.count_tokens(chunk)) // 2)
             sub_chunks = (
                 chunk_lines(chunk.splitlines(), half_budget, count_tokens=provider.count_tokens)
                 if depth < MAX_SPLIT_DEPTH

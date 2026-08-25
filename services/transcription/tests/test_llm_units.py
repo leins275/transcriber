@@ -3,6 +3,7 @@ chunking, structured-output shapes, artifact writers, screenshot planning."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from transcription.llm.gguf_meta import (
 )
 from transcription.llm.prompts import format_timestamp, render_transcript_lines
 from transcription.llm.shapes import (
+    MAX_ITEM_TIMESTAMPS,
     ActionItemsOut,
     FactsOut,
     LlmOutputError,
@@ -162,6 +164,22 @@ def test_parse_llm_json_raises_with_the_raw_output_attached() -> None:
 
     with pytest.raises(LlmOutputError):
         parse_llm_json('{"items": [{"type": "wrong-type", "title": "T"}]}', ActionItemsOut)
+
+
+def test_item_timestamps_are_capped_in_the_schema_and_on_validation() -> None:
+    # The 260825 field report: an unbounded timestamps array let the model
+    # cite every segment of the meeting (~300 stamps on one item), flooding
+    # the output-token cap. The cap must reach the grammar via `maxItems`.
+    for wrapper in (ActionItemsOut, FactsOut):
+        schema = wrapper.model_json_schema()
+        item_schema = next(iter(schema["$defs"].values()))
+        assert item_schema["properties"]["timestamps"]["maxItems"] == MAX_ITEM_TIMESTAMPS
+    flood = [float(i) for i in range(MAX_ITEM_TIMESTAMPS + 1)]
+    with pytest.raises(LlmOutputError):
+        parse_llm_json(
+            json.dumps({"items": [{"type": "task", "title": "T", "timestamps": flood}]}),
+            ActionItemsOut,
+        )
 
 
 def test_merge_items_dedupes_on_normalized_title_and_unions_timestamps() -> None:

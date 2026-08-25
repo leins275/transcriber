@@ -159,7 +159,8 @@ _ACTION_ITEM_RULES = (
     "'spike' (a time-boxed investigation to answer a question). For each item give "
     "a short imperative title, a Markdown description with all relevant context "
     "from the discussion, and the timestamps (in seconds, from the [m:ss] markers) "
-    "of the transcript moments where it was discussed."
+    "of the few most important transcript moments where it was discussed -- not "
+    "every mention."
 )
 
 
@@ -191,7 +192,8 @@ _FACT_RULES = (
     "question is a question someone asked that got a substantive answer. For each, "
     "give a short declarative title, a Markdown description (for answered questions: "
     "the question and its answer), and the timestamps (in seconds, from the [m:ss] "
-    "markers) of the transcript moments involved."
+    "markers) of the few most important transcript moments involved -- not every "
+    "mention."
 )
 
 
