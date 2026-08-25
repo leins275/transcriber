@@ -384,8 +384,9 @@ pub struct AppState {
     /// meetings-root mid-session does not silently discard the operator's
     /// `FakeService` and spawn a real `uv` sidecar in its place.
     pub fake_mode: bool,
-    /// The id-keyed lookup [`list_vault_handler`] populates wholesale on
-    /// every call (replacing whatever was there before) and
+    /// The id-keyed lookup [`list_vault_handler`] rebuilds on every call
+    /// (an id stays stable while its meeting exists; a vanished meeting's
+    /// id drops out and fails closed) and
     /// [`reveal_vault_entry_handler`] reads from -- the same "look the
     /// target up by an opaque id the server handed out, never trust a raw
     /// path from the UI" pattern `registry`/`reveal_job_handler` already
@@ -799,9 +800,13 @@ pub async fn service_status_handler(state: &AppState) -> Result<ServiceStatusVie
 /// destination) -- an entry that somehow resolves outside the configured
 /// root is dropped rather than shown or crashing the whole call.
 ///
-/// Replaces `state.vault_index` wholesale with the ids this call just
-/// issued: an id from a previous `list_vault` call is no longer valid for
-/// `reveal_vault_entry` once a newer call has run.
+/// Replaces `state.vault_index` with the ids this call just issued, but an
+/// id whose meeting is still on disk keeps its value from the previous
+/// call: the UI re-lists the vault after every finished job, and re-minting
+/// every id there would invalidate the id of the recording page the
+/// operator has open — silently bouncing them back to the library. An id
+/// whose meeting is gone drops out of the index and fails closed, exactly
+/// as before.
 pub async fn list_vault_handler(state: &AppState) -> Result<Vec<VaultMeetingView>, AppError> {
     let root = state
         .settings
@@ -821,23 +826,41 @@ pub async fn list_vault_handler(state: &AppState) -> Result<Vec<VaultMeetingView
             })?
     };
 
+    // Inverted view of the current index, to keep an already-issued id
+    // alive for a meeting that is still present (see the doc comment).
+    let previous_ids: HashMap<PathBuf, String> = state
+        .vault_index
+        .read()
+        .await
+        .iter()
+        .map(|(id, dir)| (dir.clone(), id.clone()))
+        .collect();
+
     let mut views = Vec::with_capacity(entries.len());
     let mut index = HashMap::with_capacity(entries.len());
     for entry in entries {
         // Defense in depth (see the doc comment above): drop an entry F1
         // somehow returned outside the configured root rather than
-        // surfacing or crashing on it.
-        if paths::ensure_inside(&root_path, &entry.meeting_dir).is_err() {
-            continue;
-        }
+        // surfacing or crashing on it. The canonical, verbatim-stripped
+        // form is also what goes into the index and the view -- the same
+        // shape `update_vault_entry` records after a rename, so a renamed
+        // meeting keeps matching its index entry (and its id) here.
+        let canonical = match paths::ensure_inside(&root_path, &entry.meeting_dir) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        let meeting_dir = paths::strip_verbatim(&canonical);
 
-        let id = Uuid::new_v4().to_string();
-        index.insert(id.clone(), entry.meeting_dir.clone());
+        let id = previous_ids
+            .get(&meeting_dir)
+            .cloned()
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        index.insert(id.clone(), meeting_dir.clone());
         views.push(VaultMeetingView {
             id,
             project: entry.project,
             meeting_name: entry.meeting_name,
-            meeting_dir: entry.meeting_dir.to_string_lossy().into_owned(),
+            meeting_dir: meeting_dir.to_string_lossy().into_owned(),
             has_source: entry.has_source,
             has_transcript: entry.has_transcript,
         });
@@ -1676,10 +1699,38 @@ mod tests {
     }
 
     #[test]
-    fn reveal_vault_entry_on_a_stale_id_from_a_previous_list_vault_call_is_refused() {
-        // `list_vault_handler` replaces `vault_index` wholesale on every
-        // call -- an id from an older snapshot must not still resolve
-        // after a newer `list_vault` call has run.
+    fn list_vault_keeps_a_meetings_id_stable_across_calls_while_it_exists() {
+        // The UI re-lists the vault after every finished job. A meeting
+        // still on disk must keep the id the previous listing issued --
+        // otherwise the recording page the operator has open loses its
+        // entry on every refresh and bounces them back to the library.
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let settings = settings_with_root(root.path());
+            let state = state_with(
+                settings,
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+            );
+
+            let meeting_dir = root.path().join("ELS").join("260101 - A meeting");
+            fs::create_dir_all(&meeting_dir).expect("create fixture dir");
+
+            let first = list_vault_handler(&state).await.expect("first list_vault");
+            let second = list_vault_handler(&state).await.expect("second list_vault");
+
+            assert_eq!(
+                first[0].id, second[0].id,
+                "a still-present meeting must keep its id across listings"
+            );
+        });
+    }
+
+    #[test]
+    fn reveal_vault_entry_on_an_id_whose_meeting_is_gone_is_refused_after_relisting() {
+        // Ids survive refreshes only while their meeting exists: once the
+        // folder is gone, the next listing drops the id from the index and
+        // it fails closed, exactly as the wholesale replacement used to.
         run(async {
             let root = tempdir().expect("tempdir");
             let settings = settings_with_root(root.path());
@@ -1695,13 +1746,14 @@ mod tests {
             let first = list_vault_handler(&state).await.expect("first list_vault");
             let stale_id = first[0].id.clone();
 
+            fs::remove_dir_all(&meeting_dir).expect("remove fixture dir");
             list_vault_handler(&state)
                 .await
-                .expect("second list_vault replaces the index");
+                .expect("second list_vault drops the vanished meeting");
 
             let err = reveal_vault_entry_handler(&state, &stale_id)
                 .await
-                .expect_err("a stale id from a superseded listing must be refused");
+                .expect_err("an id whose meeting vanished must be refused");
             assert_eq!(err.kind(), crate::error::ErrorKind::InvalidArgument);
         });
     }

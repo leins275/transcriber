@@ -16,13 +16,15 @@ import type {
  * composes rather than re-implements them — the same split `useJobs` makes
  * for the session's job feed.
  *
- * `update` and `remove` edit the list **in place** instead of re-fetching.
- * That is deliberate: `list_vault` reissues every entry id on each call, so a
- * refresh after every rename would invalidate the id of the row the operator
- * is looking at and collapse whatever they had expanded. The Rust side keeps
- * a renamed meeting's id stable and returns its updated view, which is
- * exactly enough to patch one row; the list is then re-sorted locally with
- * the backend's own ordering rule, since a rename can change a meeting's date.
+ * `update` and `remove` edit the list **in place** instead of re-fetching —
+ * a one-row change needs no full vault rescan. The Rust side keeps a renamed
+ * meeting's id stable and returns its updated view, which is exactly enough
+ * to patch one row; the list is then re-sorted locally with the backend's
+ * own ordering rule, since a rename can change a meeting's date. Full
+ * refreshes also keep ids stable for meetings still on disk (`list_vault`
+ * reuses the ids it issued before), so the recording page that is open
+ * during the after-each-job refresh keeps its entry instead of bouncing the
+ * operator back to the library.
  */
 export function useVault() {
   const [entries, setEntries] = useState<VaultMeetingView[]>([]);

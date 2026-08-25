@@ -1,6 +1,7 @@
 import styles from "./AppHeader.module.css";
 import { Logo } from "./Logo";
 import { serviceStatusLabel } from "../lib/serviceLabel";
+import type { ActiveJobView } from "../lib/activeJob";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
 import type { ServiceStatusView } from "../types";
 
@@ -11,6 +12,14 @@ export type AppHeaderProps = {
    * the header itself says where you are. */
   settingsOpen: boolean;
   onToggleSettings: () => void;
+  /** The in-flight job the header narrates instead of the service-status
+   * chip (mockup 7a) -- passed only while the operator is away from the
+   * main view, where the queue itself is not visible. `null` keeps the
+   * plain status chip. */
+  activeJob?: ActiveJobView | null;
+  /** Fired from the progress chip -- returns to the Recordings list, where
+   * the full queue lives. */
+  onShowRecordings?: () => void;
 };
 
 /**
@@ -20,6 +29,11 @@ export type AppHeaderProps = {
  * formats -- lives on the Settings page now; only what changes while you
  * watch (service state) stays permanently on screen.
  *
+ * While a job is in flight and the operator is away from the main view, the
+ * status chip gives way to that job's live progress (mockup 7a) -- the one
+ * place the running pipeline stays visible without yanking anyone back to
+ * the library; clicking it returns to Recordings deliberately instead.
+ *
  * Presentational only: no invoke, no listen, no fetch (T6).
  */
 export function AppHeader({
@@ -27,6 +41,8 @@ export function AppHeader({
   modelStatus,
   settingsOpen,
   onToggleSettings,
+  activeJob = null,
+  onShowRecordings,
 }: AppHeaderProps) {
   const label = serviceStatusLabel(serviceStatus.state, modelStatus?.cuda_runtime_present);
   const modelSuffix = modelStatus?.model_present ? " · large-v3" : "";
@@ -36,11 +52,38 @@ export function AppHeader({
       <Logo size={22} />
       <span className={styles.brand}>Transcriber</span>
       <div className={styles.right}>
-        <span className={styles.status}>
-          <span className={styles.dot} data-state={serviceStatus.state} />
-          {label}
-          {modelSuffix}
-        </span>
+        {activeJob ? (
+          <button
+            type="button"
+            className={styles.jobChip}
+            title="Back to Recordings"
+            onClick={onShowRecordings}
+          >
+            <svg
+              className={styles.jobSpinner}
+              aria-hidden="true"
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            >
+              <circle cx="12" cy="12" r="9" strokeDasharray="34 22"></circle>
+            </svg>
+            <span className={styles.jobLabel}>{activeJob.label}</span>
+            {activeJob.percent != null && (
+              <span className={styles.jobPercent}>· {activeJob.percent}%</span>
+            )}
+          </button>
+        ) : (
+          <span className={styles.status}>
+            <span className={styles.dot} data-state={serviceStatus.state} />
+            {label}
+            {modelSuffix}
+          </span>
+        )}
         <span className={styles.divider} aria-hidden="true" />
         <button
           type="button"

@@ -339,6 +339,90 @@ describe("App vault browser", () => {
     await settle();
   });
 
+  it("narrates the in-flight job in the header off the main view, and the chip returns to Recordings", async () => {
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry({ has_transcript: false })];
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
+    await user.click(screen.getByText("Security issue"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /recordings/i })).toBeInTheDocument(),
+    );
+
+    await emit(
+      "jobs://updated",
+      buildJob({
+        id: "job-run",
+        state: "running",
+        file_name: "ELS - 260812 - Incident review.mp4",
+        classification: "sorted",
+        progress: 0.42,
+      }),
+    );
+
+    const chip = await screen.findByRole("button", {
+      name: /Transcribing “ELS - Incident review”/,
+    });
+    expect(chip).toHaveTextContent("· 42%");
+    // Narrated in the header, not by yanking the operator off the page.
+    expect(screen.getByRole("region", { name: /^recording$/i })).toBeInTheDocument();
+
+    await user.click(chip);
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument(),
+    );
+    // Back on the main view the queue itself is visible -- no chip.
+    expect(
+      screen.queryByRole("button", { name: /Transcribing “ELS - Incident review”/ }),
+    ).not.toBeInTheDocument();
+    await settle();
+  });
+
+  it("keeps the open recording page when a job finishes and the vault refreshes", async () => {
+    // The refresh after a terminal job re-lists the vault; the Rust side
+    // keeps a still-present meeting's id stable, so the page must survive
+    // instead of bouncing back to the library.
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault") return [buildVaultEntry({ has_transcript: false })];
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
+    await user.click(screen.getByText("Security issue"));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /^recording$/i })).toBeInTheDocument(),
+    );
+
+    await emit(
+      "jobs://updated",
+      buildJob({
+        id: "job-done",
+        state: "done",
+        meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue",
+      }),
+    );
+    await flush();
+
+    expect(screen.getByRole("region", { name: /^recording$/i })).toBeInTheDocument();
+    await settle();
+  });
+
   it("offers no per-row Reveal or Transcript buttons in the library list", async () => {
     // Those actions live on the recording's own page now; the list keeps
     // only the row itself (open) and the group's "Open project" link.

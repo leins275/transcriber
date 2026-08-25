@@ -49,6 +49,42 @@ describe("AppHeader", () => {
     expect(screen.queryByText(/large-v3/)).not.toBeInTheDocument();
   });
 
+  it("replaces the status chip with the in-flight job's progress, and the chip returns to Recordings", async () => {
+    const user = userEvent.setup();
+    const onShowRecordings = vi.fn();
+    render(
+      <AppHeader
+        serviceStatus={readyStatus}
+        modelStatus={modelStatus({ cuda_runtime_present: true })}
+        settingsOpen={false}
+        onToggleSettings={() => {}}
+        activeJob={{ label: "Transcribing “ELS - Incident review”", percent: 42 }}
+        onShowRecordings={onShowRecordings}
+      />,
+    );
+
+    expect(screen.queryByText(/Ready · GPU/)).not.toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: /Transcribing “ELS - Incident review”/ });
+    expect(chip).toHaveTextContent("· 42%");
+    await user.click(chip);
+    expect(onShowRecordings).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the percent from the progress chip while it is unreported", () => {
+    render(
+      <AppHeader
+        serviceStatus={readyStatus}
+        modelStatus={null}
+        settingsOpen={false}
+        onToggleSettings={() => {}}
+        activeJob={{ label: "Summarizing “Weekly sync”", percent: null }}
+        onShowRecordings={() => {}}
+      />,
+    );
+    expect(screen.getByText("Summarizing “Weekly sync”")).toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+  });
+
   it("fires onToggleSettings from the gear, which reflects the open state", async () => {
     const user = userEvent.setup();
     const onToggleSettings = vi.fn();
