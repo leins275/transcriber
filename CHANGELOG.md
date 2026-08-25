@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.11.1 — 2026-08-25
+
+### Bug fixes
+
+- **llm**: Split truncated chunks by their own size; cap item timestamps
+
 ## 0.11.0 — 2026-08-25
 
 ### Documentation
