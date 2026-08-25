@@ -3,6 +3,16 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.11.0 — 2026-08-25
+
+### Documentation
+
+- Updated readme
+
+### Features
+
+- **llm**: Curated model catalog with Qwen3.5-9B default, share-ready export PDF name
+
 ## 0.10.2 — 2026-08-25
 
 ### Bug fixes
