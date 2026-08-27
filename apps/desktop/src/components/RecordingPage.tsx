@@ -318,11 +318,7 @@ export function RecordingPage({
             >
               {copied ? "Copied" : "Copy"}
             </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => onReveal(entry.id)}
-            >
+            <button type="button" className="btn btn-secondary" onClick={() => onReveal(entry.id)}>
               Reveal in Explorer
             </button>
             <button
