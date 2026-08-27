@@ -318,16 +318,13 @@ export function RecordingPage({
             >
               {copied ? "Copied" : "Copy"}
             </button>
-            {entry.has_transcript && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={exporting}
-                onClick={() => void runLlm(onExportPdf)}
-              >
-                {exporting ? "Exporting…" : "Export PDF"}
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => onReveal(entry.id)}
+            >
+              Reveal in Explorer
+            </button>
             <button
               type="button"
               className="btn btn-secondary"
@@ -393,14 +390,17 @@ export function RecordingPage({
                       <hr className={styles.menuDivider} />
                     </>
                   )}
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={styles.menuItem}
-                    onClick={closeMenuAnd(() => onReveal(entry.id))}
-                  >
-                    Reveal in Explorer
-                  </button>
+                  {entry.has_transcript && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={styles.menuItem}
+                      disabled={exporting}
+                      onClick={closeMenuAnd(() => void runLlm(onExportPdf))}
+                    >
+                      {exporting ? "Exporting…" : "Export PDF"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     role="menuitem"

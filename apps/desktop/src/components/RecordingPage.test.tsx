@@ -263,15 +263,25 @@ describe("RecordingPage", () => {
     expect(onDelete).toHaveBeenCalledWith("v-9");
   });
 
-  it("reveals in Explorer from the overflow menu", async () => {
+  it("reveals in Explorer from the toolbar", async () => {
     const onReveal = vi.fn();
     const user = userEvent.setup();
     renderPage({ entry: buildEntry({ id: "v-9" }), onReveal });
 
-    await user.click(screen.getByRole("button", { name: /more actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: /reveal in explorer/i }));
+    await user.click(screen.getByRole("button", { name: /reveal in explorer/i }));
 
     expect(onReveal).toHaveBeenCalledWith("v-9");
+  });
+
+  it("exports a PDF from the overflow menu", async () => {
+    const onExportPdf = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onExportPdf });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: /export pdf/i }));
+
+    expect(onExportPdf).toHaveBeenCalledWith("v-9");
   });
 
   it("extracts action items from the empty tab's own Generate button, with no Facts anywhere", async () => {
