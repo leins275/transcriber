@@ -3,6 +3,13 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.13.1 — 2026-08-27
+
+### Bug fixes
+
+- Run prettier on RecordingPage
+- Swap Export PDF and Reveal in Explorer on recording page
+
 ## 0.13.0 — 2026-08-25
 
 ### Chores
