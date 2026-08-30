@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.14.0 — 2026-08-30
+
+### Features
+
+- Fold action items into the summary, export into the meeting folder, keep the library filter
+
 ## 0.13.1 — 2026-08-27
 
 ### Bug fixes
