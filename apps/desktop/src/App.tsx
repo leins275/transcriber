@@ -32,7 +32,6 @@ import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
 import type {
   AppError,
-  ArtifactKind,
   JobType,
   LlmModelsView,
   MeetingUpdate,
@@ -75,9 +74,6 @@ function App() {
     reveal: revealVaultEntry,
     readTranscript,
     readSummary,
-    readActionItems,
-    captureItemScreenshots,
-    readItemScreenshots,
     saveSpeakers,
     update: updateVaultEntry,
     remove: deleteVaultEntry,
@@ -87,6 +83,11 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+  // The library's filter controls, lifted here so they survive the
+  // VaultPanel unmount that opening a recording (or Settings) causes --
+  // coming back must not silently reset the operator's project filter.
+  const [vaultFilter, setVaultFilter] = useState<string>("");
+  const [vaultGrouped, setVaultGrouped] = useState(false);
   // The Settings page (redesign turn 6): the old sidebar's vault/model/
   // service content, behind the header's gear. Rendered over whatever else
   // is open; closing it returns there untouched.
@@ -367,13 +368,6 @@ function App() {
     [upsertJob],
   );
 
-  const handleExtract = useCallback(
-    async (entryId: string, kind: ArtifactKind) => {
-      upsertJob(await api.extractVaultEntry(entryId, kind));
-    },
-    [upsertJob],
-  );
-
   const handleExportPdf = useCallback(
     async (entryId: string) => {
       upsertJob(await api.exportRecording(entryId));
@@ -416,14 +410,6 @@ function App() {
     ? jobs.filter(
         (job) =>
           job.job_type === "summarize" &&
-          job.state === "done" &&
-          job.source_path === openEntry.meeting_dir,
-      ).length
-    : 0;
-  const actionItemsReloadToken = openEntry
-    ? jobs.filter(
-        (job) =>
-          job.job_type === "action_items" &&
           job.state === "done" &&
           job.source_path === openEntry.meeting_dir,
       ).length
@@ -520,14 +506,9 @@ function App() {
                   onDelete={handleDeleteVaultEntry}
                   onTranscribe={handleTranscribe}
                   onSummarize={handleSummarize}
-                  onExtract={handleExtract}
                   onExportPdf={handleExportPdf}
-                  onReadActionItems={readActionItems}
-                  onCaptureItemScreenshots={captureItemScreenshots}
-                  onReadItemScreenshots={readItemScreenshots}
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
-                  actionItemsReloadToken={actionItemsReloadToken}
                 />
               ) : (
                 <>
@@ -549,6 +530,10 @@ function App() {
                   <VaultPanel
                     entries={vaultEntries}
                     jobs={jobs}
+                    filter={vaultFilter}
+                    onFilterChange={setVaultFilter}
+                    grouped={vaultGrouped}
+                    onGroupedChange={setVaultGrouped}
                     onOpen={setOpenEntryId}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}

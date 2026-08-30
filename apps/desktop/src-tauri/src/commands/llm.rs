@@ -1,22 +1,20 @@
 //! The LLM feature's `#[tauri::command]` handlers: derived jobs (summary,
-//! action items, per-recording export), the action-items read/capture
-//! surface, and the GGUF model-download trio.
+//! per-recording export) and the GGUF model-download trio.
 //!
 //! Every handler follows the house rules the rest of `commands/` set:
 //! meetings are named by the opaque id `list_vault` issued (never a path);
 //! every path this module derives is containment-checked against the
 //! current meetings root before any filesystem read.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
 use crate::error::AppError;
-use crate::jobs::{self, JobSnapshot};
+use crate::jobs::JobSnapshot;
 use crate::service::{
     LlmJobKind, LlmModelsStatus, LlmSubmitRequest, ModelDownloadStatus, ServiceError,
 };
-use vault::{list_action_items, read_item, StoredItem, ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME};
 
 use super::meetings::{meeting_name_of, resolve_entry};
 use super::model::ModelDownloadStateView;
@@ -65,14 +63,6 @@ fn require_transcript(meeting_dir: &Path) -> Result<(), AppError> {
     }
 }
 
-/// `<parent>/<today YYMMDD>` -- the dated folder an export lands in.
-/// Re-running on the same day reuses (and overwrites) the same folder:
-/// these are regenerable derived documents, and one per day is the history
-/// granularity the layout encodes.
-fn dated_subdir(parent: &Path) -> PathBuf {
-    parent.join(jobs::today_yymmdd())
-}
-
 async fn enqueue(state: &AppState, kind: LlmJobKind, input: &Path, output: &Path) -> JobSnapshot {
     state
         .registry
@@ -98,247 +88,17 @@ pub async fn summarize_vault_entry_handler(
     Ok(enqueue(state, LlmJobKind::Summarize, &meeting_dir, &meeting_dir).await)
 }
 
-/// `extract_vault_entry` -- extract action items into the recording's own
-/// artifact directory (`<meeting>/action items/`). No project is required:
-/// an unsorted recording carries its artifacts in its own folder just like
-/// a filed one. (`facts` was an accepted kind once; the job was retired in
-/// favour of the summary carrying the notable facts.)
-pub async fn extract_vault_entry_handler(
-    state: &AppState,
-    entry_id: &str,
-    kind: &str,
-) -> Result<JobSnapshot, AppError> {
-    if kind != "action_items" {
-        return Err(AppError::invalid_argument(format!(
-            "unknown extraction kind {kind:?}; expected \"action_items\""
-        )));
-    }
-    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
-    require_transcript(&meeting_dir)?;
-    let output = meeting_dir.join(ACTION_ITEMS_DIR_NAME);
-    Ok(enqueue(state, LlmJobKind::ActionItems, &meeting_dir, &output).await)
-}
-
 /// `export_recording` -- the deterministic per-recording PDF export
-/// (Summary -> Action items -> Transcript) into
-/// `<meeting>/exports/<YYMMDD>/`.
+/// (Summary -> Transcript) into the meeting folder itself: `export.md`
+/// plus the share-named PDF, under stable names, overwritten on re-run
+/// (these are regenerable derived documents).
 pub async fn export_recording_handler(
     state: &AppState,
     entry_id: &str,
 ) -> Result<JobSnapshot, AppError> {
     let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
     require_transcript(&meeting_dir)?;
-    let output = dated_subdir(&meeting_dir.join(EXPORTS_DIR_NAME));
-    Ok(enqueue(state, LlmJobKind::Export, &meeting_dir, &output).await)
-}
-
-// -- action items: reading & on-demand screenshots ---------------------------
-
-/// One extracted action item, as the recording page renders it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ActionItemView {
-    /// The item's directory name (its slug) -- the id the capture and
-    /// screenshot-read commands take back. A name, never a path.
-    pub dir_name: String,
-    pub title: String,
-    /// The action-item `type` (`requirement`/`epic`/`task`/`spike`), when
-    /// the front matter carries one.
-    pub item_type: Option<String>,
-    /// The markdown body without its duplicated leading `# title` heading
-    /// (the view renders the title itself).
-    pub body_md: String,
-    /// Cited transcript offsets in seconds, from the front matter.
-    pub timestamps: Vec<f64>,
-    /// The external-tools `archived` flag; the view shows it, never acts
-    /// on it (the artifact contract).
-    pub archived: bool,
-    /// The `.png` files sitting in the item folder, sorted by name.
-    pub screenshot_names: Vec<String>,
-}
-
-/// `read_action_items` response: the items plus where they live, so the
-/// empty state can name the exact folder.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ActionItemsView {
-    pub entry_id: String,
-    /// The absolute `action items` directory, present or not.
-    pub dir: String,
-    pub items: Vec<ActionItemView>,
-}
-
-fn action_item_view(item: StoredItem) -> ActionItemView {
-    let dir_name = item
-        .dir
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let meta_str = |key: &str| {
-        item.meta
-            .get(key)
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-    };
-    let title = meta_str("title").unwrap_or_else(|| dir_name.clone());
-    let timestamps = item
-        .meta
-        .get("timestamps")
-        .and_then(|value| value.as_array())
-        .map(|values| values.iter().filter_map(|value| value.as_f64()).collect())
-        .unwrap_or_default();
-    // The stored body opens with its own `# title` heading; drop it so the
-    // view keeps one heading per item (the export assembler's rule).
-    let body_md = match item.body_md.strip_prefix("# ") {
-        Some(rest) => rest
-            .split_once('\n')
-            .map(|(_, tail)| tail.trim_start_matches('\n'))
-            .unwrap_or("")
-            .to_string(),
-        None => item.body_md,
-    };
-    ActionItemView {
-        dir_name,
-        title,
-        item_type: meta_str("type"),
-        body_md,
-        timestamps,
-        archived: item
-            .meta
-            .get("archived")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false),
-        screenshot_names: item.screenshot_names,
-    }
-}
-
-/// `read_action_items` -- this recording's extracted items, straight off
-/// the vault folder (like `read_summary`: readable the moment anything
-/// writes them, service running or not).
-pub async fn read_action_items_handler(
-    state: &AppState,
-    entry_id: &str,
-) -> Result<ActionItemsView, AppError> {
-    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
-    let entry_id = entry_id.to_string();
-    tokio::task::spawn_blocking(move || {
-        let dir = meeting_dir.join(ACTION_ITEMS_DIR_NAME);
-        let items = list_action_items(&meeting_dir)
-            .into_iter()
-            .map(action_item_view)
-            .collect();
-        Ok(ActionItemsView {
-            entry_id,
-            dir: dir.to_string_lossy().into_owned(),
-            items,
-        })
-    })
-    .await
-    .map_err(|join_err| {
-        AppError::internal(format!("read_action_items task panicked: {join_err}"))
-    })?
-}
-
-/// Resolves an item directory *name* (issued by `read_action_items`) inside
-/// this meeting's `action items/` directory. Never accepts a path: the
-/// house containment rule, same as entry ids.
-fn resolve_item_dir(meeting_dir: &Path, item_dir_name: &str) -> Result<PathBuf, AppError> {
-    let illegal = item_dir_name.is_empty()
-        || item_dir_name == "."
-        || item_dir_name == ".."
-        || item_dir_name.contains(['/', '\\', ':']);
-    if illegal {
-        return Err(AppError::invalid_argument(format!(
-            "invalid action-item name {item_dir_name:?}"
-        )));
-    }
-    let dir = meeting_dir.join(ACTION_ITEMS_DIR_NAME).join(item_dir_name);
-    if dir.is_dir() {
-        Ok(dir)
-    } else {
-        Err(AppError::invalid_argument(format!(
-            "no action item named {item_dir_name:?} in this meeting"
-        )))
-    }
-}
-
-/// `capture_item_screenshots` response, verbatim from the service.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ItemScreenshotsView {
-    pub written: Vec<String>,
-    pub screenshots: Vec<String>,
-}
-
-/// `capture_item_screenshots` -- ask the service to grab frames for one
-/// item at its cited timestamps (the operator's on-demand counterpart to
-/// extraction's model-judged auto-capture).
-pub async fn capture_item_screenshots_handler(
-    state: &AppState,
-    entry_id: &str,
-    item_dir_name: &str,
-) -> Result<ItemScreenshotsView, AppError> {
-    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
-    let item_dir = resolve_item_dir(&meeting_dir, item_dir_name)?;
-    let service = state.service.read().await.clone();
-    let result = service
-        .capture_item_screenshots(&item_dir.to_string_lossy())
-        .await
-        .map_err(map_service_error)?;
-    Ok(ItemScreenshotsView {
-        written: result.written,
-        screenshots: result.screenshots,
-    })
-}
-
-/// One screenshot as a `data:` URL -- the webview has no filesystem access
-/// by design, so bytes cross the IPC boundary inline.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ItemScreenshotView {
-    pub name: String,
-    pub data_url: String,
-}
-
-/// An upper bound per screenshot. Extraction frames are PNG-encoded video
-/// stills (hundreds of KB); anything bigger is not one of ours.
-const MAX_SCREENSHOT_BYTES: u64 = 8 * 1024 * 1024;
-
-/// `read_item_screenshots` -- one item's screenshots as data URLs, loaded
-/// on demand (never eagerly for the whole listing).
-pub async fn read_item_screenshots_handler(
-    state: &AppState,
-    entry_id: &str,
-    item_dir_name: &str,
-) -> Result<Vec<ItemScreenshotView>, AppError> {
-    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
-    let item_dir = resolve_item_dir(&meeting_dir, item_dir_name)?;
-    tokio::task::spawn_blocking(move || {
-        use base64::Engine as _;
-
-        let Some(item) = read_item(&item_dir) else {
-            return Ok(Vec::new());
-        };
-        let mut views = Vec::new();
-        for name in item.screenshot_names {
-            let path = item_dir.join(&name);
-            let readable = std::fs::metadata(&path)
-                .map(|meta| meta.is_file() && meta.len() <= MAX_SCREENSHOT_BYTES)
-                .unwrap_or(false);
-            if !readable {
-                continue;
-            }
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-            views.push(ItemScreenshotView {
-                name,
-                data_url: format!("data:image/png;base64,{encoded}"),
-            });
-        }
-        Ok(views)
-    })
-    .await
-    .map_err(|join_err| {
-        AppError::internal(format!("read_item_screenshots task panicked: {join_err}"))
-    })?
+    Ok(enqueue(state, LlmJobKind::Export, &meeting_dir, &meeting_dir).await)
 }
 
 // -- GGUF model download ----------------------------------------------------
@@ -546,46 +306,11 @@ pub async fn summarize_vault_entry(
 }
 
 #[tauri::command]
-pub async fn extract_vault_entry(
-    state: tauri::State<'_, AppState>,
-    entry_id: String,
-    kind: String,
-) -> Result<JobSnapshot, AppError> {
-    extract_vault_entry_handler(&state, &entry_id, &kind).await
-}
-
-#[tauri::command]
 pub async fn export_recording(
     state: tauri::State<'_, AppState>,
     entry_id: String,
 ) -> Result<JobSnapshot, AppError> {
     export_recording_handler(&state, &entry_id).await
-}
-
-#[tauri::command]
-pub async fn read_action_items(
-    state: tauri::State<'_, AppState>,
-    entry_id: String,
-) -> Result<ActionItemsView, AppError> {
-    read_action_items_handler(&state, &entry_id).await
-}
-
-#[tauri::command]
-pub async fn capture_item_screenshots(
-    state: tauri::State<'_, AppState>,
-    entry_id: String,
-    item_dir_name: String,
-) -> Result<ItemScreenshotsView, AppError> {
-    capture_item_screenshots_handler(&state, &entry_id, &item_dir_name).await
-}
-
-#[tauri::command]
-pub async fn read_item_screenshots(
-    state: tauri::State<'_, AppState>,
-    entry_id: String,
-    item_dir_name: String,
-) -> Result<Vec<ItemScreenshotView>, AppError> {
-    read_item_screenshots_handler(&state, &entry_id, &item_dir_name).await
 }
 
 #[tauri::command]
@@ -816,263 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn extraction_on_an_unsorted_meeting_enqueues_into_the_meeting_folder() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "unsorted", "260101 - dropped", true);
-            let fake = Arc::new(FakeService::new());
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                fake.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let snapshot = extract_vault_entry_handler(&state, &id, "action_items")
-                .await
-                .expect("an unsorted meeting with a transcript must enqueue");
-            assert_eq!(snapshot.job_type, "action_items");
-
-            let submission = first_llm_submission(&fake).await;
-            let output = PathBuf::from(&submission.output_dir);
-            assert!(
-                output.ends_with(
-                    Path::new("unsorted")
-                        .join("260101 - dropped")
-                        .join("action items")
-                ),
-                "output {output:?} must be the meeting's action-items dir"
-            );
-        });
-    }
-
-    #[test]
-    fn extraction_targets_the_meeting_level_artifact_directory() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let fake = Arc::new(FakeService::new());
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                fake.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let snapshot = extract_vault_entry_handler(&state, &id, "action_items")
-                .await
-                .expect("extraction must enqueue");
-            assert_eq!(snapshot.job_type, "action_items");
-
-            let submission = first_llm_submission(&fake).await;
-            let output = PathBuf::from(&submission.output_dir);
-            assert!(
-                output.ends_with(
-                    Path::new("ELS")
-                        .join("260101 - Planning")
-                        .join("action items")
-                ),
-                "output {output:?} must be the meeting's action-items dir"
-            );
-            assert!(
-                !output.ends_with(Path::new("ELS").join("action items")),
-                "output {output:?} must not be the project-level action-items dir"
-            );
-        });
-    }
-
-    #[test]
-    fn the_retired_facts_kind_is_refused() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let err = extract_vault_entry_handler(&state, &id, "facts")
-                .await
-                .expect_err("the retired facts kind must be refused");
-            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
-        });
-    }
-
-    #[test]
-    fn extraction_without_a_transcript_is_refused_with_an_actionable_message() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", false);
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let err = extract_vault_entry_handler(&state, &id, "action_items")
-                .await
-                .expect_err("a meeting without a transcript must be refused");
-            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
-            assert!(
-                err.message().contains("transcribe it first"),
-                "message {:?} must stay actionable",
-                err.message()
-            );
-        });
-    }
-
-    fn write_item_fixture(meeting_dir: &Path, slug: &str, with_screenshot: bool) {
-        let dir = meeting_dir.join("action items").join(slug);
-        std::fs::create_dir_all(&dir).expect("mkdir item");
-        let md = "---\ntype: \"task\"\ntitle: \"Fix login\"\narchived: false\ntimestamps: [10.0, 20.0]\n---\n\n# Fix login\n\nBody text.\n";
-        std::fs::write(dir.join(format!("{slug}.md")), md).expect("write md");
-        if with_screenshot {
-            std::fs::write(dir.join("screenshot-0010.png"), b"\x89PNGfake").expect("write png");
-        }
-    }
-
-    #[test]
-    fn read_action_items_lists_this_meetings_items() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let meeting_dir = root.path().join("ELS").join("260101 - Planning");
-            write_item_fixture(&meeting_dir, "fix-login", true);
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let view = read_action_items_handler(&state, &id)
-                .await
-                .expect("read must succeed");
-            assert_eq!(view.items.len(), 1);
-            let item = &view.items[0];
-            assert_eq!(item.dir_name, "fix-login");
-            assert_eq!(item.title, "Fix login");
-            assert_eq!(item.item_type.as_deref(), Some("task"));
-            assert_eq!(item.timestamps, vec![10.0, 20.0]);
-            assert!(!item.archived);
-            assert_eq!(item.screenshot_names, vec!["screenshot-0010.png"]);
-            assert!(
-                item.body_md.starts_with("Body text."),
-                "the duplicated `# title` heading is stripped: {:?}",
-                item.body_md
-            );
-            assert!(view.dir.ends_with("action items"));
-        });
-    }
-
-    #[test]
-    fn read_action_items_is_empty_without_the_directory() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let view = read_action_items_handler(&state, &id)
-                .await
-                .expect("read must succeed");
-            assert!(view.items.is_empty());
-        });
-    }
-
-    #[test]
-    fn capture_item_screenshots_passes_the_contained_item_dir_to_the_service() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let meeting_dir = root.path().join("ELS").join("260101 - Planning");
-            write_item_fixture(&meeting_dir, "fix-login", false);
-            let fake = Arc::new(FakeService::new());
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                fake.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let view = capture_item_screenshots_handler(&state, &id, "fix-login")
-                .await
-                .expect("capture must succeed");
-            assert_eq!(view.written, vec!["screenshot-0010.png"]);
-
-            let calls = fake.capture_calls();
-            assert_eq!(calls.len(), 1);
-            let sent = PathBuf::from(&calls[0]);
-            assert!(
-                sent.ends_with(
-                    Path::new("ELS")
-                        .join("260101 - Planning")
-                        .join("action items")
-                        .join("fix-login")
-                ),
-                "service must receive the item dir, got {sent:?}"
-            );
-        });
-    }
-
-    #[test]
-    fn capture_rejects_path_shaped_or_unknown_item_names() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let fake = Arc::new(FakeService::new());
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                fake.clone(),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            for name in ["..", "a/b", "a\\b", "C:evil", "", "missing-item"] {
-                let err = capture_item_screenshots_handler(&state, &id, name)
-                    .await
-                    .expect_err("must be refused");
-                assert_eq!(err.kind(), ErrorKind::InvalidArgument, "name {name:?}");
-            }
-            assert!(
-                fake.capture_calls().is_empty(),
-                "nothing may reach the service"
-            );
-        });
-    }
-
-    #[test]
-    fn read_item_screenshots_returns_png_data_urls() {
-        run(async {
-            let root = tempdir().expect("tempdir");
-            make_meeting(root.path(), "ELS", "260101 - Planning", true);
-            let meeting_dir = root.path().join("ELS").join("260101 - Planning");
-            write_item_fixture(&meeting_dir, "fix-login", true);
-            let state = state_with_root(
-                root.path().to_path_buf(),
-                Arc::new(FakeService::new()),
-                Arc::new(RecordingRevealer::default()),
-            );
-            let id = only_entry_id(&state).await;
-
-            let shots = read_item_screenshots_handler(&state, &id, "fix-login")
-                .await
-                .expect("read must succeed");
-            assert_eq!(shots.len(), 1);
-            assert_eq!(shots[0].name, "screenshot-0010.png");
-            assert!(shots[0].data_url.starts_with("data:image/png;base64,"));
-        });
-    }
-
-    #[test]
-    fn export_recording_lands_in_a_dated_exports_subfolder() {
+    fn export_recording_lands_in_the_meeting_folder_itself() {
         run(async {
             let root = tempdir().expect("tempdir");
             make_meeting(root.path(), "ELS", "260101 - Planning", true);
@@ -1088,8 +557,18 @@ mod tests {
                 .await
                 .expect("export must enqueue");
             assert_eq!(snapshot.job_type, "export");
-            let meeting_dir = snapshot.meeting_dir.expect("output dir recorded");
-            assert!(meeting_dir.contains("exports"));
+            let output_dir = snapshot.meeting_dir.expect("output dir recorded");
+            assert!(
+                output_dir.ends_with("260101 - Planning"),
+                "the export output must be the meeting folder itself, got {output_dir:?}"
+            );
+
+            let submission = first_llm_submission(&fake).await;
+            assert_eq!(submission.kind, crate::service::LlmJobKind::Export);
+            assert_eq!(
+                submission.input_path, submission.output_dir,
+                "input and output are both the meeting folder"
+            );
         });
     }
 

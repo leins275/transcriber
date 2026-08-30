@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingPage } from "./RecordingPage";
-import type { ActionItemsView, SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type { SummaryView, TranscriptView, VaultMeetingView } from "../types";
 
 function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView {
   return {
@@ -39,12 +39,6 @@ const emptySummary: SummaryView = {
   markdown: null,
 };
 
-const emptyActionItems: ActionItemsView = {
-  entry_id: "v-1",
-  dir: "D:\\Meetings\\RDDM\\260709 - tech support 1\\action items",
-  items: [],
-};
-
 function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> = {}) {
   const defaults = {
     entry: buildEntry(),
@@ -58,14 +52,9 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
     onDelete: () => Promise.resolve(),
     onTranscribe: () => Promise.resolve(),
     onSummarize: () => Promise.resolve(),
-    onExtract: () => Promise.resolve(),
     onExportPdf: () => Promise.resolve(),
-    onReadActionItems: () => Promise.resolve(emptyActionItems),
-    onCaptureItemScreenshots: () => Promise.resolve({ written: [], screenshots: [] }),
-    onReadItemScreenshots: () => Promise.resolve([]),
     activeLlmJobs: [],
     summaryReloadToken: 0,
-    actionItemsReloadToken: 0,
   };
   return render(<RecordingPage {...defaults} {...props} />);
 }
@@ -284,19 +273,13 @@ describe("RecordingPage", () => {
     expect(onExportPdf).toHaveBeenCalledWith("v-9");
   });
 
-  it("extracts action items from the empty tab's own Generate button, with no Facts anywhere", async () => {
-    const onExtract = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
-    renderPage({ entry: buildEntry({ id: "v-9", project: null }), onExtract });
+  it("offers no action-items or facts controls anywhere — the summary carries both", () => {
+    renderPage({ entry: buildEntry({ id: "v-9" }) });
 
-    // The facts extraction was retired: the summary carries the notable
-    // facts, so no Facts control may exist anywhere on the page.
+    // Both extraction jobs were retired: the summary carries the notable
+    // facts and the action items, so neither control may exist on the page.
     expect(screen.queryByRole("tab", { name: /facts/i })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "Action items" }));
-    await user.click(await screen.findByRole("button", { name: "Extract action items" }));
-
-    expect(onExtract).toHaveBeenCalledWith("v-9", "action_items");
+    expect(screen.queryByRole("tab", { name: /action items/i })).not.toBeInTheDocument();
   });
 
   it("generates a summary from the empty tab's own Generate button", async () => {
@@ -312,17 +295,17 @@ describe("RecordingPage", () => {
 
   it("regenerates from the overflow menu even when content already exists", async () => {
     const onSummarize = vi.fn().mockResolvedValue(undefined);
-    const onExtract = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    renderPage({ entry: buildEntry({ id: "v-9" }), onSummarize, onExtract });
+    renderPage({ entry: buildEntry({ id: "v-9" }), onSummarize });
 
     await user.click(screen.getByRole("button", { name: /more actions/i }));
     await user.click(screen.getByRole("menuitem", { name: "Regenerate summary" }));
     expect(onSummarize).toHaveBeenCalledWith("v-9");
 
     await user.click(screen.getByRole("button", { name: /more actions/i }));
-    await user.click(screen.getByRole("menuitem", { name: "Re-extract action items" }));
-    expect(onExtract).toHaveBeenCalledWith("v-9", "action_items");
+    expect(
+      screen.queryByRole("menuitem", { name: /re-extract action items/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("no longer tells an unfiled recording to be filed under a project first", () => {
@@ -335,11 +318,11 @@ describe("RecordingPage", () => {
 
   it("renders the empty tab's Generate button busy while its own job is in flight", async () => {
     const user = userEvent.setup();
-    renderPage({ entry: buildEntry({ project: null }), activeLlmJobs: ["action_items"] });
+    renderPage({ entry: buildEntry({ project: null }), activeLlmJobs: ["summarize"] });
 
-    await user.click(screen.getByRole("tab", { name: "Action items" }));
+    await user.click(screen.getByRole("tab", { name: "Summary" }));
 
-    expect(await screen.findByRole("button", { name: "Extracting…" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Summarizing…" })).toBeDisabled();
   });
 
   it("copies the visible tab: enabled on a loaded transcript, disabled on an empty summary", async () => {
@@ -353,67 +336,6 @@ describe("RecordingPage", () => {
     await screen.findByText(/no summary for this meeting yet/i);
 
     expect(screen.getByRole("button", { name: "Copy" })).toBeDisabled();
-  });
-
-  it("shows the extracted action items in their own tab beside the summary", async () => {
-    const user = userEvent.setup();
-    const onReadActionItems = vi.fn().mockResolvedValue({
-      entry_id: "v-1",
-      dir: "D:\\Meetings\\RDDM\\260709 - tech support 1\\action items",
-      items: [
-        {
-          dir_name: "fix-login",
-          title: "Fix login",
-          item_type: "task",
-          body_md: "The login flow breaks on refresh.",
-          timestamps: [65],
-          archived: false,
-          screenshot_names: [],
-        },
-      ],
-    });
-    renderPage({ onReadActionItems });
-
-    await user.click(screen.getByRole("tab", { name: "Action items" }));
-
-    expect(await screen.findByRole("heading", { name: "Fix login" })).toBeInTheDocument();
-    expect(screen.getByText("task")).toBeInTheDocument();
-    expect(screen.getByText(/login flow breaks/)).toBeInTheDocument();
-    expect(screen.getByText("1:05")).toBeInTheDocument();
-    expect(onReadActionItems).toHaveBeenCalledWith("v-1");
-  });
-
-  it("captures screenshots for one item on demand", async () => {
-    const user = userEvent.setup();
-    const onReadActionItems = vi.fn().mockResolvedValue({
-      entry_id: "v-1",
-      dir: "dir",
-      items: [
-        {
-          dir_name: "fix-login",
-          title: "Fix login",
-          item_type: "task",
-          body_md: "",
-          timestamps: [10],
-          archived: false,
-          screenshot_names: [],
-        },
-      ],
-    });
-    const onCaptureItemScreenshots = vi.fn().mockResolvedValue({
-      written: ["screenshot-0010.png"],
-      screenshots: ["screenshot-0010.png"],
-    });
-    const onReadItemScreenshots = vi
-      .fn()
-      .mockResolvedValue([{ name: "screenshot-0010.png", data_url: "data:image/png;base64,AA==" }]);
-    renderPage({ onReadActionItems, onCaptureItemScreenshots, onReadItemScreenshots });
-
-    await user.click(screen.getByRole("tab", { name: "Action items" }));
-    await user.click(await screen.findByRole("button", { name: "Capture screenshots" }));
-
-    expect(onCaptureItemScreenshots).toHaveBeenCalledWith("v-1", "fix-login");
-    expect(await screen.findByAltText("Screenshot screenshot-0010.png")).toBeInTheDocument();
   });
 
   it("surfaces a transcript read failure on the page", async () => {

@@ -59,9 +59,9 @@ describe("activeJobView", () => {
 
   it("falls back to a queued job so the chip survives between chain stages", () => {
     const view = activeJobView([
-      buildJob({ state: "queued", job_type: "action_items", file_name: "260825 - Weekly sync" }),
+      buildJob({ state: "queued", job_type: "export", file_name: "260825 - Weekly sync" }),
     ]);
-    expect(view).toEqual({ label: "Extracting action items “Weekly sync”", percent: null });
+    expect(view).toEqual({ label: "Exporting PDF “Weekly sync”", percent: null });
   });
 
   it("says Filing during ingest, before transcription starts", () => {

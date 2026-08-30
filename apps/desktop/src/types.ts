@@ -24,7 +24,7 @@ export type JobState =
 
 /** Which pipeline a job runs. `transcribe` is the original; the rest are
  * the LLM feature's derived jobs (additive to the frozen contract). */
-export type JobType = "transcribe" | "summarize" | "action_items" | "export";
+export type JobType = "transcribe" | "summarize" | "export";
 
 export type JobSnapshot = {
   id: string;
@@ -132,50 +132,7 @@ export type MeetingUpdate = {
   title: string;
 };
 
-// LLM-feature extension to the IPC contract (additive): which artifact an
-// extraction job produces, the action-items read/capture surface, and the
-// GGUF download.
-
-export type ArtifactKind = "action_items";
-
-/** One extracted action item, as `read_action_items` returns it. */
-export type ActionItemView = {
-  /** The item's folder name (its slug) — the id the capture and
-   * screenshot-read commands take back. */
-  dir_name: string;
-  title: string;
-  /** `requirement` | `epic` | `task` | `spike`, when the front matter
-   * carries one. */
-  item_type: string | null;
-  /** The markdown body without its duplicated `# title` heading. */
-  body_md: string;
-  /** Cited transcript offsets in seconds. */
-  timestamps: number[];
-  /** The external-tools archive flag; shown, never acted on. */
-  archived: boolean;
-  /** The `.png` files sitting in the item folder, sorted by name. */
-  screenshot_names: string[];
-};
-
-/** `read_action_items` response. */
-export type ActionItemsView = {
-  entry_id: string;
-  /** The absolute `action items` directory, present or not. */
-  dir: string;
-  items: ActionItemView[];
-};
-
-/** `capture_item_screenshots` response. */
-export type ItemScreenshotsView = {
-  written: string[];
-  screenshots: string[];
-};
-
-/** One screenshot as a `data:` URL (the webview has no filesystem access). */
-export type ItemScreenshotView = {
-  name: string;
-  data_url: string;
-};
+// LLM-feature extension to the IPC contract (additive): the GGUF download.
 
 /** The GGUF (LLM model) download status — the whisper trio's shape minus
  * the CUDA fields. */

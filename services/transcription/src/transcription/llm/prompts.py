@@ -12,7 +12,7 @@ falls back to the soft rule asking the model to mirror the transcript.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 Message = dict[str, str]
@@ -93,7 +93,10 @@ def summary_messages(transcript_text: str, *, language: str | None = None) -> li
                 "Summarize this meeting transcript as Markdown. Structure: a short "
                 "overview paragraph, then sections for key discussion points "
                 "(keep the notable facts -- constraints, metrics, dates, how "
-                "things work), decisions made, and open questions. Omit a section "
+                "things work), decisions made, action items, and open questions. "
+                "Action items are concrete follow-up work someone agreed to do: "
+                "one bullet each, an imperative phrase naming the owner when the "
+                "transcript names one. Omit a section "
                 "when the meeting had nothing for it. Do not invent content that "
                 "is not in the transcript.\n\nTranscript:\n\n" + transcript_text
             ),
@@ -119,7 +122,9 @@ def chunk_summary_messages(
                 f"This is part {index + 1} of {total} of a meeting transcript. "
                 "Write a compact Markdown summary of this part only: key points "
                 "(keep the notable facts -- constraints, metrics, dates), "
-                "decisions, open questions. Do not speculate about the other parts."
+                "decisions, action items (concrete follow-up work someone agreed "
+                "to do, with the owner when named), open questions. Do not "
+                "speculate about the other parts."
                 "\n\nTranscript part:\n\n" + chunk_text
             ),
         },
@@ -148,93 +153,10 @@ def merge_summaries_messages(
                 "Merge these partial summaries of one meeting into a single "
                 "Markdown summary. Structure: a short overview paragraph, then "
                 "sections for key discussion points (keep the notable facts -- "
-                "constraints, metrics, dates), decisions made, and open "
-                "questions. Deduplicate overlapping points.\n\n" + numbered
-            ),
-        },
-    ]
-
-
-_ACTION_ITEM_RULES = (
-    "An action item is concrete follow-up work someone should do. Classify each as: "
-    "'requirement' (a stated product/system requirement), 'epic' (a large body of "
-    "work spanning multiple tasks), 'task' (a concrete, bounded piece of work), or "
-    "'spike' (a time-boxed investigation to answer a question). For each item give "
-    "a short imperative title, a Markdown description with all relevant context "
-    "from the discussion, and the timestamps (in seconds, from the [m:ss] markers) "
-    "of the few most important transcript moments where it was discussed -- not "
-    "every mention. Separately, in screenshot_timestamps, list only the moments "
-    "where the speakers are clearly referring to something visible on a shared "
-    "screen -- a demo, a slide, a diagram, a document being walked through "
-    "('as you can see here', 'on this slide'). Most items have no such moment: "
-    "leave screenshot_timestamps empty unless the transcript makes the visual "
-    "reference explicit."
-)
-
-
-def action_items_messages(chunk_text: str, *, language: str | None = None) -> list[Message]:
-    return [
-        {
-            "role": "system",
-            "content": (
-                "You extract action items from meeting transcripts and answer in "
-                "strict JSON matching the provided schema. "
-                + _ACTION_ITEM_RULES
-                + " "
-                + _language_rule(language)
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "Extract every action item from this transcript part. If there are "
-                "none, return an empty items list.\n\nTranscript:\n\n" + chunk_text
-            ),
-        },
-    ]
-
-
-def _truncate_to_budget(text: str, budget_tokens: int, count_tokens: Callable[[str], int]) -> str:
-    """At most ``budget_tokens`` worth of ``text``, cut from the front."""
-    tokens = count_tokens(text)
-    if tokens <= budget_tokens:
-        return text
-    keep = max(1, len(text) * budget_tokens // tokens)
-    while keep > 1 and count_tokens(text[:keep]) > budget_tokens:
-        keep //= 2
-    return text[:keep]
-
-
-def repair_messages(
-    original: list[Message],
-    raw_output: str,
-    error: str,
-    *,
-    output_budget_tokens: int,
-    count_tokens: Callable[[str], int],
-) -> list[Message]:
-    """The one bounded retry after invalid structured output: show the model
-    its own output and the validation error, and ask again.
-
-    Deliberately bounded by construction: only the system message survives
-    from the original call (it carries the extraction rules and the language
-    pin) and the echoed output is capped at ``output_budget_tokens`` --
-    replaying the whole transcript plus an unbounded failed answer could
-    overflow the context window, turning one bad answer into a hard error.
-    The transcript itself is not needed: by the time repair runs the output
-    was syntactically complete JSON that merely broke the schema, so the
-    content to fix is all in the echo.
-    """
-    system = [message for message in original if message.get("role") == "system"][:1]
-    echo = _truncate_to_budget(raw_output, output_budget_tokens, count_tokens)
-    return [
-        *system,
-        {
-            "role": "user",
-            "content": (
-                "Your previous answer was not valid against the required JSON "
-                f"schema: {error}\n\nYour previous answer was:\n{echo}\n\n"
-                "Answer again with only valid JSON matching the schema."
+                "constraints, metrics, dates), decisions made, action items "
+                "(concrete follow-up work, one bullet each, with the owner when "
+                "named), and open questions. Omit a section when the meeting had "
+                "nothing for it. Deduplicate overlapping points.\n\n" + numbered
             ),
         },
     ]

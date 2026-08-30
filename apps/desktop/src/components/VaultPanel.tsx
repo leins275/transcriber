@@ -38,6 +38,14 @@ export type VaultPanelProps = {
   /** This session's jobs. Rendered *in* the list rather than in a panel of
    * their own -- see the component docs. */
   jobs: JobSnapshot[];
+  /** The selected project code, `""` for all, `"unsorted"` for the
+   * unsorted-only view. Lifted to App so it survives this panel's unmount
+   * when a recording or Settings opens. */
+  filter: string;
+  onFilterChange: (filter: string) => void;
+  /** The "Group by project" toggle, lifted for the same reason. */
+  grouped: boolean;
+  onGroupedChange: (grouped: boolean) => void;
   onOpen: (entryId: string) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
@@ -66,14 +74,16 @@ export type VaultPanelProps = {
 export function VaultPanel({
   entries,
   jobs,
+  filter,
+  onFilterChange,
+  grouped,
+  onGroupedChange,
   onOpen,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
 }: VaultPanelProps) {
   const [tab, setTab] = useState<Tab>("recordings");
-  const [filter, setFilter] = useState<string>("");
-  const [grouped, setGrouped] = useState(false);
 
   const projects = useMemo(() => projectCodes(entries), [entries]);
   const unsorted = useMemo(() => unsortedEntries(entries), [entries]);
@@ -178,7 +188,7 @@ export function VaultPanel({
                     className={styles.pickerSelect}
                     aria-label="Project"
                     value={validFilter}
-                    onChange={(event) => setFilter(event.target.value)}
+                    onChange={(event) => onFilterChange(event.target.value)}
                   >
                     <option value="">All projects</option>
                     {projects.map((code) => (
@@ -193,7 +203,7 @@ export function VaultPanel({
                       type="checkbox"
                       className={styles.groupSwitch}
                       checked={grouped}
-                      onChange={(event) => setGrouped(event.target.checked)}
+                      onChange={(event) => onGroupedChange(event.target.checked)}
                     />
                     Group by project
                   </label>

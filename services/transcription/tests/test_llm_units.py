@@ -1,32 +1,20 @@
 """Unit tests for the LLM feature's pure modules: registry laziness,
-chunking, structured-output shapes, artifact writers, screenshot planning."""
+chunking, artifact naming, the summarize reduce."""
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from transcription.artifacts import (
-    ACTION_ITEMS_DIR_NAME,
-    MAX_PATH_LEN,
     UNSORTED_DIR_NAME,
     export_pdf_filename,
-    fit_slug,
-    list_items,
-    parse_front_matter,
-    render_front_matter,
-    slugify,
     source_date_from_meeting_name,
-    unique_item_dir,
-    write_item,
 )
-from transcription.errors import ErrorKind, ServiceError
-from transcription.frames import plan_screenshots, screenshot_name
+from transcription.errors import ServiceError
 from transcription.llm.chunking import (
     MIN_BUDGET_TOKENS,
     PROMPT_OVERHEAD_TOKENS,
@@ -35,20 +23,12 @@ from transcription.llm.chunking import (
     input_budget_tokens,
     split_oversized,
 )
-from transcription.llm.extraction import merge_items, snap_timestamps
 from transcription.llm.gguf_meta import (
     VRAM_RESERVE_BYTES,
     fit_gpu_layers,
     read_block_count,
 )
 from transcription.llm.prompts import format_timestamp, render_transcript_lines
-from transcription.llm.shapes import (
-    MAX_ITEM_SCREENSHOT_TIMESTAMPS,
-    MAX_ITEM_TIMESTAMPS,
-    ActionItemsOut,
-    LlmOutputError,
-    parse_llm_json,
-)
 
 # ---------------------------------------------------------------- registry
 
@@ -145,119 +125,6 @@ def test_input_budget_subtracts_output_thinking_and_overhead() -> None:
     assert input_budget_tokens(16384, 4096, 2048) == 16384 - 4096 - 2048 - PROMPT_OVERHEAD_TOKENS
     # A pathologically small context still gets the floor, never zero.
     assert input_budget_tokens(2048, 4096, 2048) == MIN_BUDGET_TOKENS
-
-
-# ------------------------------------------------------------------ shapes
-
-
-def test_parse_llm_json_tolerates_code_fences() -> None:
-    fenced = '```json\n{"items": [{"type": "task", "title": "T"}]}\n```'
-    parsed = parse_llm_json(fenced, ActionItemsOut)
-    assert parsed.items[0].title == "T"
-
-
-def test_parse_llm_json_raises_with_the_raw_output_attached() -> None:
-    with pytest.raises(LlmOutputError) as excinfo:
-        parse_llm_json("not json at all", ActionItemsOut)
-    assert excinfo.value.raw == "not json at all"
-
-    with pytest.raises(LlmOutputError):
-        parse_llm_json('{"items": [{"type": "wrong-type", "title": "T"}]}', ActionItemsOut)
-
-
-def test_item_timestamps_are_capped_in_the_schema_and_on_validation() -> None:
-    # The 260825 field report: an unbounded timestamps array let the model
-    # cite every segment of the meeting (~300 stamps on one item), flooding
-    # the output-token cap. The cap must reach the grammar via `maxItems`.
-    schema = ActionItemsOut.model_json_schema()
-    item_schema = next(iter(schema["$defs"].values()))
-    assert item_schema["properties"]["timestamps"]["maxItems"] == MAX_ITEM_TIMESTAMPS
-    flood = [float(i) for i in range(MAX_ITEM_TIMESTAMPS + 1)]
-    with pytest.raises(LlmOutputError):
-        parse_llm_json(
-            json.dumps({"items": [{"type": "task", "title": "T", "timestamps": flood}]}),
-            ActionItemsOut,
-        )
-
-
-def test_screenshot_timestamps_are_optional_and_capped_at_the_frame_budget() -> None:
-    # Model-judged auto-capture: the field defaults to empty (most items
-    # have no visual moment), and the grammar bounds it at the same per-item
-    # cap `frames.plan_screenshots` enforces at capture time.
-    schema = ActionItemsOut.model_json_schema()
-    item_schema = next(iter(schema["$defs"].values()))
-    cap = item_schema["properties"]["screenshot_timestamps"]["maxItems"]
-    assert cap == MAX_ITEM_SCREENSHOT_TIMESTAMPS
-
-    parsed = parse_llm_json('{"items": [{"type": "task", "title": "T"}]}', ActionItemsOut)
-    assert parsed.items[0].screenshot_timestamps == []
-
-    flood = [float(i) for i in range(MAX_ITEM_SCREENSHOT_TIMESTAMPS + 1)]
-    with pytest.raises(LlmOutputError):
-        parse_llm_json(
-            json.dumps({"items": [{"type": "task", "title": "T", "screenshot_timestamps": flood}]}),
-            ActionItemsOut,
-        )
-
-
-def test_merge_items_dedupes_on_normalized_title_and_unions_timestamps() -> None:
-    first = ActionItemsOut.model_validate(
-        {"items": [{"type": "task", "title": "Fix  Login", "timestamps": [1.0]}]}
-    ).items
-    second = ActionItemsOut.model_validate(
-        {"items": [{"type": "task", "title": "fix login", "timestamps": [2.0]}]}
-    ).items
-    merged = merge_items([first, second])
-    assert len(merged) == 1
-    assert merged[0].timestamps == [1.0, 2.0]
-
-
-def test_merge_items_unions_screenshot_timestamps_up_to_the_frame_cap() -> None:
-    first = ActionItemsOut.model_validate(
-        {
-            "items": [
-                {
-                    "type": "task",
-                    "title": "Fix login",
-                    "screenshot_timestamps": [1.0, 2.0, 3.0, 4.0],
-                }
-            ]
-        }
-    ).items
-    second = ActionItemsOut.model_validate(
-        {
-            "items": [
-                {
-                    "type": "task",
-                    "title": "fix login",
-                    "screenshot_timestamps": [3.0, 5.0, 6.0, 7.0],
-                }
-            ]
-        }
-    ).items
-    merged = merge_items([first, second])
-    assert len(merged) == 1
-    # Union without duplicates, cut at the per-item frame cap.
-    assert merged[0].screenshot_timestamps == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-
-
-def test_snap_timestamps_clamps_and_snaps_to_segment_starts() -> None:
-    snapped = snap_timestamps([11.0, 999.0, -5.0, 12.0], [0.0, 10.0, 20.0], 120.0)
-    assert snapped == [10.0]
-
-
-# ------------------------------------------------------------------ frames
-
-
-def test_plan_screenshots_dedupes_within_the_gap_and_caps_the_count() -> None:
-    stamps = [0.0, 1.0, 5.0, 5.5, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0]
-    planned = plan_screenshots(stamps, 32.0)
-    assert planned == [0.0, 5.0, 10.0, 15.0, 20.0, 25.0]  # capped at 6, 1.0/5.5 collapsed
-
-
-def test_screenshot_names_are_stable_and_sortable() -> None:
-    assert screenshot_name(62.0) == "screenshot-0102.png"
-    assert screenshot_name(3671.0) == "screenshot-10111.png"
 
 
 # ------------------------------------------------------------- gpu offload
@@ -384,103 +251,6 @@ def test_transcript_lines_carry_timestamps_and_speaker_overrides() -> None:
 # --------------------------------------------------------------- artifacts
 
 
-def test_artifact_dir_names_pin_the_cross_language_contract() -> None:
-    """The exact directory-name strings are shared with the vault crate
-    (``crates/vault/src/paths.rs``). Their anchor moved to the meeting folder;
-    the strings themselves must never drift on either side."""
-    assert ACTION_ITEMS_DIR_NAME == "action items"
-
-
-def test_slugify_is_windows_safe_and_keeps_non_latin_text() -> None:
-    assert slugify('Fix: the "login" <flow>?') == "fix-the-login-flow"
-    assert slugify("Починить вход в систему") == "починить-вход-в-систему"
-    assert slugify("???") == "item"
-    assert len(slugify("long " * 100)) <= 60
-
-
-def test_front_matter_round_trips_and_reads_as_yaml_style_text(tmp_path: Path) -> None:
-    meta = {"type": "task", "title": 'A "quoted" title', "timestamps": [1.5, 2.0]}
-    text = render_front_matter(meta) + "\n\nbody text"
-    parsed_meta, body = parse_front_matter(text)
-    assert parsed_meta == meta
-    assert body == "body text"
-    # No front matter at all: everything is body.
-    assert parse_front_matter("plain") == ({}, "plain")
-
-
-def test_write_item_then_list_items_round_trip(tmp_path: Path) -> None:
-    md_path = write_item(
-        tmp_path / "action items",
-        title="Fix login",
-        meta={"type": "task", "title": "Fix login"},
-        body_md="Broken on refresh.",
-        images=[("screenshot-0010.png", b"\x89PNGfake")],
-    )
-    assert md_path.name == "fix-login.md"
-
-    items = list_items(tmp_path / "action items")
-    assert len(items) == 1
-    assert items[0].meta["type"] == "task"
-    assert items[0].screenshot_names == ["screenshot-0010.png"]
-    assert "Broken on refresh." in items[0].body
-    assert "![screenshot-0010.png](screenshot-0010.png)" in items[0].body
-
-
-def test_unique_item_dir_suffixes_collisions(tmp_path: Path) -> None:
-    first = unique_item_dir(tmp_path, "slug")
-    second = unique_item_dir(tmp_path, "slug")
-    third = unique_item_dir(tmp_path, "slug")
-    assert [first.name, second.name, third.name] == ["slug", "slug (2)", "slug (3)"]
-
-
-def test_fit_slug_trims_against_the_260_char_budget() -> None:
-    # fit_slug is pure path arithmetic -- no filesystem involved.
-    deep = Path("C:/v") / ("a" * 180)
-    fitted = fit_slug(deep, "s" * 60)
-    assert 0 < len(fitted) < 60
-    # The item's own md leaf must fit the budget alongside a screenshot.
-    assert len(str(deep / fitted / f"{fitted}.md")) <= 260
-
-    hopeless = Path("C:/v") / ("b" * 270)
-    with pytest.raises(ServiceError):
-        fit_slug(hopeless, "slug")
-
-
-def test_fit_slug_fits_a_realistically_deep_meeting_level_parent() -> None:
-    """NFR-1: items now anchor one level deeper -- inside the meeting folder --
-    so the budget is checked against a realistic synced vault path."""
-    # ~170-character OneDrive-style sync root, as the operator's vault lives.
-    synced_root = (
-        Path("C:/Users/operator/OneDrive - Example Corporation")
-        / "Documents"
-        / "Meeting Recordings Vault"
-        / "Shared with the Operations Team"
-        / "2026 Recordings Archive"
-        / "Synced from the Studio Laptop 2026"
-    )
-    assert len(str(synced_root)) == 174
-    kind_dir = synced_root / "ELS" / "260101 - a long meeting title" / ACTION_ITEMS_DIR_NAME
-
-    fitted = fit_slug(kind_dir, slugify("Chase the vendor about the signed statement of work"))
-    assert 0 < len(fitted)
-    # unique_item_dir may append a " (n)" collision suffix to the item folder,
-    # and the longest screenshot sibling is "screenshot-hmmss.png" (20 chars).
-    item_dir = kind_dir / f"{fitted} (2)"
-    longest_sibling = screenshot_name(9 * 3600 + 59 * 60 + 59)
-    assert len(longest_sibling) == 20
-    assert len(str(item_dir / f"{fitted}.md")) <= MAX_PATH_LEN
-    assert len(str(item_dir / longest_sibling)) <= MAX_PATH_LEN
-
-    # A meeting folder too deep to hold even a one-character slug is refused.
-    hopeless_meeting = synced_root / "ELS" / ("m" * 60) / ACTION_ITEMS_DIR_NAME
-    with pytest.raises(ServiceError) as excinfo:
-        fit_slug(hopeless_meeting, "slug")
-    assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
-
-
-# ------------------------------------------- front-matter field contract
-
-
 def test_unsorted_dir_name_mirrors_the_vault_crate() -> None:
     # crates/vault/src/paths.rs: `pub const UNSORTED_DIR_NAME: &str = "unsorted";`
     assert UNSORTED_DIR_NAME == "unsorted"
@@ -536,71 +306,6 @@ def test_source_date_is_none_when_the_prefix_is_not_a_calendar_date() -> None:
     # `str.isdigit()` is True for non-ASCII digits, which `int()` would happily
     # accept; the vault's naming contract is ASCII.
     assert source_date_from_meeting_name("\u0662\u0666\u0660\u0668\u0662\u0664 - x") is None
-
-
-def test_list_items_tolerates_obsidian_style_rewritten_front_matter(tmp_path: Path) -> None:
-    # What an external property editor leaves behind: reordered keys, an
-    # unknown key, YAML-quoted strings, `archived` flipped on.
-    item_dir = tmp_path / "action items" / "fix-login"
-    item_dir.mkdir(parents=True)
-    (item_dir / "fix-login.md").write_text(
-        '---\ntags: ["x"]\narchived: true\ntitle: "Quoted"\ntype: "task"\n'
-        "source_project: null\n---\n\n# Quoted\n\nBroken on refresh.\n",
-        encoding="utf-8",
-    )
-
-    (item,) = list_items(tmp_path / "action items")
-    assert item.meta == {
-        "tags": ["x"],
-        "archived": True,
-        "title": "Quoted",
-        "type": "task",
-        "source_project": None,
-    }
-    assert item.meta["archived"] is True  # JSON bool, not the string "true"
-    # Body intact apart from the leading blank line and the trailing newline
-    # that `splitlines()` normalises away.
-    assert item.body == "# Quoted\n\nBroken on refresh."
-
-
-def test_list_items_never_writes_to_the_files_it_reads(tmp_path: Path) -> None:
-    md_path = write_item(
-        tmp_path / "action items",
-        title="Fix login",
-        meta={"type": "task", "title": "Fix login", "archived": False},
-        body_md="Broken on refresh.",
-        images=[("screenshot-0010.png", b"\x89PNGfake")],
-    )
-    before = md_path.read_bytes()
-
-    assert len(list_items(tmp_path / "action items")) == 1
-
-    assert md_path.read_bytes() == before
-
-
-def test_parse_front_matter_never_raises_on_edited_or_garbled_text() -> None:
-    malformed = [
-        "",
-        "---",  # unterminated fence
-        "---\n",
-        "---\n---\n",
-        "---\nkey:\n---\nbody",  # key with no value
-        "---\narchived: yes\n---\n",  # YAML bool that is not JSON
-        "---\n: novalue\n---\n",  # empty key
-        "---\nno colon at all\n---\n",
-        "---\ntags: [x]\n---\n",  # unquoted YAML flow scalar
-        "---\n\x00\xff\x1b[31m\n---\nbody",
-        "not front matter at all",
-    ]
-    for text in malformed:
-        meta, body = parse_front_matter(text)
-        assert isinstance(meta, dict)
-        assert isinstance(body, str)
-
-    # A non-JSON scalar degrades to the raw string; it never fails the read.
-    assert parse_front_matter("---\narchived: yes\n---\n")[0]["archived"] == "yes"
-    assert parse_front_matter("---\nkey:\n---\nbody")[0]["key"] == ""
-    assert parse_front_matter("---\n: novalue\n---\n")[0] == {}
 
 
 # -------------------------------------------------------- summarize reduce
@@ -693,42 +398,6 @@ def test_truncation_without_a_splitter_propagates() -> None:
         summarize_chunks(["chunk"], complete)
 
 
-# ----------------------------------------------------------- repair prompt
-
-
-def test_repair_keeps_the_system_message_and_drops_the_transcript() -> None:
-    from transcription.llm.prompts import action_items_messages, repair_messages
-
-    original = action_items_messages("[0:00] A: the transcript body", language="ru")
-    repair = repair_messages(
-        original,
-        '{"items": [{"bad": true}]}',
-        "does not match the schema",
-        output_budget_tokens=1000,
-        count_tokens=estimate_tokens,
-    )
-
-    assert repair[0] == original[0], "the pinned system message survives verbatim"
-    assert len(repair) == 2
-    assert "the transcript body" not in repair[1]["content"]
-    assert '{"items": [{"bad": true}]}' in repair[1]["content"]
-    assert "does not match the schema" in repair[1]["content"]
-
-
-def test_repair_truncates_a_huge_echoed_output_to_the_budget() -> None:
-    from transcription.llm.prompts import action_items_messages, repair_messages
-
-    huge = "x" * 40_000
-    repair = repair_messages(
-        action_items_messages("transcript"),
-        huge,
-        "err",
-        output_budget_tokens=100,
-        count_tokens=estimate_tokens,
-    )
-    assert len(repair[1]["content"]) < 1000
-
-
 # ------------------------------------------------- llama.cpp streaming loop
 
 
@@ -779,32 +448,3 @@ def test_count_tokens_falls_back_to_the_heuristic_when_loading_fails() -> None:
 
     provider._load = boom  # type: ignore[method-assign]
     assert provider.count_tokens("abcdefgh") == estimate_tokens("abcdefgh")
-
-
-def test_written_front_matter_parses_identically_under_a_real_yaml_parser(
-    tmp_path: Path,
-) -> None:
-    meta = {
-        "type": "task",
-        "title": 'A "quoted" title -- с кириллицей',
-        "archived": False,
-        "source_project": None,
-        "source_meeting": "260824 - standup",
-        "source_recording": "source.mp4",
-        "source_date": "2026-08-24",
-        "timestamps": [1.5, 2.0],
-    }
-    md_path = write_item(
-        tmp_path / "action items",
-        title="Fix login",
-        meta=meta,
-        body_md="Broken on refresh.",
-        images=[],
-    )
-    text = md_path.read_text(encoding="utf-8")
-
-    parsed_meta, _ = parse_front_matter(text)
-    lines = text.splitlines()
-    block = "\n".join(lines[1 : lines.index("---", 1)])
-
-    assert yaml.safe_load(block) == parsed_meta == meta

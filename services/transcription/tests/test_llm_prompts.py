@@ -1,6 +1,6 @@
 """Prompt-builder unit tests for language pinning.
 
-The five per-meeting builders take an explicit target language and turn it
+The per-meeting builders take an explicit target language and turn it
 into a hard directive naming the output language; anything outside the
 supported {ru, en} set falls back to today's soft mirror rule. Pure string
 assertions -- no model, no filesystem (NFR-1).
@@ -18,10 +18,8 @@ import pytest
 from transcription.llm import prompts
 from transcription.llm.prompts import (
     Message,
-    action_items_messages,
     chunk_summary_messages,
     merge_summaries_messages,
-    repair_messages,
     summary_messages,
 )
 
@@ -30,13 +28,12 @@ TERMS_CLAUSE = "Keep technical terms, product names and code identifiers as they
 
 TRANSCRIPT = "[0:01] A: hello"
 
-# The four per-meeting builders paired with their non-language arguments; the
+# The three per-meeting builders paired with their non-language arguments; the
 # language is threaded in as a keyword by the tests.
 BUILDERS: dict[str, tuple[Callable[..., list[Message]], tuple[Any, ...]]] = {
     "summary_messages": (summary_messages, (TRANSCRIPT,)),
     "chunk_summary_messages": (chunk_summary_messages, (TRANSCRIPT, 0, 3)),
     "merge_summaries_messages": (merge_summaries_messages, (["part one"],)),
-    "action_items_messages": (action_items_messages, (TRANSCRIPT,)),
 }
 
 BUILDER_NAMES = sorted(BUILDERS)
@@ -117,22 +114,14 @@ def test_language_is_a_keyword_parameter_with_a_default(name: str) -> None:
 # ------------------------------------------------------------------- FR-4
 
 
-def test_repair_replays_the_pinned_system_message_verbatim() -> None:
-    original = action_items_messages("[0:01] A: hello", language="ru")
-    repaired = repair_messages(
-        original,
-        "not json",
-        "invalid JSON",
-        output_budget_tokens=1024,
-        count_tokens=lambda text: max(1, len(text) // 2),
-    )
-    assert repaired[0] == original[0]
-    assert "Write your entire answer in Russian." in system_content(repaired)
-    # Bounded by construction: the transcript is not replayed, only the
-    # echoed output and the error ride along.
-    assert len(repaired) == 2
-    assert all(TRANSCRIPT not in message["content"] for message in repaired[1:])
-    assert "not json" in repaired[1]["content"]
+@pytest.mark.parametrize("name", BUILDER_NAMES)
+def test_every_summary_prompt_asks_for_action_items(name: str) -> None:
+    """Action items are a summary section now (extraction was retired), and
+    the map-reduce path must carry them too or a long transcript's reduce
+    would drop them."""
+    messages = build(name)
+    assert messages[1]["role"] == "user"
+    assert "action items" in messages[1]["content"].casefold()
 
 
 # ------------------------------------------------------------------- FR-2

@@ -38,9 +38,12 @@
 //!   <PROJECT>/
 //!     <date> - <Title>/
 //!       source.<ext>
-//!       action items/<slug>/<slug>.md   (F2's LLM extraction)
+//!       summary.md                      (F2's LLM summary; carries the
+//!                                        action items as a section)
+//!       export.md + <name>.pdf          (per-recording export)
+//!       action items/<slug>/<slug>.md   (legacy: the retired extraction job)
 //!       facts/<slug>/<slug>.md          (legacy: the retired facts job)
-//!       exports/<YYMMDD>/               (per-recording export)
+//!       exports/<YYMMDD>/               (legacy: the old dated export tree)
 //!     reports/<YYMMDD>/                 (project-level, F2's LLM jobs)
 //!   unsorted/
 //!     <YYMMDD of ingest> - <original stem>/
@@ -48,19 +51,21 @@
 //! ```
 //!
 //! Every ingested recording — sorted or unsorted — gets its own folder, so
-//! that later artifacts (a transcript, a summary, extracted action items,
-//! a per-recording export) can be written next to the source; an unsorted
-//! meeting folder takes exactly the same contents as a filed one.
-//! `source.*`, `transcript.json`, `summary.md`, `action items`, `facts`
-//! (legacy — the retired facts job's tree, still reserved), `exports` (all
-//! four inside a meeting folder), `reports` (project-level) and `unsorted`
-//! are reserved names owned by the vault contract.
+//! that later artifacts (a transcript, a summary, a per-recording export)
+//! can be written next to the source; an unsorted meeting folder takes
+//! exactly the same contents as a filed one. `source.*`,
+//! `transcript.json`, `summary.md`, `action items` (legacy — the retired
+//! extraction job's tree, still reserved), `facts` (legacy — the retired
+//! facts job's tree, still reserved), `exports` (legacy — the old dated
+//! export tree; exports now land in the meeting folder itself) (all inside
+//! a meeting folder), `reports` (project-level) and `unsorted` are
+//! reserved names owned by the vault contract.
 //!
 //! Only the project *level* needs a listing exclusion, since [`list`] never
 //! recurses into a meeting folder: `<PROJECT>/reports/`, plus the legacy
 //! `<PROJECT>/action items/` and `<PROJECT>/facts/` trees an older build
 //! wrote before the per-meeting anchor (kept on disk, no longer read or
-//! written — see [`artifacts`]).
+//! written).
 //!
 //! ## Usage (the call F3's `#[command]` will make)
 //!
@@ -132,14 +137,8 @@ pub mod list;
 /// these the only vault-mutating calls outside ingest.
 pub mod manage;
 
-/// Reading the extraction items F2's LLM job writes into
-/// `<meeting>/action items/` — the Rust mirror of the Python-owned
-/// front-matter contract.
-pub mod artifacts;
-
 // Curated public API surface (T10) — the fixed shape F3 links against.
 pub use appdata::app_data_dir;
-pub use artifacts::{list_action_items, read_item, StoredItem};
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
 pub use list::{list_meetings, MeetingEntry};

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fakes import FakeFrameExtractor, FakeLlm
+from fakes import FakeLlm
 from fastapi.testclient import TestClient
 
 from transcription.app import create_app
@@ -64,12 +64,7 @@ def meeting_dir(tmp_app_dir: Path) -> Path:
 
 def _app_with_fake_llm(config: Config, llm: FakeLlm) -> Any:
     def job_manager_factory(cfg: Config, ledger: Ledger) -> JobManager:
-        return JobManager(
-            cfg,
-            ledger,
-            llm_factory=lambda _cfg: llm,
-            frame_extractor_factory=FakeFrameExtractor,
-        )
+        return JobManager(cfg, ledger, llm_factory=lambda _cfg: llm)
 
     return create_app(config, job_manager_factory=job_manager_factory)
 
@@ -85,41 +80,16 @@ def _wait_terminal(client: TestClient, job_id: str, timeout: float = 30.0) -> di
         time.sleep(0.01)
 
 
-def test_item_screenshots_endpoint_captures_and_is_authed(
-    config: Config, meeting_dir: Path
-) -> None:
-    from transcription.artifacts import write_item
-
-    (meeting_dir / "source.mp4").write_bytes(b"fake-video")
-    md_path = write_item(
-        meeting_dir / "action items",
-        title="A task",
-        meta={"type": "task", "title": "A task", "timestamps": [2.0, 5.0]},
-        body_md="d",
-        images=[],
-    )
+def test_the_retired_screenshots_endpoint_is_gone(config: Config, meeting_dir: Path) -> None:
+    """`POST /v1/items/screenshots` was retired with the action-items job."""
     app = _app_with_fake_llm(config, FakeLlm())
     with TestClient(app) as client:
-        body = {"item_dir": str(md_path.parent)}
-        assert client.post("/v1/items/screenshots", json=body).status_code == 401
-        assert (
-            client.post("/v1/items/screenshots", json=body, headers=WRONG_AUTH).status_code == 401
-        )
-
-        response = client.post("/v1/items/screenshots", json=body, headers=AUTH)
-        assert response.status_code == 200
-        result = response.json()
-        assert result["written"] == ["screenshot-0002.png", "screenshot-0005.png"]
-        assert result["screenshots"] == ["screenshot-0002.png", "screenshot-0005.png"]
-
-        # A directory outside the allowed roots is refused before any read.
-        outside = client.post(
+        response = client.post(
             "/v1/items/screenshots",
-            json={"item_dir": "C:\\Windows\\action items\\x"},
+            json={"item_dir": str(meeting_dir)},
             headers=AUTH,
         )
-        assert outside.status_code == 400
-        assert outside.json()["error_kind"] == "invalid_request"
+        assert response.status_code == 404
 
 
 def test_summarize_over_http_reports_job_type_and_a_manifest_result(

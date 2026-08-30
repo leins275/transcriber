@@ -21,7 +21,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-use vault::{Classification, CollisionOutcome, ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME};
+use vault::{Classification, CollisionOutcome};
 
 use crate::ingest;
 use crate::paths;
@@ -70,7 +70,7 @@ pub struct JobSnapshot {
     pub file_name: String,
     /// Which pipeline this job runs: `"transcribe"` (the default, so an
     /// older frontend build sees no change) or one of F2's derived job
-    /// types (`"summarize"`, `"action_items"`, `"export"`).
+    /// types (`"summarize"`, `"export"`).
     /// Additive to the frozen IPC contract.
     pub job_type: String,
     pub state: JobState,
@@ -112,10 +112,10 @@ struct PendingJob {
     snapshot: JobSnapshot,
     work: PendingWork,
     /// What to auto-enqueue once this job lands `Done` — the drop-to-insights
-    /// chain (a dropped recording runs transcribe → summarize →
-    /// action items → export without the operator touching a button). `None`
-    /// for every manually triggered job: a re-transcribe or a button press
-    /// runs exactly what was asked, nothing more.
+    /// chain (a dropped recording runs transcribe → summarize → export
+    /// without the operator touching a button). `None` for every manually
+    /// triggered job: a re-transcribe or a button press runs exactly what
+    /// was asked, nothing more.
     follow_up: Option<FollowUp>,
 }
 
@@ -126,11 +126,9 @@ struct PendingJob {
 /// to be carried around.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FollowUp {
-    /// Summarize the meeting the finished transcription wrote; then chain
-    /// the action-items extraction.
+    /// Summarize the meeting the finished transcription wrote (the summary
+    /// carries the action items as a section); then chain the export.
     Summarize,
-    /// Extract action items; then chain the export document.
-    ActionItems,
     /// Assemble the share-ready export document (no LLM call); the chain
     /// ends here.
     Export,
@@ -330,12 +328,12 @@ impl JobRegistry {
     /// worker task.
     ///
     /// A drop is the start of the drop-to-insights chain: once its
-    /// transcription lands `Done`, a summarize is auto-enqueued; once that
-    /// lands, an action-items extraction; and once that lands, the export
-    /// document — so a dropped recording comes out the other end with a
-    /// transcript, a summary, its action items and a share-ready export
-    /// without another click. (The LLM stages are skipped while no LLM
-    /// model is installed; see `queue_follow_up`.)
+    /// transcription lands `Done`, a summarize is auto-enqueued; and once
+    /// that lands, the export document — so a dropped recording comes out
+    /// the other end with a transcript, a summary (action items included as
+    /// a section) and a share-ready export without another click. (The LLM
+    /// stage is skipped while no LLM model is installed; see
+    /// `queue_follow_up`.)
     pub async fn enqueue(&self, paths: Vec<PathBuf>) -> Vec<JobSnapshot> {
         let mut snapshots = Vec::with_capacity(paths.len());
         for source_path in paths {
@@ -394,9 +392,8 @@ impl JobRegistry {
                 language,
             },
             // Deliberately un-chained: a re-transcribe refreshes the
-            // transcript the operator asked about, and auto-re-extracting
-            // would file duplicate (suffixed) action-item folders. The
-            // Summarize / Action items buttons cover the follow-up.
+            // transcript the operator asked about, nothing more. The
+            // Summarize button covers the follow-up.
             follow_up: None,
         });
         snapshot
@@ -454,13 +451,13 @@ impl JobRegistry {
         })
     }
 
-    /// True while any non-terminal *model-loading* LLM job (summarize /
-    /// action items) exists -- the model-delete guard's question:
-    /// never ask the service to unlink a GGUF a job may be about to mmap.
-    /// (`export` is LLM-flavored but never touches the model.)
+    /// True while any non-terminal *model-loading* LLM job (summarize)
+    /// exists -- the model-delete guard's question: never ask the service
+    /// to unlink a GGUF a job may be about to mmap. (`export` is
+    /// LLM-flavored but never touches the model.)
     pub async fn has_active_llm_job(&self) -> bool {
         self.shared.jobs.read().await.values().any(|job| {
-            matches!(job.job_type.as_str(), "summarize" | "action_items")
+            matches!(job.job_type.as_str(), "summarize")
                 && !matches!(
                     job.state,
                     JobState::Done | JobState::Failed | JobState::Rejected
@@ -757,24 +754,18 @@ async fn poll_until_terminal(
 /// The LLM stages are skipped entirely -- silently, not as a failed job --
 /// while `/health` reports no LLM model on disk: auto-spawning two
 /// guaranteed `model_load` failures per drop would turn a fresh install's
-/// job feed into noise. The operator's Summarize / Action items buttons
-/// still work the moment a model is installed. The export stage makes no
-/// LLM call, so it carries no such gate -- and it is only ever reached
-/// through the LLM stages anyway.
+/// job feed into noise. The operator's Summarize button still works the
+/// moment a model is installed. The export stage makes no LLM call, so it
+/// carries no such gate -- and it is only ever reached through the LLM
+/// stage anyway.
 async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: FollowUp) {
     let Some(finished_dir) = finished.meeting_dir.clone() else {
         return;
     };
 
-    // The meeting folder the next stage reads. A finished transcription's
-    // or summarize's `meeting_dir` is that folder itself; a finished
-    // action-items job's `meeting_dir` is its *output* folder
-    // (`<meeting>/action items`), while its `source_path` is the meeting
-    // folder it read.
-    let meeting_dir = match next {
-        FollowUp::Summarize | FollowUp::ActionItems => finished_dir,
-        FollowUp::Export => finished.source_path.clone(),
-    };
+    // The meeting folder the next stage reads: a finished transcription's
+    // and a finished summarize's `meeting_dir` are both that folder itself.
+    let meeting_dir = finished_dir;
 
     if next != FollowUp::Export {
         let service = shared.service.read().await.clone();
@@ -793,25 +784,13 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         FollowUp::Summarize => (
             LlmJobKind::Summarize,
             meeting_dir.clone(),
-            Some(FollowUp::ActionItems),
-        ),
-        FollowUp::ActionItems => (
-            LlmJobKind::ActionItems,
-            path_string(&Path::new(&meeting_dir).join(ACTION_ITEMS_DIR_NAME)),
             Some(FollowUp::Export),
         ),
-        // The same `<meeting>/exports/<today>` folder `export_recording`
-        // uses (commands/llm.rs `dated_subdir`): one export per day,
-        // overwritten on re-run -- these are regenerable derived documents.
-        FollowUp::Export => (
-            LlmJobKind::Export,
-            path_string(
-                &Path::new(&meeting_dir)
-                    .join(EXPORTS_DIR_NAME)
-                    .join(today_yymmdd()),
-            ),
-            None,
-        ),
+        // The export lands in the meeting folder itself, under stable names
+        // (`export.md` + the share-named PDF), overwritten on re-run --
+        // these are regenerable derived documents. The same folder
+        // `export_recording` (commands/llm.rs) uses.
+        FollowUp::Export => (LlmJobKind::Export, meeting_dir.clone(), None),
     };
     let request = LlmSubmitRequest {
         kind,
@@ -959,18 +938,6 @@ fn now_rfc3339() -> String {
     let minute = (time_of_day % 3600) / 60;
     let second = time_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
-/// Today's local-agnostic (UTC) date in the vault's `YYMMDD` convention --
-/// used to name dated export folders, from the same pure-integer
-/// clock as [`now_rfc3339`].
-pub(crate) fn today_yymmdd() -> String {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let days = (elapsed.as_secs() as i64).div_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    format!("{:02}{month:02}{day:02}", year.rem_euclid(100))
 }
 
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
@@ -1260,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_chains_summarize_action_items_then_export_in_order() {
+    fn a_drop_chains_summarize_then_export_in_order() {
         run(async {
             let dir = tempdir().expect("tempdir");
             let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
@@ -1281,30 +1248,21 @@ mod tests {
             )
             .await;
 
-            // The chain: summarize, then action items, then the export
-            // document -- all over the transcription's meeting folder.
-            let submissions = wait_for_llm_submissions(&fake, 3, Duration::from_secs(5)).await;
+            // The chain: summarize (which carries the action items), then
+            // the export document -- both over the transcription's meeting
+            // folder, and the export lands in that folder itself under
+            // stable names (overwritten on re-run, no dated subfolder).
+            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
             assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Summarize);
-            assert_eq!(submissions[1].kind, crate::service::LlmJobKind::ActionItems);
-            assert_eq!(submissions[2].kind, crate::service::LlmJobKind::Export);
+            assert_eq!(submissions[1].kind, crate::service::LlmJobKind::Export);
 
             let meeting_dir = snapshot_meeting_dir(&registry, &snapshot.id).await;
             assert_eq!(submissions[0].input_path, meeting_dir);
             assert_eq!(submissions[0].output_dir, meeting_dir);
             assert_eq!(submissions[1].input_path, meeting_dir);
-            assert!(
-                submissions[1].output_dir.ends_with("action items"),
-                "action items must land in the meeting's own artifact dir, got {:?}",
-                submissions[1].output_dir
-            );
-            assert_eq!(submissions[2].input_path, meeting_dir);
-            let expected_export_dir = std::path::Path::new(&meeting_dir)
-                .join(vault::EXPORTS_DIR_NAME)
-                .join(crate::jobs::today_yymmdd());
             assert_eq!(
-                std::path::Path::new(&submissions[2].output_dir),
-                expected_export_dir,
-                "the export must land in the meeting's dated exports folder"
+                submissions[1].output_dir, meeting_dir,
+                "the export must land in the meeting folder itself"
             );
 
             // Every chained stage is a tracked, visible job that reaches Done.
@@ -1313,7 +1271,7 @@ mod tests {
                 let jobs = registry.list().await;
                 let mut types: Vec<&str> = jobs.iter().map(|j| j.job_type.as_str()).collect();
                 types.sort_unstable();
-                if types == ["action_items", "export", "summarize", "transcribe"]
+                if types == ["export", "summarize", "transcribe"]
                     && jobs.iter().all(|j| j.state == JobState::Done)
                 {
                     break;
@@ -1394,8 +1352,8 @@ mod tests {
             )
             .await;
 
-            // A re-transcribe refreshes the transcript, nothing more:
-            // auto-extraction would file duplicate suffixed item folders.
+            // A re-transcribe refreshes the transcript, nothing more; the
+            // Summarize button covers any follow-up.
             tokio::time::sleep(Duration::from_millis(200)).await;
             assert!(fake.llm_submissions().is_empty());
             assert_eq!(registry.list().await.len(), 1);

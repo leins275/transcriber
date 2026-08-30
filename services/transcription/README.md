@@ -99,14 +99,15 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 
 | `job_type` | reads | writes |
 |---|---|---|
-| `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` |
-| `action_items` | same | `<meeting>/action items/<slug>/<slug>.md` + `screenshot-*.png` |
-| `export` | one meeting's existing materials (no LLM call) | `<meeting>/exports/<YYMMDD>/export.md` + `<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`) |
+| `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` (with the action items as a section) |
+| `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
 
-A `facts` job existed once; it was retired (the summary's key-discussion
-points carry the notable facts), and submitting one answers
-`invalid_request`. Existing `<meeting>/facts/` trees stay on disk untouched
-and are no longer read — exports no longer include a Facts section.
+`facts` and `action_items` jobs existed once; both were retired (the
+summary carries the notable facts and the action items), and submitting one
+answers `invalid_request`. Existing `<meeting>/facts/`,
+`<meeting>/action items/` and `<meeting>/exports/` trees stay on disk
+untouched and are no longer read — exports no longer include a Facts or
+Action-items section, and `POST /v1/items/screenshots` is gone.
 
 All of them run on the built-in llama.cpp runtime -- the only LLM *engine*
 this service ships -- against the one GGUF in the curated model catalog
@@ -124,21 +125,8 @@ elsewhere.
 Long transcripts are map-reduced against `llm_ctx`, with the reduce running
 in budget-fitted rounds so any transcript length fits the context window;
 a completion that hits the output-token cap is retried on smaller input
-splits instead of being silently truncated. Extraction output is
-grammar-constrained JSON with one bounded repair retry; a chunk that still
-fails is skipped with a job warning, and the job fails
-(`error_kind: "llm_output"`) only when no chunk produced usable output.
-Screenshots come from the recording's video track via PyAV, and capture is
-model-judged: extraction grabs frames only at the `screenshot_timestamps`
-the model marks as visually load-bearing (screen shares, slides, demos) --
-most items nominate none. The operator captures frames for an item's cited
-`timestamps` on demand through `POST /v1/items/screenshots`
-(`{"item_dir": "<meeting>/action items/<slug>"}`, allowed-roots-checked,
-synchronous, idempotent -- existing frames are skipped and the item's `.md`
-is never rewritten). An audio-only recording simply gets none, and a failed
-screenshot pass degrades (items are written without images, the job records
-a warning) rather than failing the job. PDF rendering degrades the same
-way: the `.md` is always written first.
+splits instead of being silently truncated. PDF rendering degrades rather
+than failing the export job: the `.md` is always written first.
 
 Every job type shares the one serial worker: an LLM job queued behind a
 transcription waits, and vice versa -- which is also what guarantees

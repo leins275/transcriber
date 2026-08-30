@@ -243,37 +243,3 @@ class FakeLlm:
 
     def unload(self) -> None:
         self.unload_calls += 1
-
-
-_FAKE_PNG = b"\x89PNG\r\n\x1a\nfake-png-bytes"
-
-
-class FakeFrameExtractor:
-    """A decode-free stand-in for `frame_extractor.PyAvFrameExtractor`."""
-
-    def __init__(
-        self,
-        *,
-        no_video: bool = False,
-        raise_kind: ErrorKind | None = None,
-    ) -> None:
-        self.no_video = no_video
-        self.raise_kind = raise_kind
-        self.calls: list[tuple[Path, list[float]]] = []
-
-    def extract(
-        self,
-        video_path: Path,
-        timestamps: list[float],
-        *,
-        cancel: CancelToken,
-    ) -> list[tuple[float, bytes]]:
-        cancel.raise_if_cancelled()
-        self.calls.append((video_path, list(timestamps)))
-        if self.raise_kind is not None:
-            raise ServiceError(
-                self.raise_kind, f"fake frame extractor raised {self.raise_kind.value}"
-            )
-        if self.no_video:
-            return []
-        return [(stamp, _FAKE_PNG) for stamp in sorted(timestamps)]

@@ -19,9 +19,9 @@ Everything runs locally; the app downloads the models on first use.
 # Main Idea
 
 As a person that simultaneously handle several projects, I like to take the most of the all condacted & participated meetings.
-Drop a recording and the pipeline runs on its own: transcript, then summary (with the key facts and decisions), then action items,
-then a single-file meeting report (export) with all extracted artifacts for sharing and manual analysis — everything
-viewable right in the app, with on-demand screenshots per action item.
+Drop a recording and the pipeline runs on its own: transcript, then summary (with the key facts, decisions and action items),
+then a single-file meeting report (PDF export, written right next to the recording and refreshed on re-export) for sharing
+and manual analysis — everything viewable right in the app.
 
 Also, all the results should be concidered as a preprocessing, with the following manual handling. That's why I also don't have any
 external integrations. Apply your own brain to your data sometimes is good.

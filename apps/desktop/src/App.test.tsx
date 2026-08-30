@@ -423,6 +423,51 @@ describe("App vault browser", () => {
     await settle();
   });
 
+  it("keeps the project filter selected after opening a recording and coming back", async () => {
+    // The filter state lives in App, not in the (unmounted-and-remounted)
+    // VaultPanel: opening a recording and returning must not silently reset
+    // the operator's project selection.
+    mockIPC(
+      (cmd) => {
+        if (cmd === "get_settings") return buildSettings();
+        if (cmd === "service_status") return { state: "ready", base_url: null, detail: null };
+        if (cmd === "list_vault")
+          return [
+            buildVaultEntry({ id: "v-1", project: "ELS", meeting_name: "260812 - Els meeting" }),
+            buildVaultEntry({
+              id: "v-2",
+              project: "GIS",
+              meeting_name: "260811 - Gis meeting",
+              meeting_dir: "D:\\Meetings\\GIS\\260811 - Gis meeting",
+              has_transcript: false,
+            }),
+          ];
+        return null;
+      },
+      { shouldMockEvents: true },
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Gis meeting")).toBeInTheDocument());
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /project/i }), "GIS");
+    expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Gis meeting"));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: /^recording$/i })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /recordings/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: /project/i })).toHaveValue("GIS"),
+    );
+    expect(screen.getByText("Gis meeting")).toBeInTheDocument();
+    expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
+    await settle();
+  });
+
   it("offers no per-row Reveal or Transcript buttons in the library list", async () => {
     // Those actions live on the recording's own page now; the list keeps
     // only the row itself (open).

@@ -30,9 +30,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ItemScreenshots, JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest,
-    ModelDownloadState, ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest,
-    TranscriptionService,
+    JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
+    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -161,19 +160,6 @@ struct LlmSubmitBody<'a> {
 #[derive(Deserialize)]
 struct SubmitResponse {
     job_id: String,
-}
-
-/// `POST /v1/items/screenshots` request body (F2's `ItemScreenshotsRequest`).
-#[derive(Serialize)]
-struct ItemScreenshotsBody<'a> {
-    item_dir: &'a str,
-}
-
-/// `POST /v1/items/screenshots` response body (F2's `ItemScreenshotsResult`).
-#[derive(Deserialize)]
-struct ItemScreenshotsResponse {
-    written: Vec<String>,
-    screenshots: Vec<String>,
 }
 
 /// `GET /v1/jobs/{id}` response body, reduced to the fields this seam uses.
@@ -605,30 +591,6 @@ impl TranscriptionService for HttpTranscriptionService {
             message: err.to_string(),
         })?;
         Ok(parsed.job_id)
-    }
-
-    async fn capture_item_screenshots(
-        &self,
-        item_dir: &str,
-    ) -> Result<ItemScreenshots, ServiceError> {
-        let body = ItemScreenshotsBody { item_dir };
-        let request = self.authorize(
-            self.client
-                .post(self.endpoint("/v1/items/screenshots"))
-                .json(&body),
-        );
-        let response = request.send().await.map_err(|err| self.unavailable(err))?;
-        if !response.status().is_success() {
-            return Err(service_error_from_response(response).await);
-        }
-        let parsed: ItemScreenshotsResponse =
-            response.json().await.map_err(|err| ServiceError::Decode {
-                message: err.to_string(),
-            })?;
-        Ok(ItemScreenshots {
-            written: parsed.written,
-            screenshots: parsed.screenshots,
-        })
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

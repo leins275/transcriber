@@ -185,7 +185,7 @@ def render_pdf(
     )
 
     def link_callback(uri: str, rel: str) -> str:
-        # Fonts and screenshots arrive as file paths (absolute for fonts,
+        # Fonts and images arrive as file paths (absolute for fonts,
         # relative for images embedded from the markdown); resolve the
         # relative ones against the document's own directory.
         candidate = Path(uri)

@@ -20,7 +20,6 @@ export type ActiveJobView = {
 const VERBS: Record<JobType, string> = {
   transcribe: "Transcribing",
   summarize: "Summarizing",
-  action_items: "Extracting action items",
   export: "Exporting PDF",
 };
 

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import styles from "./RecordingPage.module.css";
-import { ActionItemsPanel } from "./ActionItemsPanel";
 import { MeetingEditor } from "./MeetingEditor";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
@@ -9,10 +8,6 @@ import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
 import { speakerNames } from "../lib/turns";
 import { groupIntoTurns } from "../lib/turns";
 import type {
-  ActionItemsView,
-  ArtifactKind,
-  ItemScreenshotView,
-  ItemScreenshotsView,
   JobType,
   MeetingUpdate,
   SummaryView,
@@ -36,24 +31,16 @@ export type RecordingPageProps = {
   onTranscribe: (entryId: string, language: TranscriptLanguage | null) => Promise<void>;
   /** The LLM feature's on-demand jobs over this recording. */
   onSummarize: (entryId: string) => Promise<void>;
-  onExtract: (entryId: string, kind: ArtifactKind) => Promise<void>;
   onExportPdf: (entryId: string) => Promise<void>;
-  /** The action-items tab's reads and per-item screenshot capture. */
-  onReadActionItems: (entryId: string) => Promise<ActionItemsView>;
-  onCaptureItemScreenshots: (entryId: string, itemDirName: string) => Promise<ItemScreenshotsView>;
-  onReadItemScreenshots: (entryId: string, itemDirName: string) => Promise<ItemScreenshotView[]>;
   /** Derived-job types currently in flight for this entry — the matching
    * controls render busy instead of firing twice. */
   activeLlmJobs: JobType[];
   /** Bumped when a summarize job for this entry finishes, so the summary
    * tab re-reads `summary.md`. */
   summaryReloadToken: number;
-  /** Bumped when an action-items job for this entry finishes, so the
-   * action-items tab re-reads the folder. */
-  actionItemsReloadToken: number;
 };
 
-type Tab = "transcript" | "summary" | "action-items";
+type Tab = "transcript" | "summary";
 type Panel = "none" | "edit" | "delete";
 
 /** The languages the app can name. A transcript written before this feature —
@@ -84,7 +71,7 @@ function messageOf(error: unknown): string {
  * One recording, given the whole window — the factored layout.
  *
  * Two rows instead of four: every derived view is a tab (Transcript /
- * Summary / Action items), and an empty tab opens to its own Generate
+ * Summary), and an empty tab opens to its own Generate
  * button in the content area — the generate verbs never sit in the header.
  * Copy acts on the visible tab. Everything rare lives in the `…` overflow
  * menu: re-transcribe (with its language picked right there), regenerate,
@@ -104,14 +91,9 @@ export function RecordingPage({
   onDelete,
   onTranscribe,
   onSummarize,
-  onExtract,
   onExportPdf,
-  onReadActionItems,
-  onCaptureItemScreenshots,
-  onReadItemScreenshots,
   activeLlmJobs,
   summaryReloadToken,
-  actionItemsReloadToken,
 }: RecordingPageProps) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [panel, setPanel] = useState<Panel>("none");
@@ -124,7 +106,6 @@ export function RecordingPage({
   // What the visible tab holds, reported up by the mounted panel, so Copy
   // can act on the tab the operator is looking at.
   const [summaryText, setSummaryText] = useState<string | null>(null);
-  const [actionItemsText, setActionItemsText] = useState<string | null>(null);
 
   // Opening a different recording resets the page-local view state; stale
   // panel content must never survive into another meeting's Copy.
@@ -133,7 +114,6 @@ export function RecordingPage({
     setPanel("none");
     setMenuOpen(false);
     setSummaryText(null);
-    setActionItemsText(null);
   }, [entry.id]);
 
   useEffect(() => {
@@ -165,12 +145,7 @@ export function RecordingPage({
   );
 
   // Copy acts on the visible tab; a tab with nothing loaded copies nothing.
-  const copyText =
-    tab === "transcript"
-      ? (transcript?.text.trim() ?? null)
-      : tab === "summary"
-        ? summaryText
-        : actionItemsText;
+  const copyText = tab === "transcript" ? (transcript?.text.trim() ?? null) : summaryText;
 
   const copyVisible = useCallback(async () => {
     if (!copyText) return;
@@ -238,7 +213,6 @@ export function RecordingPage({
   ].filter((part): part is string => Boolean(part));
 
   const summarizing = activeLlmJobs.includes("summarize");
-  const extracting = activeLlmJobs.includes("action_items");
   const exporting = activeLlmJobs.includes("export");
 
   const closeMenuAnd = (action: () => void) => () => {
@@ -295,17 +269,6 @@ export function RecordingPage({
               onClick={() => setTab("summary")}
             >
               Summary
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="recording-tab-action-items"
-              aria-selected={tab === "action-items"}
-              aria-controls="recording-panel-action-items"
-              className={styles.tab}
-              onClick={() => setTab("action-items")}
-            >
-              Action items
             </button>
           </div>
 
@@ -371,17 +334,6 @@ export function RecordingPage({
                         onClick={closeMenuAnd(() => void runLlm(onSummarize))}
                       >
                         Regenerate summary
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className={styles.menuItem}
-                        disabled={extracting}
-                        onClick={closeMenuAnd(
-                          () => void runLlm((id) => onExtract(id, "action_items")),
-                        )}
-                      >
-                        Re-extract action items
                       </button>
                       <hr className={styles.menuDivider} />
                     </>
@@ -505,25 +457,6 @@ export function RecordingPage({
               onGenerate={() => void runLlm(onSummarize)}
               busy={summarizing}
               onContentChange={setSummaryText}
-            />
-          </div>
-        )}
-
-        {tab === "action-items" && (
-          <div
-            role="tabpanel"
-            id="recording-panel-action-items"
-            aria-labelledby="recording-tab-action-items"
-          >
-            <ActionItemsPanel
-              entryId={entry.id}
-              onLoad={onReadActionItems}
-              onCapture={onCaptureItemScreenshots}
-              onLoadScreenshots={onReadItemScreenshots}
-              reloadToken={actionItemsReloadToken}
-              onGenerate={() => void runLlm((id) => onExtract(id, "action_items"))}
-              generateBusy={extracting}
-              onContentChange={setActionItemsText}
             />
           </div>
         )}

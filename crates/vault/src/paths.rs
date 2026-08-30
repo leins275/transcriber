@@ -57,12 +57,13 @@ pub const SUMMARY_FILE_NAME: &str = "summary.md";
 /// FR-15).
 pub const UNSORTED_DIR_NAME: &str = "unsorted";
 
-/// Reserved directory *inside a meeting folder* for extracted action items
-/// (`<meeting>/action items/<slug>/`). Written by F2's LLM extraction jobs
-/// alongside the recording's own `transcript.json`, `summary.md` and
-/// `exports/`, so the items travel with the meeting when it is filed,
-/// renamed or synced. The exact string is a cross-language contract
-/// mirrored in `services/transcription/src/transcription/artifacts.py`.
+/// Reserved directory *inside a meeting folder* that used to hold extracted
+/// action items (`<meeting>/action items/<slug>/`). The extraction job was
+/// retired — the summary carries the action items as a section now — so
+/// nothing writes or reads this tree any more, but the name stays reserved
+/// so existing folders keep living untouched beside the meeting's other
+/// materials for external tools. The exact string remains a cross-language
+/// contract with the Python service's legacy trees.
 ///
 /// Like [`EXPORTS_DIR_NAME`], the meeting-level directory needs no listing
 /// exclusion: `list_meetings` never recurses into a meeting folder. The
@@ -85,23 +86,25 @@ pub const FACTS_DIR_NAME: &str = "facts";
 /// contract on the exact string as [`ACTION_ITEMS_DIR_NAME`].
 pub const REPORTS_DIR_NAME: &str = "reports";
 
-/// Reserved directory *inside a meeting folder* for per-recording exports
-/// (`<meeting>/exports/<YYMMDD>/`). Listed here for the contract's sake;
-/// `list_meetings` never recurses into meeting folders, so it needs no
-/// listing exclusion.
+/// Reserved directory *inside a meeting folder* that used to hold dated
+/// per-recording exports (`<meeting>/exports/<YYMMDD>/`). Exports now land
+/// in the meeting folder itself (`export.md` plus the share-named PDF,
+/// overwritten in place), so nothing writes this tree any more; the name
+/// stays reserved for the legacy folders. `list_meetings` never recurses
+/// into meeting folders, so it needs no listing exclusion.
 pub const EXPORTS_DIR_NAME: &str = "exports";
 
 /// Every project-level directory name that is *not* a meeting and must be
 /// skipped by the vault listing.
 ///
 /// Two of these three — `action items` and `facts` — are *legacy* at the
-/// project level: extraction now writes them inside the meeting folder
-/// (see [`ACTION_ITEMS_DIR_NAME`]) and nothing reads the project-level
-/// trees any more. They are never migrated or deleted either, so an
-/// existing vault keeps them on disk for external tools, and the listing
-/// must go on skipping them or they would surface as bogus, undated
-/// meetings. `reports` is not legacy: it is still written at the project
-/// level.
+/// project level (and at the meeting level too, since both extraction jobs
+/// were retired — see [`ACTION_ITEMS_DIR_NAME`]): nothing reads the
+/// project-level trees any more. They are never migrated or deleted
+/// either, so an existing vault keeps them on disk for external tools, and
+/// the listing must go on skipping them or they would surface as bogus,
+/// undated meetings. `reports` is not legacy: it is still written at the
+/// project level.
 pub const RESERVED_PROJECT_DIR_NAMES: [&str; 3] =
     [ACTION_ITEMS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME];
 

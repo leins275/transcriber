@@ -22,33 +22,21 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from transcription import artifacts, exporting, frames, paths, transcript
+from transcription import artifacts, exporting, paths, transcript
 from transcription.config import Config
 from transcription.diarization import label_segments
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
 from transcription.errors import ErrorKind, ServiceError, redact
-from transcription.frame_extractor import FrameExtractorProtocol, PyAvFrameExtractor
 from transcription.ledger import Ledger
 from transcription.llm import BUILTIN_ENGINE, get_llm_provider, validate_llm_provider_name
 from transcription.llm.base import LlmProvider, LlmTruncatedError, Message
 from transcription.llm.chunking import chunk_lines, input_budget_tokens
-from transcription.llm.extraction import merge_items, snap_timestamps
-from transcription.llm.prompts import (
-    action_items_messages,
-    render_transcript_lines,
-    repair_messages,
-)
+from transcription.llm.prompts import render_transcript_lines
 from transcription.llm.reasoning import split_reasoning
-from transcription.llm.shapes import (
-    ActionItemsOut,
-    LlmOutputError,
-    parse_llm_json,
-)
-from transcription.llm.summarize import MAX_SPLIT_DEPTH, summarize_chunks
+from transcription.llm.summarize import summarize_chunks
 from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
@@ -60,7 +48,7 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently.
-KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "action_items", "export"})
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export"})
 
 _logger = logging.getLogger("transcription")
 
@@ -90,41 +78,9 @@ class JobState:
     error_message: str | None = None
     # The artifact manifest a non-transcribe job leaves behind (JSON text).
     result_json: str | None = None
-    # Non-fatal degradations (failed screenshots, failed PDF render).
+    # Non-fatal degradations (a failed diarization, a failed PDF render).
     warnings: list[str] = field(default_factory=list)
     cancel_token: CancelToken = field(default_factory=CancelToken)
-
-
-class _ExtractionProgress:
-    """Monotone progress over a growing plan of LLM calls.
-
-    The extraction path used to map each chunk onto a fixed slice of the
-    bar; a split-and-retry (or a JSON repair round) then re-ran its
-    completion with a fresh 0..1 fraction inside the same slice, so the
-    bar visibly jumped back and re-climbed -- which the operator reads as
-    the job silently restarting. This mirrors the summarize path instead:
-    extra calls grow the denominator, and the clamp keeps the bar monotone.
-    """
-
-    def __init__(self, job: JobState, share: float, planned_calls: int) -> None:
-        self._job = job
-        self._share = share
-        self._planned = planned_calls
-        self._done = 0
-
-    def advance(self, fraction: float) -> None:
-        total = max(self._planned, self._done + 1)
-        self._job.progress = min(
-            0.99,
-            max(self._job.progress, (self._done + fraction) / total * self._share),
-        )
-
-    def call_done(self) -> None:
-        self._done += 1
-        self.advance(0.0)
-
-    def calls_added(self, count: int) -> None:
-        self._planned += count
 
 
 class JobManager:
@@ -137,7 +93,6 @@ class JobManager:
         *,
         diarizer_factory: Callable[[Config], DiarizerProtocol] | None = None,
         llm_factory: Callable[[Config], LlmProvider] | None = None,
-        frame_extractor_factory: Callable[[], FrameExtractorProtocol] | None = None,
     ) -> None:
         self._config = config
         self._ledger = ledger
@@ -151,17 +106,13 @@ class JobManager:
         self._diarizer_factory: Callable[[Config], DiarizerProtocol] = (
             diarizer_factory if diarizer_factory is not None else PyannoteDiarizer
         )
-        # The LLM engine and the frame extractor, cached the same way;
-        # `llm_factory`/`frame_extractor_factory` are the matching test seams.
+        # The LLM engine, cached the same way; `llm_factory` is the
+        # matching test seam.
         self._llm: LlmProvider | None = None
         self._llm_factory: Callable[[Config], LlmProvider] = (
             llm_factory
             if llm_factory is not None
             else (lambda config: get_llm_provider(BUILTIN_ENGINE, config))
-        )
-        self._frame_extractor: FrameExtractorProtocol | None = None
-        self._frame_extractor_factory: Callable[[], FrameExtractorProtocol] = (
-            frame_extractor_factory if frame_extractor_factory is not None else PyAvFrameExtractor
         )
         # Guards `self._providers` against two threads racing to construct
         # the same not-yet-cached provider (E15: resolution now happens off
@@ -227,12 +178,6 @@ class JobManager:
                 self._llm = self._llm_factory(self._config)
             return self._llm
 
-    def _get_frame_extractor(self) -> FrameExtractorProtocol:
-        with self._provider_lock:
-            if self._frame_extractor is None:
-                self._frame_extractor = self._frame_extractor_factory()
-            return self._frame_extractor
-
     def llm_info(self) -> dict[str, Any]:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
 
@@ -248,13 +193,13 @@ class JobManager:
         }
 
     def has_active_llm_job(self) -> bool:
-        """Whether any model-loading LLM job (summarize / action_items --
-        not export, which never touches the model) is queued or running.
-        Guards catalog model deletion: never pull a GGUF out from under a
-        job that may be about to mmap it.
+        """Whether any model-loading LLM job (summarize -- not export, which
+        never touches the model) is queued or running. Guards catalog model
+        deletion: never pull a GGUF out from under a job that may be about
+        to mmap it.
         """
         return any(
-            job.job_type in ("summarize", "action_items") and job.status in ("queued", "running")
+            job.job_type == "summarize" and job.status in ("queued", "running")
             for job in self._jobs.values()
         )
 
@@ -307,7 +252,7 @@ class JobManager:
             # The per-meeting derived jobs read the transcript; reject a
             # meeting that has none before any ledger row exists.
             if (
-                job_type in ("summarize", "action_items", "export")
+                job_type in ("summarize", "export")
                 and not (resolved_source / "transcript.json").is_file()
             ):
                 raise ServiceError(
@@ -670,7 +615,7 @@ class JobManager:
             )
 
     # ------------------------------------------------------------------
-    # Derived jobs (summarize / action_items / export)
+    # Derived jobs (summarize / export)
     # ------------------------------------------------------------------
 
     def _llm_budget_tokens(self) -> int:
@@ -700,9 +645,9 @@ class JobManager:
         """Run one non-transcribe job with the shared success/failure tail.
 
         The job body runs as one synchronous function on the single-worker
-        executor (the same thread whisper inference uses), so LLM inference,
-        frame decoding and artifact writes never touch the event loop, and
-        no two jobs' heavy work ever overlaps.
+        executor (the same thread whisper inference uses), so LLM inference
+        and artifact writes never touch the event loop, and no two jobs'
+        heavy work ever overlaps.
         """
         start = time.monotonic()
         uses_llm = job.job_type != "export"
@@ -713,13 +658,11 @@ class JobManager:
                 self._ledger.mark_running(job.job_id, device=provider.describe().device)
                 if job.job_type == "summarize":
                     body = functools.partial(self._summarize_sync, job, provider)
-                elif job.job_type == "action_items":
-                    body = functools.partial(self._extract_sync, job, provider)
                 else:
                     # Unreachable in practice -- the pydantic `JobType` literal
                     # and `KNOWN_JOB_TYPES` both gate the type long before the
                     # worker sees it. Kept explicit so a future LLM job type
-                    # cannot silently inherit the extraction path.
+                    # cannot silently inherit the summarize path.
                     raise ServiceError(
                         ErrorKind.INVALID_REQUEST,
                         f"unsupported llm job type {job.job_type!r}",
@@ -902,345 +845,6 @@ class JobManager:
             )
         return {"artifacts": [str(summary_path)]}
 
-    def _constrained_items(
-        self,
-        job: JobState,
-        provider: LlmProvider,
-        messages: list[Message],
-        wrapper_cls: type[ActionItemsOut],
-        progress: _ExtractionProgress,
-    ) -> list[Any]:
-        """One schema-constrained completion with the one bounded repair retry.
-
-        Truncation (`LlmTruncatedError`) deliberately propagates instead of
-        entering the repair path: a cut-off JSON prefix cannot be fixed by
-        showing it back to the model -- the caller splits the chunk and
-        retries. Repair is reserved for complete output that broke the schema.
-        """
-        schema = wrapper_cls.model_json_schema()
-        text = self._complete_text(
-            job, provider, messages, json_schema=schema, on_progress=progress.advance
-        )
-        progress.call_done()
-        try:
-            return list(parse_llm_json(text, wrapper_cls).items)
-        except LlmOutputError as first_error:
-            # The repair round was not in the plan; put it on the denominator
-            # so the bar stalls rather than ever running backwards.
-            progress.calls_added(1)
-            repair = repair_messages(
-                messages,
-                first_error.raw,
-                str(first_error),
-                output_budget_tokens=self._llm_budget_tokens(),
-                count_tokens=provider.count_tokens,
-            )
-            text = self._complete_text(
-                job, provider, repair, json_schema=schema, on_progress=progress.advance
-            )
-            progress.call_done()
-            try:
-                return list(parse_llm_json(text, wrapper_cls).items)
-            except LlmOutputError as second_error:
-                raise ServiceError(
-                    ErrorKind.LLM_OUTPUT,
-                    f"the model returned invalid {job.job_type} output even after a "
-                    f"repair attempt: {second_error}",
-                ) from second_error
-
-    @staticmethod
-    def _find_source_file(meeting_dir: Path) -> Path | None:
-        """The meeting's `source.<ext>` recording, if any."""
-        try:
-            for entry in meeting_dir.iterdir():
-                if entry.is_file() and entry.stem.casefold() == "source":
-                    return entry
-        except OSError:
-            return None
-        return None
-
-    def _extract_chunk_items(
-        self,
-        job: JobState,
-        provider: LlmProvider,
-        chunk: str,
-        messages_fn: Callable[[str], list[Message]],
-        wrapper_cls: type[ActionItemsOut],
-        progress: _ExtractionProgress,
-        budget_tokens: int,
-        depth: int = 0,
-    ) -> list[Any]:
-        """Extract one chunk, splitting it in half and retrying when the
-        model's JSON output hits the token cap (a rich chunk can need more
-        item text than the output budget holds). Bounded like the summary
-        split; the floor becomes an honest token-limit error instead of the
-        misleading JSON parse error truncation used to surface as."""
-        try:
-            return self._constrained_items(
-                job, provider, messages_fn(chunk), wrapper_cls, progress=progress
-            )
-        except LlmTruncatedError as truncated:
-            # Halved against the chunk's actual size, not just the budget it
-            # was cut under: with a large context the whole transcript can sit
-            # far below the budget, and halving the budget alone would return
-            # the same single chunk and end the ladder on its first rung.
-            half_budget = max(64, min(budget_tokens, provider.count_tokens(chunk)) // 2)
-            sub_chunks = (
-                chunk_lines(chunk.splitlines(), half_budget, count_tokens=provider.count_tokens)
-                if depth < MAX_SPLIT_DEPTH
-                else []
-            )
-            if len(sub_chunks) <= 1:
-                raise ServiceError(
-                    ErrorKind.LLM_OUTPUT,
-                    f"the model's {job.job_type} output hit the token limit even "
-                    "for a minimal transcript chunk; raising "
-                    "llm_max_output_tokens in the service config may help",
-                ) from truncated
-            # The truncated attempt did run end to end (its output is just
-            # discarded); count it done and put the retries on the plan so
-            # the bar stays monotone. Logged so a long stretch of retries is
-            # explicable from the service log instead of looking like a hang.
-            progress.call_done()
-            progress.calls_added(len(sub_chunks))
-            _logger.info(
-                "%s output for job %s hit the token limit; retrying as %d smaller chunks",
-                job.job_type,
-                job.job_id,
-                len(sub_chunks),
-            )
-            items: list[Any] = []
-            for sub_chunk in sub_chunks:
-                job.cancel_token.raise_if_cancelled()
-                items.extend(
-                    self._extract_chunk_items(
-                        job,
-                        provider,
-                        sub_chunk,
-                        messages_fn,
-                        wrapper_cls,
-                        progress,
-                        half_budget,
-                        depth + 1,
-                    )
-                )
-            return items
-
-    def _extract_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
-        meeting_dir = Path(job.source_path)
-        lines, data = self._load_transcript_lines(meeting_dir)
-        budget = self._llm_budget_tokens()
-        chunks = chunk_lines(lines, budget, count_tokens=provider.count_tokens)
-        # The transcript's own language, pinned into every chunk's prompt.
-        # Missing, null or unsupported values are the prompt builder's
-        # problem: it falls back to the soft "mirror the transcript" rule.
-        language = data.get("language")
-
-        wrapper_cls = ActionItemsOut
-        messages_fn: Callable[[str], list[Message]] = functools.partial(
-            action_items_messages, language=language
-        )
-
-        # The LLM owns the first 80% of the progress bar; screenshots and
-        # artifact writes own the rest (the diarization progress-split rule).
-        llm_share = 0.8
-        progress = _ExtractionProgress(job, share=llm_share, planned_calls=len(chunks))
-
-        # One bad chunk degrades to a warning instead of failing the whole
-        # job (the screenshots pattern): every other chunk's items are
-        # independently useful. Only when no chunk yields anything does the
-        # job fail -- and cancellation always wins.
-        per_chunk: list[list[Any]] = []
-        chunk_errors: list[ServiceError] = []
-        for index, chunk in enumerate(chunks):
-            job.cancel_token.raise_if_cancelled()
-            try:
-                per_chunk.append(
-                    self._extract_chunk_items(
-                        job,
-                        provider,
-                        chunk,
-                        messages_fn,
-                        wrapper_cls,
-                        progress,
-                        budget,
-                    )
-                )
-            except ServiceError as exc:
-                if exc.kind is not ErrorKind.LLM_OUTPUT:
-                    raise
-                chunk_errors.append(exc)
-                per_chunk.append([])
-                job.warnings.append(
-                    f"chunk {index + 1}/{len(chunks)} produced no usable "
-                    f"{job.job_type} output ({exc.message}); its items are missing"
-                )
-        if chunk_errors and len(chunk_errors) == len(chunks):
-            raise ServiceError(
-                ErrorKind.LLM_OUTPUT,
-                f"no transcript chunk produced valid {job.job_type} output; "
-                f"last error: {chunk_errors[-1].message}",
-            )
-        items = merge_items(per_chunk)
-
-        segments_raw = data.get("segments")
-        segments = segments_raw if isinstance(segments_raw, list) else []
-        segment_starts = [float(seg.get("start", 0.0)) for seg in segments if isinstance(seg, dict)]
-        source_info = data.get("source")
-        duration = None
-        if isinstance(source_info, dict):
-            raw_duration = source_info.get("duration_sec")
-            duration = float(raw_duration) if isinstance(raw_duration, int | float) else None
-
-        source_file = self._find_source_file(meeting_dir)
-        # Items live inside the meeting folder, so provenance is anchored on
-        # that folder (the job's input), not on where the artifacts happen to
-        # land -- the derivation survives layout moves. The parent is a
-        # project code, or null for meetings under the reserved `unsorted/`
-        # root, which is not a project.
-        parent_name = meeting_dir.parent.name
-        project_name = (
-            None if parent_name.casefold() == artifacts.UNSORTED_DIR_NAME else parent_name
-        )
-        source_date = artifacts.source_date_from_meeting_name(meeting_dir.name)
-        created = datetime.now(UTC).isoformat()
-
-        md_paths: list[Path] = []
-        screenshots_broken = False
-        for index, item in enumerate(items):
-            job.cancel_token.raise_if_cancelled()
-            snapped = snap_timestamps(list(item.timestamps), segment_starts, duration)
-            # Auto-capture is opt-in per moment: only the timestamps the
-            # model nominated as visually load-bearing (screen shares,
-            # slides, demos) are captured here. Most items nominate none;
-            # the operator captures the cited `timestamps` on demand from
-            # the app when an item turns out to deserve frames after all.
-            visual = snap_timestamps(list(item.screenshot_timestamps), segment_starts, duration)
-            images: list[tuple[str, bytes]] = []
-            screenshots_status = "none"
-            planned = frames.plan_screenshots(visual, duration)
-            if source_file is not None and planned and not screenshots_broken:
-                try:
-                    extracted = self._get_frame_extractor().extract(
-                        source_file, planned, cancel=job.cancel_token
-                    )
-                    images = [(frames.screenshot_name(stamp), png) for stamp, png in extracted]
-                    screenshots_status = "succeeded" if images else "none"
-                except ServiceError as exc:
-                    if exc.kind is ErrorKind.CANCELLED:
-                        raise
-                    screenshots_broken = True
-                    screenshots_status = f"failed ({exc.kind.value})"
-                    job.warnings.append(
-                        f"screenshots failed ({exc.kind.value}): {exc.message}; "
-                        "items were written without images"
-                    )
-                except Exception as exc:  # noqa: BLE001 - degraded, never job-fatal
-                    screenshots_broken = True
-                    screenshots_status = "failed (internal)"
-                    job.warnings.append(
-                        f"screenshots failed: {exc}; items were written without images"
-                    )
-            elif screenshots_broken:
-                screenshots_status = "failed"
-
-            meta: dict[str, Any] = {
-                "type": item.type,
-                "title": item.title,
-                # Always written false; only external editors flip it, and a
-                # missing key reads as false (see artifacts.py's contract).
-                "archived": False,
-                "source_project": project_name,
-                "source_meeting": meeting_dir.name,
-                "source_recording": source_file.name if source_file is not None else None,
-                "source_date": source_date,
-                "timestamps": snapped,
-                "created": created,
-                "model": job.model,
-                "job_id": job.job_id,
-                "screenshots": screenshots_status,
-            }
-            md_paths.append(
-                artifacts.write_item(
-                    Path(job.output_path),
-                    title=item.title,
-                    meta=meta,
-                    body_md=item.description_md,
-                    images=images,
-                )
-            )
-            job.progress = min(
-                0.99,
-                max(
-                    job.progress,
-                    llm_share + ((index + 1) / max(1, len(items))) * (1 - llm_share),
-                ),
-            )
-
-        return {"artifacts": [str(path) for path in md_paths], "item_count": len(md_paths)}
-
-    def capture_item_screenshots(self, item_dir: str) -> dict[str, Any]:
-        """On-demand screenshot capture for one already-written action item.
-
-        The operator's counterpart to extraction's model-judged auto-capture:
-        grabs frames at the item's *cited* ``timestamps`` (front matter) and
-        drops them into the item directory. The item's ``.md`` is never
-        rewritten (the artifact contract); readers -- the app's items view
-        and the export assembler -- list the directory's PNGs directly.
-
-        Synchronous and deliberately outside the serial job queue: a bounded
-        PyAV decode of at most :data:`frames.MAX_SCREENSHOTS_PER_ITEM` frames
-        must not wait behind a queued hour-long transcription. Idempotent:
-        moments whose screenshot file already exists are skipped.
-        """
-        allowed_roots = [Path(root) for root in self._config.allowed_roots]
-        resolved = paths.resolve_under_roots(item_dir, allowed_roots, must_exist=True)
-        if resolved.parent.name != artifacts.ACTION_ITEMS_DIR_NAME:
-            raise ServiceError(
-                ErrorKind.INVALID_REQUEST,
-                f"item_dir must be an item under an "
-                f"{artifacts.ACTION_ITEMS_DIR_NAME!r} directory: {resolved.name}",
-            )
-        item = artifacts.read_item(resolved)
-        if item is None:
-            raise ServiceError(
-                ErrorKind.INVALID_REQUEST,
-                f"{resolved.name!r} holds no readable item markdown",
-            )
-
-        meeting_dir = resolved.parent.parent
-        source_file = self._find_source_file(meeting_dir)
-        if source_file is None:
-            raise ServiceError(
-                ErrorKind.UNSUPPORTED_INPUT,
-                f"{meeting_dir.name!r} has no source recording to capture frames from",
-            )
-
-        raw = item.meta.get("timestamps")
-        stamps = (
-            [float(value) for value in raw if isinstance(value, int | float)]
-            if isinstance(raw, list)
-            else []
-        )
-        planned = frames.plan_screenshots(stamps, None)
-        wanted = [
-            stamp for stamp in planned if frames.screenshot_name(stamp) not in item.screenshot_names
-        ]
-
-        written: list[str] = []
-        if wanted:
-            extracted = self._get_frame_extractor().extract(
-                source_file, wanted, cancel=CancelToken()
-            )
-            for stamp, png in extracted:
-                name = frames.screenshot_name(stamp)
-                (resolved / name).write_bytes(png)
-                written.append(name)
-
-        after = artifacts.read_item(resolved)
-        screenshots = after.screenshot_names if after is not None else written
-        return {"written": written, "screenshots": screenshots}
-
     def _export_sync(self, job: JobState) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)
         export_dir = Path(job.output_path)
@@ -1249,7 +853,6 @@ class JobManager:
         export_md, warnings = exporting.build_export_md(
             meeting_dir=meeting_dir,
             meeting_name=meeting_dir.name,
-            export_dir=export_dir,
         )
         job.warnings.extend(warnings)
         md_path = artifacts.write_text_atomic(export_md, export_dir / "export.md")

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -35,7 +36,12 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
   };
 }
 
-function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {}) {
+/** The filter/grouped pair is controlled (owned by App in production, so it
+ * survives the panel's unmount); this harness plays App's role for tests
+ * that drive the picker and the group toggle. */
+function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>) {
+  const [filter, setFilter] = useState(props.filter ?? "");
+  const [grouped, setGrouped] = useState(props.grouped ?? false);
   const defaults = {
     entries: [buildEntry()],
     jobs: [] as JobSnapshot[],
@@ -44,7 +50,20 @@ function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {
     onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),
   };
-  return render(<VaultPanel {...defaults} {...props} />);
+  return (
+    <VaultPanel
+      {...defaults}
+      {...props}
+      filter={filter}
+      onFilterChange={setFilter}
+      grouped={grouped}
+      onGroupedChange={setGrouped}
+    />
+  );
+}
+
+function renderPanel(props: Partial<React.ComponentProps<typeof VaultPanel>> = {}) {
+  return render(<ControlledPanel {...props} />);
 }
 
 describe("VaultPanel", () => {
