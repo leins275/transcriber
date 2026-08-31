@@ -112,6 +112,15 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/index/status?project=` -- which of the project's meetings
+    /// are indexed, pending, or transcript-less. Default: unsupported (the
+    /// house rule).
+    async fn index_status(&self, _project: &str) -> Result<IndexStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "index status is not supported by this service".to_string(),
+        })
+    }
+
     /// `POST /v1/chat` (SSE): streams the local LLM's answer over the
     /// project's materials. `on_event` receives each parsed event on the
     /// runtime's threads until the stream ends, `Done`/`Error` arrives, or
@@ -246,6 +255,30 @@ pub struct SearchHit {
     pub score: f64,
     pub start_sec: Option<f64>,
     pub timestamp: Option<String>,
+}
+
+/// One meeting's row of `GET /v1/index/status`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexMeeting {
+    pub name: String,
+    /// Vault-root-relative, forward slashes.
+    pub meeting_dir: String,
+    /// `"indexed" | "pending" | "no_transcript"`, passed through verbatim.
+    pub state: String,
+    pub chunks: u64,
+}
+
+/// `GET /v1/index/status?project=` -- one project's index state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexStatus {
+    pub project: String,
+    /// Unix seconds of the last completed index pass, if any ran.
+    pub updated_at: Option<i64>,
+    pub indexing: bool,
+    pub progress: Option<f64>,
+    pub indexed_count: u64,
+    pub total_count: u64,
+    pub meetings: Vec<IndexMeeting>,
 }
 
 /// One turn of chat history on its way to `POST /v1/chat`.

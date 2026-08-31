@@ -30,9 +30,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChatEvent, ChatRequest, JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus,
-    LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery,
-    ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ChatEvent, ChatRequest, IndexMeeting, IndexStatus, JobStatus, LedgerJob, LlmCatalogModel,
+    LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit,
+    SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -211,6 +211,28 @@ impl From<SearchHitBody> for SearchHit {
 #[derive(Deserialize)]
 struct SearchResponseBody {
     results: Vec<SearchHitBody>,
+}
+
+/// `GET /v1/index/status` response body (F2's `IndexStatusResponse`).
+#[derive(Deserialize)]
+struct IndexStatusBody {
+    project: String,
+    #[serde(default)]
+    updated_at: Option<i64>,
+    indexing: bool,
+    #[serde(default)]
+    progress: Option<f64>,
+    indexed_count: u64,
+    total_count: u64,
+    meetings: Vec<IndexMeetingBody>,
+}
+
+#[derive(Deserialize)]
+struct IndexMeetingBody {
+    name: String,
+    meeting_dir: String,
+    state: String,
+    chunks: u64,
 }
 
 /// `POST /v1/chat` request body (F2's `ChatRequest`).
@@ -773,6 +795,42 @@ impl TranscriptionService for HttpTranscriptionService {
                 message: err.to_string(),
             })?;
         Ok(parsed.results.into_iter().map(SearchHit::from).collect())
+    }
+
+    async fn index_status(&self, project: &str) -> Result<IndexStatus, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint("/v1/index/status"))
+                .query(&[("project", project)]),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: IndexStatusBody =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(IndexStatus {
+            project: parsed.project,
+            updated_at: parsed.updated_at,
+            indexing: parsed.indexing,
+            progress: parsed.progress,
+            indexed_count: parsed.indexed_count,
+            total_count: parsed.total_count,
+            meetings: parsed
+                .meetings
+                .into_iter()
+                .map(|meeting| IndexMeeting {
+                    name: meeting.name,
+                    meeting_dir: meeting.meeting_dir,
+                    state: meeting.state,
+                    chunks: meeting.chunks,
+                })
+                .collect(),
+        })
     }
 
     async fn chat_stream(

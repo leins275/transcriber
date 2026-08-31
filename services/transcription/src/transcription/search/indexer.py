@@ -42,7 +42,7 @@ logger = logging.getLogger("transcription")
 
 # Project-level directories that are not projects (mirrors the vault
 # crate's RESERVED_PROJECT_DIR_NAMES, plus the legacy trees).
-_RESERVED_PROJECT_DIRS = frozenset({"reports", "action items", "facts", "exports"})
+_RESERVED_PROJECT_DIRS = frozenset({"reports", "action items", "facts", "exports", "chats"})
 
 CHUNK_BUDGET_TOKENS = 512
 CHUNK_OVERLAP_TOKENS = 64

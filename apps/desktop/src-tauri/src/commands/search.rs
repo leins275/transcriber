@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::paths;
-use crate::service::SearchQuery;
+use crate::service::{IndexStatus, SearchQuery};
 
 use super::AppState;
 
@@ -49,6 +49,59 @@ pub struct SearchResultView {
     pub score: f64,
     pub start_sec: Option<f64>,
     pub timestamp: Option<String>,
+}
+
+/// One meeting's row of the index-status panel (display-only; the panel's
+/// rows are not navigation, so no entry-id mapping happens here).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndexMeetingView {
+    pub name: String,
+    /// `"indexed" | "pending" | "no_transcript"`.
+    pub state: String,
+    pub chunks: u64,
+}
+
+/// The index-status panel's data.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndexStatusView {
+    pub project: String,
+    /// Unix seconds of the last completed index pass, if any.
+    pub updated_at_sec: Option<i64>,
+    pub indexing: bool,
+    pub progress: Option<f64>,
+    pub indexed_count: u64,
+    pub total_count: u64,
+    pub meetings: Vec<IndexMeetingView>,
+}
+
+/// `index_status` -- one project's index state for the chat tab's chip and
+/// its expandable panel.
+pub async fn index_status_handler(
+    state: &AppState,
+    project: String,
+) -> Result<IndexStatusView, AppError> {
+    let service = state.service.read().await.clone();
+    let status: IndexStatus = service
+        .index_status(&project)
+        .await
+        .map_err(super::llm::map_service_error)?;
+    Ok(IndexStatusView {
+        project: status.project,
+        updated_at_sec: status.updated_at,
+        indexing: status.indexing,
+        progress: status.progress,
+        indexed_count: status.indexed_count,
+        total_count: status.total_count,
+        meetings: status
+            .meetings
+            .into_iter()
+            .map(|meeting| IndexMeetingView {
+                name: meeting.name,
+                state: meeting.state,
+                chunks: meeting.chunks,
+            })
+            .collect(),
+    })
 }
 
 /// `reindex_vault` -- asks the service for an incremental index pass NOW,

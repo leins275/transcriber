@@ -164,6 +164,38 @@ def test_a_missing_index_answers_empty_not_500(config: Config) -> None:
         assert response.json()["results"] == []
 
 
+def test_index_status_reports_indexed_pending_and_transcriptless(
+    app,  # noqa: ANN001
+    vault_root: Path,
+) -> None:
+    # Added after the fixture's index pass: a transcript nobody indexed yet,
+    # and a meeting with no transcript at all.
+    _write_meeting(vault_root, "ACME", "260830 - Later meeting")
+    (vault_root / "ACME" / "260829 - Empty shell").mkdir()
+
+    with TestClient(app) as client:
+        response = client.get("/v1/index/status", params={"project": "ACME"}, headers=AUTH)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["project"] == "ACME"
+        assert body["indexing"] is False
+        assert body["total_count"] == 3
+        assert body["indexed_count"] == 1
+        by_name = {meeting["name"]: meeting for meeting in body["meetings"]}
+        assert by_name["260831 - Security retro"]["state"] == "indexed"
+        assert by_name["260831 - Security retro"]["chunks"] > 0
+        assert by_name["260830 - Later meeting"]["state"] == "pending"
+        assert by_name["260829 - Empty shell"]["state"] == "no_transcript"
+
+
+def test_index_status_rejects_a_traversal_project(app) -> None:  # noqa: ANN001
+    with TestClient(app) as client:
+        response = client.get("/v1/index/status", params={"project": "../evil"}, headers=AUTH)
+
+        assert response.status_code == 400
+
+
 def test_search_requires_the_bearer_token(app) -> None:  # noqa: ANN001
     with TestClient(app) as client:
         response = client.post("/v1/search", json={"query": "x"})

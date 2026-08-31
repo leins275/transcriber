@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    ChatEvent, ChatRequest, JobState, JobStatus, LlmCatalogModel, LlmModelsStatus,
+    ChatEvent, ChatRequest, IndexStatus, JobState, JobStatus, LlmCatalogModel, LlmModelsStatus,
     LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery,
     ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
@@ -576,6 +576,25 @@ impl TranscriptionService for FakeService {
             });
         }
         Ok(Vec::new())
+    }
+
+    async fn index_status(&self, project: &str) -> Result<IndexStatus, ServiceError> {
+        // An honest empty state: the fake indexes nothing.
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        Ok(IndexStatus {
+            project: project.to_string(),
+            updated_at: None,
+            indexing: false,
+            progress: None,
+            indexed_count: 0,
+            total_count: 0,
+            meetings: Vec::new(),
+        })
     }
 
     async fn chat_stream(

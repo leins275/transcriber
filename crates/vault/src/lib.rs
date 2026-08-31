@@ -47,6 +47,8 @@
 //!       facts/<slug>/<slug>.md          (legacy: the retired facts job)
 //!       exports/<YYMMDD>/               (legacy: the old dated export tree)
 //!     reports/<YYMMDD>/                 (project-level, F2's LLM jobs)
+//!     chats/<id>.json                   (project-level, saved project-chat
+//!                                        conversations)
 //!   unsorted/
 //!     <YYMMDD of ingest> - <original stem>/
 //!       source.<ext>
@@ -147,7 +149,7 @@ pub use list::{list_meetings, MeetingEntry};
 pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{
-    ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME, REPORTS_DIR_NAME,
-    RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME,
-    UNSORTED_DIR_NAME,
+    ACTION_ITEMS_DIR_NAME, CHATS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME,
+    REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, SUMMARY_FILE_NAME,
+    TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };

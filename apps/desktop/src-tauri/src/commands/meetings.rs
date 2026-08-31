@@ -684,6 +684,58 @@ pub async fn write_note_handler(
     Ok(())
 }
 
+/// `append_to_note` — appends a block to a meeting's `note.md` (creating
+/// it when absent), the "Add to meeting notes" action under a chat answer.
+/// Reuses the atomic [`write_note`]; a quiet re-index follows so the new
+/// text becomes searchable.
+pub async fn append_to_note_handler(
+    state: &AppState,
+    entry_id: &str,
+    markdown: String,
+) -> Result<(), AppError> {
+    if markdown.len() as u64 > MAX_NOTE_BYTES {
+        return Err(AppError::invalid_argument(
+            "the text is too large to append (4 MB limit)".to_string(),
+        ));
+    }
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+
+    tokio::task::spawn_blocking(move || {
+        let path = meeting_dir.join(vault::NOTE_FILE_NAME);
+        let existing = match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_NOTE_BYTES => {
+                std::fs::read_to_string(&path).unwrap_or_default()
+            }
+            _ => String::new(),
+        };
+        let combined = if existing.trim().is_empty() {
+            format!("{}\n", markdown.trim_end())
+        } else {
+            format!(
+                "{}\n\n---\n\n{}\n",
+                existing.trim_end(),
+                markdown.trim_end()
+            )
+        };
+        if combined.len() as u64 > MAX_NOTE_BYTES {
+            return Err(AppError::invalid_argument(
+                "the note would exceed its 4 MB limit".to_string(),
+            ));
+        }
+        write_note(&meeting_dir, &combined)
+    })
+    .await
+    .map_err(|join_err| {
+        AppError::internal(format!("append_to_note task panicked: {join_err}"))
+    })??;
+
+    let service = state.service.read().await.clone();
+    tokio::spawn(async move {
+        let _ = service.submit_index().await;
+    });
+    Ok(())
+}
+
 /// `list_project_speaker_names` — the distinct speaker names the operator
 /// has assigned across all of this meeting's project siblings.
 ///
@@ -1415,6 +1467,77 @@ mod tests {
 
             let view = read_note_handler(&state, &id).await.expect("read note");
             assert_eq!(view.markdown.as_deref(), Some(""));
+        });
+    }
+
+    // -- saved chats (commands::chats) --------------------------------------
+
+    #[test]
+    fn a_chat_round_trips_and_lists_newest_first() {
+        run(async {
+            use crate::commands::chats::{
+                list_chats_handler, read_chat_handler, save_chat_handler, ChatConversationInput,
+                ChatMessageInput,
+            };
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+
+            let saved = save_chat_handler(
+                &state,
+                "ELS",
+                ChatConversationInput {
+                    id: None,
+                    title: "Дедлайн и решения".to_string(),
+                    messages: vec![
+                        ChatMessageInput {
+                            role: "user".to_string(),
+                            content: "когда дедлайн?".to_string(),
+                            sources: vec![],
+                        },
+                        ChatMessageInput {
+                            role: "assistant".to_string(),
+                            content: "15 сентября.".to_string(),
+                            sources: vec![],
+                        },
+                    ],
+                },
+            )
+            .await
+            .expect("save chat");
+            assert_eq!(saved.question_count, 1);
+
+            let listed = list_chats_handler(&state, "ELS").await.expect("list");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].title, "Дедлайн и решения");
+
+            let read = read_chat_handler(&state, "ELS", &saved.id)
+                .await
+                .expect("read");
+            assert_eq!(read.messages.len(), 2);
+            assert_eq!(read.messages[1].content, "15 сентября.");
+
+            // The chats dir must never surface as a meeting in the listing.
+            let entries = list_vault_handler(&state).await.expect("list vault");
+            assert!(entries.iter().all(|entry| entry.meeting_name != "chats"));
+        });
+    }
+
+    #[test]
+    fn chat_project_and_id_validation_fail_closed() {
+        run(async {
+            use crate::commands::chats::{list_chats_handler, read_chat_handler};
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+
+            for bogus in ["..", "ELS\\..", "unsorted", "reports", "NOPE"] {
+                assert!(
+                    list_chats_handler(&state, bogus).await.is_err(),
+                    "project {bogus:?} must be refused"
+                );
+            }
+            assert!(read_chat_handler(&state, "ELS", "../../etc").await.is_err());
         });
     }
 

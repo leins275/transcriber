@@ -7,8 +7,9 @@ import { VaultSearch } from "./VaultSearch";
 import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGroups";
 import type { JobSnapshot, LedgerJobView, SearchResultView, VaultMeetingView } from "../types";
 
-/** The two views: the recordings themselves, and F2's durable job ledger. */
-type Tab = "recordings" | "log";
+/** The three views: the recordings, the project chat, F2's durable job
+ * ledger. */
+type Tab = "recordings" | "chat" | "log";
 
 /** The picker value meaning "only recordings filed under `unsorted/`".
  * Lowercase, so it can never collide with a real project code — the vault
@@ -54,8 +55,10 @@ export type VaultPanelProps = {
   onSearchChange: (query: string) => void;
   onSearch: (query: string) => Promise<SearchResultView[]>;
   onOpen: (entryId: string) => void;
-  /** Opens a project's own page (recordings + the project chat). */
-  onOpenProject: (project: string) => void;
+  /** The Chat tab's content, composed by App (the same slot pattern as
+   * FirstRun's `modelStep`): the chat's state lives above this panel so it
+   * survives tab switches and unmounts. */
+  chatTab: React.ReactNode;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
   onLoadServiceLog: () => Promise<LedgerJobView[]>;
@@ -92,7 +95,7 @@ export function VaultPanel({
   onSearchChange,
   onSearch,
   onOpen,
-  onOpenProject,
+  chatTab,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
@@ -154,6 +157,17 @@ export function VaultPanel({
           >
             Recordings
             <span className={styles.tabCount}>{entries.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="vault-tab-chat"
+            aria-selected={tab === "chat"}
+            aria-controls="vault-panel-chat"
+            className={styles.tab}
+            onClick={() => setTab("chat")}
+          >
+            Chat
           </button>
           <button
             type="button"
@@ -230,15 +244,6 @@ export function VaultPanel({
                         />
                         Group by project
                       </label>
-                      {validFilter !== "" && validFilter !== UNSORTED_FILTER && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => onOpenProject(validFilter)}
-                        >
-                          Open project
-                        </button>
-                      )}
                     </div>
                   )}
                   {validFilter === UNSORTED_FILTER && (
@@ -258,19 +263,10 @@ export function VaultPanel({
                           <div key={code} className={styles.group}>
                             <div className={styles.groupHead}>
                               <span className={styles.groupKicker}>Project</span>
-                              {/* Still a real heading (structure for anything
-                              navigating by headings); the button inside it is
-                              the way onto the project's own page. */}
-                              <h3 className={`${styles.groupName} mono`}>
-                                <button
-                                  type="button"
-                                  className={styles.groupNameButton}
-                                  aria-label={`Open project ${code}`}
-                                  onClick={() => onOpenProject(code)}
-                                >
-                                  {code}
-                                </button>
-                              </h3>
+                              {/* A real heading, not a styled span: this is the
+                              structure of the list, and it is how the group is
+                              reached by anything navigating by headings. */}
+                              <h3 className={`${styles.groupName} mono`}>{code}</h3>
                               <span className={styles.groupCount}>
                                 {group.length} recording{group.length === 1 ? "" : "s"}
                               </span>
@@ -296,6 +292,17 @@ export function VaultPanel({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {tab === "chat" && (
+        <div
+          role="tabpanel"
+          id="vault-panel-chat"
+          aria-labelledby="vault-tab-chat"
+          className={styles.body}
+        >
+          {chatTab}
         </div>
       )}
 

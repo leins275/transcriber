@@ -17,8 +17,12 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AppError,
+  ChatConversationView,
   ChatEventView,
+  ChatStoredMessage,
+  ChatSummaryView,
   ChatWireMessage,
+  IndexStatusView,
   JobSnapshot,
   LedgerJobView,
   LlmModelDownloadStatus,
@@ -118,6 +122,26 @@ export const api = {
   /** Asks the service for an incremental search-index pass now. Cheap when
    * nothing changed; the service absorbs repeat submissions. */
   reindexVault: (): Promise<void> => call<void>("reindex_vault"),
+  /** One project's index state for the chat tab's chip and panel. */
+  indexStatus: (project: string): Promise<IndexStatusView> =>
+    call<IndexStatusView>("index_status", { project }),
+  /** Appends a block to a meeting's note.md (the "Add to meeting notes"
+   * action under a chat answer). */
+  appendToNote: (entryId: string, markdown: string): Promise<void> =>
+    call<void>("append_to_note", { entryId, markdown }),
+  // Saved chat conversations, stored in the vault's `<PROJECT>/chats/`.
+  listChats: (project: string): Promise<ChatSummaryView[]> =>
+    call<ChatSummaryView[]>("list_chats", { project }),
+  readChat: (project: string, chatId: string): Promise<ChatConversationView> =>
+    call<ChatConversationView>("read_chat", { project, chatId }),
+  saveChat: (
+    project: string,
+    conversation: { id: string | null; title: string; messages: ChatStoredMessage[] },
+  ): Promise<ChatSummaryView> => call<ChatSummaryView>("save_chat", { project, conversation }),
+  renameChat: (project: string, chatId: string, title: string): Promise<void> =>
+    call<void>("rename_chat", { project, chatId, title }),
+  deleteChat: (project: string, chatId: string): Promise<void> =>
+    call<void>("delete_chat", { project, chatId }),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

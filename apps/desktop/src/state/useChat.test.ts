@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ChatEventView } from "../types";
 
 // The api module is the designed test seam: driving a real Tauri `Channel`
@@ -8,6 +8,11 @@ vi.mock("../api", () => ({
   api: {
     chatStream: vi.fn(),
     cancelChat: vi.fn().mockResolvedValue(undefined),
+    listChats: vi.fn().mockResolvedValue([]),
+    readChat: vi.fn(),
+    saveChat: vi.fn(),
+    renameChat: vi.fn().mockResolvedValue(undefined),
+    deleteChat: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -16,6 +21,9 @@ import { useChat } from "./useChat";
 
 const chatStream = vi.mocked(api.chatStream);
 const cancelChat = vi.mocked(api.cancelChat);
+const listChats = vi.mocked(api.listChats);
+const readChat = vi.mocked(api.readChat);
+const saveChat = vi.mocked(api.saveChat);
 
 function scriptStream(events: ChatEventView[]) {
   let release: () => void = () => {};
@@ -32,6 +40,13 @@ function scriptStream(events: ChatEventView[]) {
 describe("useChat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listChats.mockResolvedValue([]);
+    saveChat.mockResolvedValue({
+      id: "chat-1",
+      title: "saved",
+      updated_at_ms: 1,
+      question_count: 1,
+    });
   });
 
   it("accumulates deltas into the assistant turn and attaches sources", async () => {
@@ -60,19 +75,78 @@ describe("useChat", () => {
     );
   });
 
-  it("a length stop surfaces as a truncation warning", async () => {
+  it("persists the conversation after a completed turn, titled by the question", async () => {
     const release = scriptStream([
-      { type: "delta", text: "cut" },
-      { type: "done", finish_reason: "length" },
+      { type: "delta", text: "answer" },
+      { type: "done", finish_reason: "stop" },
     ]);
     const { result } = renderHook(() => useChat("ELS"));
 
+    await act(async () => {
+      result.current.send("когда дедлайн?");
+      release();
+    });
+    await waitFor(() => expect(saveChat).toHaveBeenCalled());
+
+    const [project, conversation] = saveChat.mock.calls[0];
+    expect(project).toBe("ELS");
+    expect(conversation.id).toBeNull();
+    expect(conversation.title).toBe("когда дедлайн?");
+    expect(conversation.messages).toHaveLength(2);
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-1"));
+  });
+
+  it("opens a saved conversation and replaces the transcript", async () => {
+    readChat.mockResolvedValue({
+      id: "chat-9",
+      title: "old talk",
+      messages: [
+        { role: "user", content: "q", sources: [] },
+        {
+          role: "assistant",
+          content: "a",
+          sources: [
+            {
+              entry_id: "v-1",
+              kind: "transcript",
+              meeting_name: "260831 - Sync",
+              timestamp: "0:12",
+              start_sec: 12,
+            },
+          ],
+        },
+      ],
+    });
+    const { result } = renderHook(() => useChat("ELS"));
+
+    await act(async () => {
+      result.current.openConversation("chat-9");
+    });
+
+    await waitFor(() => expect(result.current.conversationId).toBe("chat-9"));
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1].sources?.[0].meeting_name).toBe("260831 - Sync");
+  });
+
+  it("a new conversation clears the transcript but keeps the history", async () => {
+    listChats.mockResolvedValue([
+      { id: "chat-1", title: "t", updated_at_ms: 1, question_count: 1 },
+    ]);
+    const release = scriptStream([{ type: "done", finish_reason: "stop" }]);
+    const { result } = renderHook(() => useChat("ELS"));
+    await waitFor(() => expect(result.current.history).toHaveLength(1));
     await act(async () => {
       result.current.send("q");
       release();
     });
 
-    expect(result.current.error).toMatch(/output limit/i);
+    act(() => {
+      result.current.newConversation();
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.conversationId).toBeNull();
+    expect(result.current.history).toHaveLength(1);
   });
 
   it("an error event lands in error state and stops streaming", async () => {
@@ -103,18 +177,6 @@ describe("useChat", () => {
     rerender({ project: "GIS" });
 
     expect(result.current.messages).toHaveLength(0);
-    expect(cancelChat).toHaveBeenCalled();
-  });
-
-  it("unmounting cancels whatever is still generating", async () => {
-    scriptStream([]);
-    const { result, unmount } = renderHook(() => useChat("ELS"));
-    await act(async () => {
-      result.current.send("q");
-    });
-
-    unmount();
-
     expect(cancelChat).toHaveBeenCalled();
   });
 

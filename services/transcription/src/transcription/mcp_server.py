@@ -53,7 +53,7 @@ _NO_INDEX_MESSAGE = (
 
 # Vault-root subdirectories that are not projects (the vault crate's
 # reserved names plus legacy trees).
-_RESERVED_DIRS = frozenset({"reports", "action items", "facts", "exports"})
+_RESERVED_DIRS = frozenset({"reports", "action items", "facts", "exports", "chats"})
 
 
 class _Vault:

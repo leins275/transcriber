@@ -102,19 +102,30 @@ pub const REPORTS_DIR_NAME: &str = "reports";
 /// into meeting folders, so it needs no listing exclusion.
 pub const EXPORTS_DIR_NAME: &str = "exports";
 
+/// Reserved project-level directory for saved chat conversations
+/// (`<PROJECT>/chats/<id>.json`) — the app's project chat persists its
+/// history here, beside the project's meetings, per the redesign's "stored
+/// in the project itself" rule. Same cross-language contract on the exact
+/// string as [`ACTION_ITEMS_DIR_NAME`].
+pub const CHATS_DIR_NAME: &str = "chats";
+
 /// Every project-level directory name that is *not* a meeting and must be
 /// skipped by the vault listing.
 ///
-/// Two of these three — `action items` and `facts` — are *legacy* at the
+/// Two of these — `action items` and `facts` — are *legacy* at the
 /// project level (and at the meeting level too, since both extraction jobs
 /// were retired — see [`ACTION_ITEMS_DIR_NAME`]): nothing reads the
 /// project-level trees any more. They are never migrated or deleted
 /// either, so an existing vault keeps them on disk for external tools, and
 /// the listing must go on skipping them or they would surface as bogus,
-/// undated meetings. `reports` is not legacy: it is still written at the
-/// project level.
-pub const RESERVED_PROJECT_DIR_NAMES: [&str; 3] =
-    [ACTION_ITEMS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME];
+/// undated meetings. `reports` and `chats` are not legacy: both are still
+/// written at the project level.
+pub const RESERVED_PROJECT_DIR_NAMES: [&str; 4] = [
+    ACTION_ITEMS_DIR_NAME,
+    FACTS_DIR_NAME,
+    REPORTS_DIR_NAME,
+    CHATS_DIR_NAME,
+];
 
 /// Joins `components` onto the canonicalized `root`, rejecting the whole
 /// call with [`VaultError::PathEscapesVault`] if any component could
@@ -323,7 +334,7 @@ mod tests {
     fn reserved_project_dir_names_cover_the_legacy_trees_but_not_exports() {
         assert_eq!(
             RESERVED_PROJECT_DIR_NAMES,
-            ["action items", "facts", "reports"]
+            ["action items", "facts", "reports", "chats"]
         );
         assert!(!RESERVED_PROJECT_DIR_NAMES.contains(&EXPORTS_DIR_NAME));
     }

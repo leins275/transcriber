@@ -27,6 +27,7 @@ import struct
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger("transcription")
 
@@ -517,3 +518,41 @@ class IndexDb:
         with self._lock:
             (count,) = self._conn.execute("SELECT count(*) FROM docs").fetchone()
         return int(count)
+
+    def list_docs(self, project: str | None = None) -> list[dict[str, Any]]:
+        """Per-document rows for the index-status view: which meeting/kind is
+        indexed, with how many chunks."""
+        sql = (
+            "SELECT docs.meeting_dir AS meeting_dir, docs.kind AS kind,"
+            " docs.project AS project, docs.mtime_ns AS mtime_ns,"
+            " count(chunks.chunk_id) AS chunks"
+            " FROM docs LEFT JOIN chunks ON chunks.doc_id = docs.doc_id"
+        )
+        params: list[object] = []
+        if project is not None:
+            sql += " WHERE docs.project = ?"
+            params.append(project)
+        sql += " GROUP BY docs.doc_id"
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [
+            {
+                "meeting_dir": str(row["meeting_dir"]),
+                "kind": str(row["kind"]),
+                "project": str(row["project"]),
+                "mtime_ns": int(row["mtime_ns"]),
+                "chunks": int(row["chunks"]),
+            }
+            for row in rows
+        ]
+
+    def get_setting(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row is not None else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)", (key, value)
+            )

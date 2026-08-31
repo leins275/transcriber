@@ -63,6 +63,10 @@ pub mod search;
 /// Tauri ipc channel.
 pub mod chat;
 
+/// Saved chat conversations (`<PROJECT>/chats/<id>.json`): list, read,
+/// save, rename, delete.
+pub mod chats;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever
@@ -1102,6 +1106,15 @@ pub async fn write_note(
 }
 
 #[tauri::command]
+pub async fn append_to_note(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    markdown: String,
+) -> Result<(), AppError> {
+    meetings::append_to_note_handler(&state, &entry_id, markdown).await
+}
+
+#[tauri::command]
 pub async fn list_project_speaker_names(
     state: tauri::State<'_, AppState>,
     entry_id: String,
@@ -1124,6 +1137,14 @@ pub async fn reindex_vault(state: tauri::State<'_, AppState>) -> Result<(), AppE
 }
 
 #[tauri::command]
+pub async fn index_status(
+    state: tauri::State<'_, AppState>,
+    project: String,
+) -> Result<search::IndexStatusView, AppError> {
+    search::index_status_handler(&state, project).await
+}
+
+#[tauri::command]
 pub async fn chat_stream(
     state: tauri::State<'_, AppState>,
     messages: Vec<chat::ChatMessageArg>,
@@ -1136,6 +1157,51 @@ pub async fn chat_stream(
 #[tauri::command]
 pub async fn cancel_chat(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     chat::cancel_chat_handler(&state).await
+}
+
+#[tauri::command]
+pub async fn list_chats(
+    state: tauri::State<'_, AppState>,
+    project: String,
+) -> Result<Vec<chats::ChatSummaryView>, AppError> {
+    chats::list_chats_handler(&state, &project).await
+}
+
+#[tauri::command]
+pub async fn read_chat(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    chat_id: String,
+) -> Result<chats::ChatConversationView, AppError> {
+    chats::read_chat_handler(&state, &project, &chat_id).await
+}
+
+#[tauri::command]
+pub async fn save_chat(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    conversation: chats::ChatConversationInput,
+) -> Result<chats::ChatSummaryView, AppError> {
+    chats::save_chat_handler(&state, &project, conversation).await
+}
+
+#[tauri::command]
+pub async fn rename_chat(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    chat_id: String,
+    title: String,
+) -> Result<(), AppError> {
+    chats::rename_chat_handler(&state, &project, &chat_id, &title).await
+}
+
+#[tauri::command]
+pub async fn delete_chat(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    chat_id: String,
+) -> Result<(), AppError> {
+    chats::delete_chat_handler(&state, &project, &chat_id).await
 }
 
 #[tauri::command]

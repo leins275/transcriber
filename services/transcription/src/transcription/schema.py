@@ -225,6 +225,27 @@ class SearchResponse(BaseModel):
     results: list[SearchResultModel]
 
 
+class IndexMeetingStatus(BaseModel):
+    """One meeting's row in the index-status view."""
+
+    name: str
+    meeting_dir: str
+    state: Literal["indexed", "pending", "no_transcript"]
+    chunks: int
+
+
+class IndexStatusResponse(BaseModel):
+    """``GET /v1/index/status`` response body."""
+
+    project: str
+    updated_at: int | None = None
+    indexing: bool
+    progress: float | None = None
+    indexed_count: int
+    total_count: int
+    meetings: list[IndexMeetingStatus]
+
+
 class ChatMessageModel(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1)

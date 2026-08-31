@@ -157,6 +157,63 @@ export type ChatEventView =
   | { type: "done"; finish_reason: string }
   | { type: "error"; message: string };
 
+/** A stored answer's cited source, resolved for display: `entry_id` is
+ * present while the cited meeting is still listed (clickable), null when
+ * it is gone (display-only). */
+export type ChatSourceView = {
+  entry_id: string | null;
+  kind: string;
+  meeting_name: string;
+  timestamp: string | null;
+  start_sec: number | null;
+};
+
+/** One row of a project's saved-chat history. */
+export type ChatSummaryView = {
+  id: string;
+  title: string;
+  updated_at_ms: number;
+  question_count: number;
+};
+
+export type ChatMessageView = {
+  role: string;
+  content: string;
+  sources: ChatSourceView[];
+};
+
+export type ChatConversationView = {
+  id: string;
+  title: string;
+  messages: ChatMessageView[];
+};
+
+/** What `save_chat` receives: sources reference the session's entry ids;
+ * the Rust side resolves them to durable vault-relative dirs on write (the
+ * frontend never handles paths). */
+export type ChatStoredMessage = {
+  role: string;
+  content: string;
+  sources: ChatSourceView[];
+};
+
+/** One meeting's row of the index-status panel. */
+export type IndexMeetingView = {
+  name: string;
+  state: "indexed" | "pending" | "no_transcript";
+  chunks: number;
+};
+
+export type IndexStatusView = {
+  project: string;
+  updated_at_sec: number | null;
+  indexing: boolean;
+  progress: number | null;
+  indexed_count: number;
+  total_count: number;
+  meetings: IndexMeetingView[];
+};
+
 /** A meeting's requested new identity. `project: null` files it under
  * `unsorted/`; the Rust side validates all three parts against exactly the
  * rules ingest applies to a filename. */

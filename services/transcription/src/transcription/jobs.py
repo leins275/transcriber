@@ -229,6 +229,18 @@ class JobManager:
         """The chat/summarize input budget (`_llm_budget_tokens`, public)."""
         return self._llm_budget_tokens()
 
+    def index_activity(self) -> tuple[bool, float | None]:
+        """``(indexing, progress)`` -- whether an index job is queued or
+        running, and how far a running one has walked."""
+        for job in self._jobs.values():
+            if job.job_type == "index" and job.status in ("queued", "running"):
+                return True, (job.progress if job.status == "running" else None)
+        return False, None
+
+    def index_db(self) -> IndexDb:
+        """The shared index database (`_get_index_db`, public)."""
+        return self._get_index_db()
+
     async def resolve_llm_for_chat(self) -> LlmProvider:
         """Resolve the LLM engine for the chat route, off the event loop.
 
@@ -1005,6 +1017,7 @@ class JobManager:
             on_progress=on_progress,
             cancel=job.cancel_token,
         )
+        db.set_setting("last_indexed_at", str(int(time.time())))
         job.warnings.extend(stats.warnings)
         return {"stats": stats.as_dict()}
 
