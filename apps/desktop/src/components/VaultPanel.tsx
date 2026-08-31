@@ -74,8 +74,9 @@ export type VaultPanelProps = {
  * One list, grouping optional (redesign turn 8): recordings render flat,
  * newest first, each row carrying its project as a small tag. One filter
  * row narrows to a project (or to Unsorted) and can switch to grouped-by-
- * project headers — a view preference over the same list, not a different
- * page. There are no project pages.
+ * project headers — a view preference over the same list. A project's own
+ * page (its recordings + the project chat) opens through a group header or
+ * the Open-project button beside the filter.
  *
  * Presentational only: no invoke, no listen, no fetch — App.tsx owns
  * fetching and passes every action down.
