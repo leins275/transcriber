@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.15.1 — 2026-08-31
+
+### Bug fixes
+
+- Enable tokio's macros feature for the chat stream's select!
+
 ## 0.15.0 — 2026-08-31
 
 ### Bug fixes
