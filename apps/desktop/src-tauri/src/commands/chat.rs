@@ -109,8 +109,7 @@ pub async fn chat_stream_handler(
                     .into_iter()
                     .filter_map(|hit| {
                         let root = root.as_ref()?;
-                        let absolute =
-                            root.join(hit.meeting_dir.replace('/', std::path::MAIN_SEPARATOR_STR));
+                        let absolute = super::search::resolve_hit_dir(root, &hit.meeting_dir)?;
                         let entry_id = by_path.get(&absolute)?.clone();
                         Some(SearchResultView {
                             entry_id,

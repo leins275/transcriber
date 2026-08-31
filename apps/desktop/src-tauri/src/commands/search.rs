@@ -6,11 +6,12 @@
 //! -- fail closed: a meeting deleted since the last listing simply does not
 //! appear, and no path ever crosses the IPC boundary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::error::AppError;
+use crate::paths;
 use crate::service::SearchQuery;
 
 use super::AppState;
@@ -21,6 +22,19 @@ const MAX_QUERY_CHARS: usize = 500;
 
 /// Results per search -- fixed here rather than exposed to the UI (YAGNI).
 const TOP_K: u32 = 20;
+
+/// Resolves a service hit's vault-relative `meeting_dir` to the exact
+/// `PathBuf` shape `vault_index` stores: joined onto the root, then
+/// canonicalized and verbatim-stripped exactly as `list_vault_handler`
+/// records entries -- a raw join is NOT enough (a root reached through a
+/// short-name or symlinked component, e.g. a CI temp dir, canonicalizes
+/// differently than it prints). `None` when the directory is gone or
+/// escapes the root: the hit is dropped, fail closed.
+pub(super) fn resolve_hit_dir(root: &Path, relative: &str) -> Option<PathBuf> {
+    let joined = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let canonical = paths::ensure_inside(root, &joined).ok()?;
+    Some(paths::strip_verbatim(&canonical))
+}
 
 /// One search hit, shaped for the library's search results list.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -81,9 +95,11 @@ pub async fn search_vault_handler(
 
     let mut results = Vec::with_capacity(hits.len());
     for hit in hits {
-        let absolute = root.join(hit.meeting_dir.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let Some(absolute) = resolve_hit_dir(&root, &hit.meeting_dir) else {
+            continue; // gone from disk, or outside the current root
+        };
         let Some(entry_id) = by_path.get(&absolute) else {
-            continue; // not listed (deleted, or outside the current root)
+            continue; // not listed (deleted since the last list_vault)
         };
         results.push(SearchResultView {
             entry_id: (*entry_id).clone(),
