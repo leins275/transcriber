@@ -144,6 +144,19 @@ export type SearchResultView = {
   timestamp: string | null;
 };
 
+/** One chat turn on the wire to `chat_stream`. */
+export type ChatWireMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+/** One event of a streamed chat answer, as the Tauri channel delivers it. */
+export type ChatEventView =
+  | { type: "delta"; text: string }
+  | { type: "sources"; sources: SearchResultView[] }
+  | { type: "done"; finish_reason: string }
+  | { type: "error"; message: string };
+
 /** A meeting's requested new identity. `project: null` files it under
  * `unsorted/`; the Rust side validates all three parts against exactly the
  * rules ingest applies to a filename. */

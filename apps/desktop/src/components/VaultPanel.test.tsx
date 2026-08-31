@@ -47,6 +47,7 @@ function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>
     entries: [buildEntry()],
     jobs: [] as JobSnapshot[],
     onOpen: () => {},
+    onOpenProject: () => {},
     onRevealJob: () => {},
     onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),

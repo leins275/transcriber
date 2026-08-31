@@ -76,6 +76,19 @@ def render_transcript_lines(
     return lines
 
 
+def chat_system_prompt(*, language: str | None = None) -> str:
+    """The project-chat system prompt: answer only from the provided
+    meeting materials, cite sources inline."""
+    return (
+        "You are the assistant inside a meeting-transcription app. Answer "
+        "the user's question using ONLY the meeting materials provided in "
+        "the context (transcript excerpts, summaries, notes). When a "
+        "statement comes from a specific excerpt, cite it inline with its "
+        "bracketed source tag, e.g. [S2]. If the materials do not contain "
+        "the answer, say so plainly instead of guessing. " + _language_rule(language)
+    )
+
+
 def summary_messages(transcript_text: str, *, language: str | None = None) -> list[Message]:
     """Summarize a transcript that fits in one chunk."""
     return [

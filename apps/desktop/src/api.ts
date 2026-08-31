@@ -8,7 +8,7 @@
  * `drop`/`dataTransfer` code path anywhere in this app (FR-4).
  */
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
@@ -17,6 +17,8 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   AppError,
+  ChatEventView,
+  ChatWireMessage,
   JobSnapshot,
   LedgerJobView,
   LlmModelDownloadStatus,
@@ -99,6 +101,20 @@ export const api = {
   /** Hybrid search over transcripts, summaries and notes. */
   searchVault: (query: string, project: string | null): Promise<SearchResultView[]> =>
     call<SearchResultView[]>("search_vault", { query, project }),
+  /** One streamed chat turn with the local LLM over the project's
+   * materials. `onEvent` receives deltas/sources/done/error while the
+   * returned promise stays pending; it resolves when the stream is over. */
+  chatStream: (
+    messages: ChatWireMessage[],
+    project: string | null,
+    onEvent: (event: ChatEventView) => void,
+  ): Promise<void> => {
+    const channel = new Channel<ChatEventView>();
+    channel.onmessage = onEvent;
+    return call<void>("chat_stream", { messages, project, onEvent: channel });
+  },
+  /** Stops the in-flight chat turn, if any. */
+  cancelChat: (): Promise<void> => call<void>("cancel_chat"),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

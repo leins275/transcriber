@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "./components/AppHeader";
 import { DropZone, type DropZoneState } from "./components/DropZone";
 import { FirstRun } from "./components/FirstRun";
+import { ProjectPage } from "./components/ProjectPage";
 import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
@@ -26,7 +27,8 @@ import {
 } from "./api";
 import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
-import { projectCodes } from "./lib/vaultGroups";
+import { entriesForProject, projectCodes } from "./lib/vaultGroups";
+import { useChat } from "./state/useChat";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
@@ -85,6 +87,10 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+  // Which project page is open, or `null`. Ranked below `openEntryId` in
+  // the render, so opening a recording *from* a project page keeps the
+  // project set underneath -- Back from the recording lands on the project.
+  const [openProject, setOpenProject] = useState<string | null>(null);
   // Project-level speaker memory for the open recording: names assigned
   // across its project siblings, suggested while typing a speaker name.
   // Best-effort — a failed read degrades to no suggestions.
@@ -450,8 +456,21 @@ function App() {
   const headerJob = onMainView ? null : activeJobView(jobs);
   const showRecordings = useCallback(() => {
     setOpenEntryId(null);
+    setOpenProject(null);
     setSettingsOpen(false);
   }, []);
+
+  // A selection can outlive its target (the last meeting re-filed away):
+  // fall back to the library, the same rule the vault filter follows.
+  const validOpenProject =
+    openProject !== null && projectCodes(vaultEntries).includes(openProject) ? openProject : null;
+  const chat = useChat(validOpenProject);
+  const chatDisabledReason =
+    serviceStatus.state !== "ready"
+      ? "Chat needs the transcription service, which is not running."
+      : llmModels && !llmModels.models.some((model) => model.active && model.present)
+        ? "Chat needs the local language model — download it in Settings."
+        : undefined;
 
   const modelStepElement = modelStatus ? (
     <ModelDownloadStep
@@ -540,6 +559,21 @@ function App() {
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
                 />
+              ) : validOpenProject ? (
+                <ProjectPage
+                  project={validOpenProject}
+                  entries={entriesForProject(vaultEntries, validOpenProject)}
+                  onBack={() => setOpenProject(null)}
+                  onOpen={setOpenEntryId}
+                  chat={{
+                    messages: chat.messages,
+                    streaming: chat.streaming,
+                    error: chat.error,
+                    onSend: chat.send,
+                    onStop: chat.stop,
+                    disabledReason: chatDisabledReason,
+                  }}
+                />
               ) : (
                 <>
                   {vaultEntries.length === 0 && jobs.length === 0 ? (
@@ -568,6 +602,7 @@ function App() {
                     onSearchChange={setVaultSearch}
                     onSearch={searchVault}
                     onOpen={setOpenEntryId}
+                    onOpenProject={setOpenProject}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}
                     onLoadServiceLog={loadServiceLog}

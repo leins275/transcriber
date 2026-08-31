@@ -30,9 +30,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
-    ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest,
-    TranscriptionService,
+    ChatEvent, ChatRequest, JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus,
+    LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery,
+    ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -40,6 +40,10 @@ use super::{
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default TCP connect timeout.
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+/// Upper bound on one whole chat stream. LOAD-BEARING per-request override:
+/// reqwest's client-wide `timeout` covers the *entire body read*, so the
+/// default 10s would kill every streamed answer mid-generation.
+const CHAT_STREAM_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on a single `status()` call specifically (E11, NFR-4): with
 /// `jobs::POLL_INTERVAL` at 1.5s, a `status()` call that itself takes up to
 /// [`DEFAULT_REQUEST_TIMEOUT`] (10s) would let displayed job status go far
@@ -207,6 +211,102 @@ impl From<SearchHitBody> for SearchHit {
 #[derive(Deserialize)]
 struct SearchResponseBody {
     results: Vec<SearchHitBody>,
+}
+
+/// `POST /v1/chat` request body (F2's `ChatRequest`).
+#[derive(Serialize)]
+struct ChatBody<'a> {
+    messages: Vec<ChatMessageBody<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ChatMessageBody<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+/// Splits every *complete* `\n\n`-terminated SSE block off the front of
+/// `buffer` and parses it into [`ChatEvent`]s; an unterminated tail block
+/// stays in the buffer for the next network chunk. Pure, so the chunk-split
+/// and CRLF edge cases are unit-testable without HTTP.
+fn drain_sse_events(buffer: &mut String) -> Vec<ChatEvent> {
+    let mut events = Vec::new();
+    loop {
+        // A block ends at a blank line -- which is `\r\n\r\n` under CRLF
+        // framing (where `\n\n` never literally occurs).
+        let lf = buffer.find("\n\n");
+        let crlf = buffer.find("\r\n\r\n");
+        let (boundary, terminator_len) = match (lf, crlf) {
+            (Some(l), Some(c)) if c < l => (c, 4),
+            (Some(l), _) => (l, 2),
+            (None, Some(c)) => (c, 4),
+            (None, None) => break,
+        };
+        let block: String = buffer.drain(..boundary + terminator_len).collect();
+        let mut event_name: Option<&str> = None;
+        let mut data: Option<&str> = None;
+        for line in block.lines() {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            if let Some(rest) = line.strip_prefix("event: ") {
+                event_name = Some(rest);
+            } else if let Some(rest) = line.strip_prefix("data: ") {
+                data = Some(rest);
+            }
+        }
+        let (Some(name), Some(data)) = (event_name, data) else {
+            continue;
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(data) {
+            Ok(value) => value,
+            Err(err) => {
+                events.push(ChatEvent::Error {
+                    message: format!("malformed chat event payload: {err}"),
+                });
+                continue;
+            }
+        };
+        match name {
+            "delta" => {
+                if let Some(text) = parsed.get("text").and_then(|value| value.as_str()) {
+                    events.push(ChatEvent::Delta {
+                        text: text.to_string(),
+                    });
+                }
+            }
+            "sources" => {
+                let sources = parsed
+                    .get("sources")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<Vec<SearchHitBody>>(value).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(SearchHit::from)
+                    .collect();
+                events.push(ChatEvent::Sources { sources });
+            }
+            "done" => {
+                let finish_reason = parsed
+                    .get("finish_reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("stop")
+                    .to_string();
+                events.push(ChatEvent::Done { finish_reason });
+            }
+            "error" => {
+                let message = parsed
+                    .get("error_message")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("chat failed")
+                    .to_string();
+                events.push(ChatEvent::Error { message });
+            }
+            // Unknown event names are forward-compatibility, not errors.
+            _ => {}
+        }
+    }
+    events
 }
 
 /// `GET /v1/jobs/{id}` response body, reduced to the fields this seam uses.
@@ -675,6 +775,69 @@ impl TranscriptionService for HttpTranscriptionService {
         Ok(parsed.results.into_iter().map(SearchHit::from).collect())
     }
 
+    async fn chat_stream(
+        &self,
+        req: ChatRequest,
+        on_event: Box<dyn Fn(ChatEvent) + Send + Sync>,
+        mut cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), ServiceError> {
+        use futures_util::StreamExt;
+
+        let body = ChatBody {
+            messages: req
+                .messages
+                .iter()
+                .map(|message| ChatMessageBody {
+                    role: &message.role,
+                    content: &message.content,
+                })
+                .collect(),
+            project: req.project.as_deref(),
+        };
+        let request = self
+            .authorize(self.client.post(self.endpoint("/v1/chat")).json(&body))
+            // Overrides the client-wide 10s total-read timeout, which would
+            // otherwise kill every stream mid-generation (see the const).
+            .timeout(CHAT_STREAM_TIMEOUT);
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        loop {
+            tokio::select! {
+                // Cancellation outranks a ready network chunk, so a turn
+                // superseded before its first read forwards nothing.
+                biased;
+                // Fired *or dropped*: either way the caller is done with us.
+                _ = &mut cancel => return Ok(()),
+                chunk = stream.next() => match chunk {
+                    None => return Ok(()),
+                    Some(Err(err)) => {
+                        on_event(ChatEvent::Error {
+                            message: err.to_string(),
+                        });
+                        return Ok(());
+                    }
+                    Some(Ok(bytes)) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        for event in drain_sse_events(&mut buffer) {
+                            let terminal =
+                                matches!(event, ChatEvent::Done { .. } | ChatEvent::Error { .. });
+                            on_event(event);
+                            if terminal {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let request = self.authorize(self.client.get(self.endpoint("/v1/llm-model/download")));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -1111,6 +1274,155 @@ mod tests {
                 }
                 other => panic!("expected Unavailable, got {other:?}"),
             }
+        });
+    }
+
+    // -- the chat SSE parser (pure) ------------------------------------
+
+    #[test]
+    fn sse_events_parse_across_arbitrary_chunk_splits() {
+        use super::super::ChatEvent;
+        use super::drain_sse_events;
+
+        let whole = "event: sources\ndata: {\"sources\": []}\n\n\
+                     event: delta\ndata: {\"text\": \"Hel\"}\n\n\
+                     event: delta\ndata: {\"text\": \"lo\"}\n\n\
+                     event: done\ndata: {\"finish_reason\": \"stop\"}\n\n";
+
+        // Feed it one byte at a time -- every possible mid-event split.
+        let mut buffer = String::new();
+        let mut events = Vec::new();
+        for ch in whole.chars() {
+            buffer.push(ch);
+            events.extend(drain_sse_events(&mut buffer));
+        }
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], ChatEvent::Sources { .. }));
+        assert_eq!(
+            events[1],
+            ChatEvent::Delta {
+                text: "Hel".to_string()
+            }
+        );
+        assert_eq!(
+            events[3],
+            ChatEvent::Done {
+                finish_reason: "stop".to_string()
+            }
+        );
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn sse_parser_tolerates_crlf_unknown_events_and_malformed_payloads() {
+        use super::super::ChatEvent;
+        use super::drain_sse_events;
+
+        let mut buffer = "event: future-thing\r\ndata: {\"x\": 1}\r\n\r\n\
+                          event: delta\r\ndata: {\"text\": \"ok\"}\r\n\r\n\
+                          event: delta\ndata: {not json\n\n"
+            .to_string();
+
+        let events = drain_sse_events(&mut buffer);
+
+        // Unknown event dropped, CRLF delta parsed, malformed data becomes
+        // an Error event rather than a silent swallow.
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            ChatEvent::Delta {
+                text: "ok".to_string()
+            }
+        );
+        assert!(matches!(events[1], ChatEvent::Error { .. }));
+    }
+
+    #[test]
+    fn chat_stream_posts_the_conversation_and_forwards_parsed_events() {
+        run(async {
+            let server = MockServer::start().await;
+            let body = "event: delta\ndata: {\"text\": \"hi\"}\n\n\
+                        event: done\ndata: {\"finish_reason\": \"stop\"}\n\n";
+            Mock::given(method("POST"))
+                .and(path("/v1/chat"))
+                .and(body_json(serde_json::json!({
+                    "messages": [{"role": "user", "content": "вопрос"}]
+                })))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string(body),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = received.clone();
+            let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+            service
+                .chat_stream(
+                    super::super::ChatRequest {
+                        messages: vec![super::super::ChatMessage {
+                            role: "user".to_string(),
+                            content: "вопрос".to_string(),
+                        }],
+                        project: None,
+                    },
+                    Box::new(move |event| sink.lock().unwrap().push(event)),
+                    cancel_rx,
+                )
+                .await
+                .expect("chat stream should succeed");
+
+            let events = received.lock().unwrap().clone();
+            assert_eq!(events.len(), 2);
+            assert!(matches!(events[1], super::super::ChatEvent::Done { .. }));
+        });
+    }
+
+    #[test]
+    fn dropping_the_cancel_sender_ends_the_stream_before_any_event() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/chat"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("content-type", "text/event-stream")
+                        .set_body_string("event: delta\ndata: {\"text\": \"a\"}\n\n"),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+            drop(cancel_tx); // superseded before it even started
+
+            let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = received.clone();
+            service
+                .chat_stream(
+                    super::super::ChatRequest {
+                        messages: vec![super::super::ChatMessage {
+                            role: "user".to_string(),
+                            content: "q".to_string(),
+                        }],
+                        project: None,
+                    },
+                    Box::new(move |event| sink.lock().unwrap().push(event)),
+                    cancel_rx,
+                )
+                .await
+                .expect("a cancelled stream is not an error");
+
+            // The biased select saw the (already fired) cancellation before
+            // it ever read the body: nothing was forwarded.
+            assert!(received.lock().unwrap().is_empty());
         });
     }
 

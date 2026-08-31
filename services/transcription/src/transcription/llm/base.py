@@ -85,7 +85,13 @@ class LlmProvider(Protocol):
         temperature: float,
         on_progress: Callable[[float], None],
         cancel: CancelToken,
-    ) -> LlmCompletion: ...
+        on_token: Callable[[str], None] | None = None,
+    ) -> LlmCompletion:
+        """One chat completion. ``on_token`` (when given) receives each raw
+        decoded piece as it lands, on the calling thread -- the streaming
+        seam the SSE chat route builds on. The full joined text still comes
+        back in the returned :class:`LlmCompletion` either way."""
+        ...
 
     def unload(self) -> None:
         """Release the loaded model's memory; a later call reloads lazily."""

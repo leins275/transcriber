@@ -12,9 +12,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    JobState, JobStatus, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
-    ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest,
-    TranscriptionService,
+    ChatEvent, ChatRequest, JobState, JobStatus, LlmCatalogModel, LlmModelsStatus,
+    LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery,
+    ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
@@ -576,6 +576,40 @@ impl TranscriptionService for FakeService {
             });
         }
         Ok(Vec::new())
+    }
+
+    async fn chat_stream(
+        &self,
+        req: ChatRequest,
+        on_event: Box<dyn Fn(ChatEvent) + Send + Sync>,
+        _cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), ServiceError> {
+        // A scripted two-delta answer echoing the question, so the whole
+        // chat UI is drivable under `--fake-service` without any model.
+        {
+            let inner = self.inner.lock().expect("fake service mutex poisoned");
+            if inner.down {
+                return Err(ServiceError::Unavailable {
+                    detail: "fake service is down".to_string(),
+                });
+            }
+        }
+        let question = req
+            .messages
+            .last()
+            .map(|message| message.content.clone())
+            .unwrap_or_default();
+        on_event(ChatEvent::Sources {
+            sources: Vec::new(),
+        });
+        on_event(ChatEvent::Delta {
+            text: "The fake service heard: ".to_string(),
+        });
+        on_event(ChatEvent::Delta { text: question });
+        on_event(ChatEvent::Done {
+            finish_reason: "stop".to_string(),
+        });
+        Ok(())
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

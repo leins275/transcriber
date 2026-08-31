@@ -225,6 +225,7 @@ class LlamaCppProvider:
         temperature: float,
         on_progress: Callable[[float], None],
         cancel: CancelToken,
+        on_token: Callable[[str], None] | None = None,
     ) -> LlmCompletion:
         cancel.raise_if_cancelled()
         llama = self._load()
@@ -254,6 +255,8 @@ class LlamaCppProvider:
                 if piece:
                     pieces.append(piece)
                     completion_tokens += 1
+                    if on_token is not None:
+                        on_token(piece)
                     on_progress(min(0.95, completion_tokens / max(1, max_tokens)))
                 # Depending on the llama-cpp-python version the reason rides
                 # on the last content chunk or on a trailing empty-delta

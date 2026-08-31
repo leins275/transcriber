@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -57,6 +58,10 @@ pub mod llm;
 /// Hybrid vault search (`search_vault`) -- maps the service's directory-
 /// named hits back to entry ids.
 pub mod search;
+
+/// The project chat (`chat_stream`/`cancel_chat`) -- SSE forwarded over a
+/// Tauri ipc channel.
+pub mod chat;
 
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
@@ -397,6 +402,13 @@ pub struct AppState {
     /// use for jobs. A vault entry has no job id of its own, so this is a
     /// parallel map rather than a reuse of `registry`.
     pub vault_index: RwLock<HashMap<String, PathBuf>>,
+    /// The in-flight chat turn's cancel handle. One slot, not a map: a
+    /// single-window app has at most one project chat, so starting a new
+    /// turn stashes a fresh sender here -- and *dropping* the previous one
+    /// fires its receiver, which is exactly how a superseding question
+    /// cancels the stream it replaces. A plain `std::Mutex`: only ever
+    /// locked to swap the `Option`, never held across an `.await`.
+    pub chat_cancel: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl AppState {
@@ -437,6 +449,7 @@ impl AppState {
             revealer,
             fake_mode: false,
             vault_index: RwLock::new(HashMap::new()),
+            chat_cancel: StdMutex::new(None),
         }
     }
 
@@ -1103,6 +1116,21 @@ pub async fn search_vault(
     project: Option<String>,
 ) -> Result<Vec<search::SearchResultView>, AppError> {
     search::search_vault_handler(&state, query, project).await
+}
+
+#[tauri::command]
+pub async fn chat_stream(
+    state: tauri::State<'_, AppState>,
+    messages: Vec<chat::ChatMessageArg>,
+    project: Option<String>,
+    on_event: tauri::ipc::Channel<chat::ChatEventView>,
+) -> Result<(), AppError> {
+    chat::chat_stream_handler(&state, messages, project, on_event).await
+}
+
+#[tauri::command]
+pub async fn cancel_chat(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    chat::cancel_chat_handler(&state).await
 }
 
 #[tauri::command]

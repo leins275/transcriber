@@ -225,6 +225,39 @@ class JobManager:
                 self._index_db = self._index_db_factory(self._config)
             return self._index_db
 
+    def llm_budget_tokens(self) -> int:
+        """The chat/summarize input budget (`_llm_budget_tokens`, public)."""
+        return self._llm_budget_tokens()
+
+    async def resolve_llm_for_chat(self) -> LlmProvider:
+        """Resolve the LLM engine for the chat route, off the event loop.
+
+        Fails *before* any stream starts: a missing GGUF is reported here as
+        `model_load` (naming the download fix) instead of surfacing halfway
+        through an SSE response. The file probe is duck-typed off the
+        provider (`model_file()`), so an injected test fake without one is
+        simply trusted.
+        """
+        try:
+            provider = await asyncio.to_thread(self._get_llm)
+        except ServiceError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - reclassified, not swallowed
+            raise ServiceError(
+                ErrorKind.MODEL_LOAD,
+                f"failed to load llm provider: {redact(str(exc))}",
+            ) from exc
+        model_file = getattr(provider, "model_file", None)
+        if callable(model_file):
+            file_path = model_file()
+            if isinstance(file_path, Path) and not file_path.is_file():
+                raise ServiceError(
+                    ErrorKind.MODEL_LOAD,
+                    f"LLM model file not found: {file_path.name}; "
+                    "download it first (POST /v1/llm-model/download)",
+                )
+        return provider
+
     async def run_serial(self, fn: Callable[[], Any]) -> Any:
         """Run ``fn`` on the single serial executor and await its result.
 

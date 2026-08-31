@@ -221,6 +221,8 @@ pub fn run() {
             commands::write_note,
             commands::list_project_speaker_names,
             commands::search_vault,
+            commands::chat_stream,
+            commands::cancel_chat,
             commands::transcribe_vault_entry,
             commands::cancel_job,
             commands::prepare_update,

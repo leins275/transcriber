@@ -250,6 +250,7 @@ class FakeLlm:
         temperature: float,
         on_progress: Callable[[float], None],
         cancel: CancelToken,
+        on_token: Callable[[str], None] | None = None,
     ) -> Any:
         from transcription.llm.base import LlmCompletion
 
@@ -271,6 +272,11 @@ class FakeLlm:
             text, finish_reason = entry
         else:
             text, finish_reason = entry, "stop"
+        if on_token is not None and text:
+            # Streamed in ~3 pieces so callers exercise real chunking.
+            step = max(1, len(text) // 3)
+            for offset in range(0, len(text), step):
+                on_token(text[offset : offset + step])
         return LlmCompletion(
             text=text, completion_tokens=len(text) // 3, finish_reason=finish_reason
         )

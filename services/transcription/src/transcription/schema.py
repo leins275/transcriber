@@ -225,6 +225,26 @@ class SearchResponse(BaseModel):
     results: list[SearchResultModel]
 
 
+class ChatMessageModel(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    """``POST /v1/chat`` request body (an SSE response). ``project`` scopes
+    retrieval; the last message must be the user's question."""
+
+    messages: list[ChatMessageModel] = Field(min_length=1)
+    project: str | None = None
+    meeting_dir: str | None = None
+
+    @model_validator(mode="after")
+    def _last_message_is_the_question(self) -> ChatRequest:
+        if self.messages[-1].role != "user":
+            raise ValueError("the last chat message must be from the user")
+        return self
+
+
 class Health(BaseModel):
     """``GET /health`` response body (FR-2)."""
 

@@ -112,6 +112,24 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `POST /v1/chat` (SSE): streams the local LLM's answer over the
+    /// project's materials. `on_event` receives each parsed event on the
+    /// runtime's threads until the stream ends, `Done`/`Error` arrives, or
+    /// `cancel` fires (the sender being dropped counts as fired -- that is
+    /// how a superseding turn cancels its predecessor). Errors *before*
+    /// the stream opens come back as `Err`; failures mid-stream arrive as
+    /// a `ChatEvent::Error`. Default: unsupported (the house rule).
+    async fn chat_stream(
+        &self,
+        _req: ChatRequest,
+        _on_event: Box<dyn Fn(ChatEvent) + Send + Sync>,
+        _cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "chat is not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/llm-model/download` -- the GGUF slot's status. Same wire
     /// shape as the whisper trio, its own independent transfer. Default:
     /// unsupported (see `model_download_status`).
@@ -228,6 +246,36 @@ pub struct SearchHit {
     pub score: f64,
     pub start_sec: Option<f64>,
     pub timestamp: Option<String>,
+}
+
+/// One turn of chat history on its way to `POST /v1/chat`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    /// `"user"` or `"assistant"` (F2 validates).
+    pub role: String,
+    pub content: String,
+}
+
+/// `POST /v1/chat` request body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatRequest {
+    /// The whole conversation, last message the user's question.
+    pub messages: Vec<ChatMessage>,
+    /// Scope retrieval to one project's meetings.
+    pub project: Option<String>,
+}
+
+/// One parsed SSE event of the chat stream.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChatEvent {
+    /// A visible piece of the answer (reasoning already stripped by F2).
+    Delta { text: String },
+    /// The retrieval hits the answer draws on; sent once, first.
+    Sources { sources: Vec<SearchHit> },
+    /// Generation finished; `"length"` means the answer was cut off.
+    Done { finish_reason: String },
+    /// The stream failed after it started.
+    Error { message: String },
 }
 
 /// One row of F2's sqlite job ledger (`services/transcription/.../ledger.py`

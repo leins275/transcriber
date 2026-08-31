@@ -92,11 +92,11 @@ class SearchService:
             )
             return None
 
-    def search(
-        self, query: str, *, project: str | None = None, top_k: int | None = None
-    ) -> list[SearchResult]:
-        """SYNCHRONOUS -- run on the serial executor (query embedding is
-        inference and must never overlap whisper/LLM work)."""
+    def _ranked(
+        self, query: str, *, project: str | None, top_k: int | None
+    ) -> list[tuple[SearchResult, str]]:
+        """The fused ranking with each hit's best chunk text (the full text,
+        breadcrumb included -- retrieval wants substance, `search` snips)."""
         query = query.strip()
         if not query:
             raise ServiceError(ErrorKind.INVALID_REQUEST, "search query must not be empty")
@@ -120,7 +120,7 @@ class SearchService:
         fused = rrf_fuse(channels)
         doc_rows = db.get_docs([doc_id for doc_id, _score in fused])
 
-        results: list[SearchResult] = []
+        ranked: list[tuple[SearchResult, str]] = []
         for doc_id, score in fused:
             row = doc_rows.get(doc_id)
             if row is None:
@@ -136,19 +136,36 @@ class SearchService:
             if chunk is None:
                 chunk = db.best_chunk_for(doc_id, "")
             text, start_sec = chunk if chunk is not None else ("", None)
-            results.append(
-                SearchResult(
-                    kind=row.kind,
-                    project=row.project,
-                    meeting_dir=row.meeting_dir,
-                    meeting_title=row.meeting_title,
-                    meeting_date=row.meeting_date,
-                    snippet=make_snippet(text, query),
-                    score=round(score, 6),
-                    start_sec=start_sec,
-                    timestamp=format_timestamp(start_sec) if start_sec is not None else None,
+            ranked.append(
+                (
+                    SearchResult(
+                        kind=row.kind,
+                        project=row.project,
+                        meeting_dir=row.meeting_dir,
+                        meeting_title=row.meeting_title,
+                        meeting_date=row.meeting_date,
+                        snippet=make_snippet(text, query),
+                        score=round(score, 6),
+                        start_sec=start_sec,
+                        timestamp=format_timestamp(start_sec) if start_sec is not None else None,
+                    ),
+                    text,
                 )
             )
-            if len(results) >= limit:
+            if len(ranked) >= limit:
                 break
-        return results
+        return ranked
+
+    def search(
+        self, query: str, *, project: str | None = None, top_k: int | None = None
+    ) -> list[SearchResult]:
+        """SYNCHRONOUS -- run on the serial executor (query embedding is
+        inference and must never overlap whisper/LLM work)."""
+        return [result for result, _text in self._ranked(query, project=project, top_k=top_k)]
+
+    def retrieve(
+        self, query: str, *, project: str | None = None, top_k: int | None = None
+    ) -> list[tuple[SearchResult, str]]:
+        """The chat's retrieval: ``(result, full chunk text)`` pairs in
+        fused order. Same synchronous/serial-executor rule as `search`."""
+        return self._ranked(query, project=project, top_k=top_k)

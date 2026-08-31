@@ -448,3 +448,60 @@ def test_count_tokens_falls_back_to_the_heuristic_when_loading_fails() -> None:
 
     provider._load = boom  # type: ignore[method-assign]
     assert provider.count_tokens("abcdefgh") == estimate_tokens("abcdefgh")
+
+
+# -- ThinkStreamFilter (the chat stream's reasoning gate) --------------------
+
+
+def test_stream_filter_holds_a_full_pair_and_passes_the_answer() -> None:
+    from transcription.llm.reasoning import ThinkStreamFilter
+
+    filt = ThinkStreamFilter()
+    out = "".join(
+        filt.feed(piece) for piece in ["<think>plan", "ning...</th", "ink>The ", "answer."]
+    )
+    out += filt.flush()
+
+    assert out == "The answer."
+
+
+def test_stream_filter_handles_the_lone_closer_shape() -> None:
+    from transcription.llm.reasoning import ThinkStreamFilter
+
+    # llama.cpp's Qwen template opens <think> in the prompt: the stream is
+    # raw thought, a lone closer, then the answer.
+    filt = ThinkStreamFilter()
+    out = "".join(filt.feed(piece) for piece in ["thinking out loud", "</think>", "Answer."])
+    out += filt.flush()
+
+    assert out == "Answer."
+
+
+def test_stream_filter_split_tag_across_pieces_is_still_caught() -> None:
+    from transcription.llm.reasoning import ThinkStreamFilter
+
+    filt = ThinkStreamFilter()
+    out = "".join(filt.feed(piece) for piece in ["secret</t", "hi", "nk>ok"])
+    out += filt.flush()
+
+    assert "secret" not in out
+    assert out == "ok"
+
+
+def test_stream_filter_without_any_think_block_delivers_at_flush() -> None:
+    from transcription.llm.reasoning import ThinkStreamFilter
+
+    filt = ThinkStreamFilter()
+    live = "".join(filt.feed(piece) for piece in ["Plain ", "answer."])
+
+    assert live == ""  # deliberately held: it could still be lone-closer thought
+    assert filt.flush() == "Plain answer."
+
+
+def test_stream_filter_never_closed_think_yields_nothing() -> None:
+    from transcription.llm.reasoning import ThinkStreamFilter
+
+    filt = ThinkStreamFilter()
+    filt.feed("<think>ran out of tokens mid-thought")
+
+    assert filt.flush() == ""
