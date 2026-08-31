@@ -103,6 +103,15 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `POST /v1/search` -- hybrid (vector + BM25 + trigram) search over
+    /// the vault index, synchronous JSON. Default: unsupported (the house
+    /// rule -- pipeline fakes must not need an edit to keep compiling).
+    async fn search(&self, _query: SearchQuery) -> Result<Vec<SearchHit>, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "search is not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/llm-model/download` -- the GGUF slot's status. Same wire
     /// shape as the whisper trio, its own independent transfer. Default:
     /// unsupported (see `model_download_status`).
@@ -194,6 +203,31 @@ pub struct LlmSubmitRequest {
     pub kind: LlmJobKind,
     pub input_path: String,
     pub output_dir: String,
+}
+
+/// `POST /v1/search` request body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchQuery {
+    pub query: String,
+    pub project: Option<String>,
+    pub top_k: Option<u32>,
+}
+
+/// One hybrid-search hit as F2 answers it. `meeting_dir` is
+/// **vault-root-relative with forward slashes** (`ACME/260831 - Title`) --
+/// the command layer joins it to the meetings root and maps it to an entry
+/// id; a path never reaches the frontend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchHit {
+    /// `"transcript" | "summary" | "note"`, passed through verbatim.
+    pub kind: String,
+    pub project: String,
+    pub meeting_dir: String,
+    pub meeting_title: String,
+    pub snippet: String,
+    pub score: f64,
+    pub start_sec: Option<f64>,
+    pub timestamp: Option<String>,
 }
 
 /// One row of F2's sqlite job ledger (`services/transcription/.../ledger.py`

@@ -35,6 +35,7 @@ from transcription.api.model_routes import (
     is_model_present,
     llm_gpu_build_present,
 )
+from transcription.api.search_routes import build_search_router
 from transcription.config import Config
 from transcription.cuda_runtime import is_cuda_runtime_present
 from transcription.errors import ErrorKind, ServiceError
@@ -43,6 +44,7 @@ from transcription.ledger import Ledger
 from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
 from transcription.schema import JobCreate, JobStatus
+from transcription.search.service import SearchService
 
 _logger = logging.getLogger("transcription")
 
@@ -75,6 +77,7 @@ def create_app(
     llm_models_factory_for: Callable[[CatalogEntry | None], ModelDownload] | None = None,
     embedding_model_download_factory: Callable[[], ModelDownload] | None = None,
     job_manager_factory: Callable[[Config, Ledger], JobManager] | None = None,
+    search_service_factory: Callable[[Config, JobManager], SearchService] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1).
 
@@ -138,6 +141,18 @@ def create_app(
     app.state.llm_model_download_manager = llm_model_download_manager
     app.state.llm_models_manager = llm_models_manager
     app.state.embedding_model_download_manager = embedding_model_download_manager
+    # Hybrid search over the vault index. The default shares the job
+    # manager's cached IndexDb and embedder -- every search runs through
+    # `run_serial`, on the same thread the index job writes from.
+    app.state.search_service = (
+        search_service_factory(config, job_manager)
+        if search_service_factory is not None
+        else SearchService(
+            job_manager._get_index_db,
+            job_manager._get_embedder,
+            top_k_default=config.search_top_k,
+        )
+    )
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         """Bearer-auth dependency for every `/v1/*` route (FR-9).
@@ -322,5 +337,6 @@ def create_app(
             state_attr="embedding_model_download_manager",
         )
     )
+    app.include_router(build_search_router(require_token))
 
     return app

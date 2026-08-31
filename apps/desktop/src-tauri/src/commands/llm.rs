@@ -40,7 +40,7 @@ pub struct LlmModelDownloadStatusView {
     pub gpu_build_present: Option<bool>,
 }
 
-fn map_service_error(err: ServiceError) -> AppError {
+pub(super) fn map_service_error(err: ServiceError) -> AppError {
     match err {
         ServiceError::Unavailable { detail } => AppError::service_unavailable(detail),
         ServiceError::Auth { message } => AppError::service_unavailable(message),

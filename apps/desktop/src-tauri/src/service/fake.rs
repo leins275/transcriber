@@ -13,7 +13,8 @@ use uuid::Uuid;
 
 use super::{
     JobState, JobStatus, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
-    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest,
+    TranscriptionService,
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
@@ -562,6 +563,19 @@ impl TranscriptionService for FakeService {
         }
         inner.index_submissions += 1;
         Ok("fake-index".to_string())
+    }
+
+    async fn search(&self, _query: SearchQuery) -> Result<Vec<SearchHit>, ServiceError> {
+        // The fake has no vault to index, and the command layer drops hits
+        // it cannot map to a listed meeting anyway -- "no matches" is the
+        // honest, error-free answer for `--fake-service` sessions.
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        Ok(Vec::new())
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

@@ -225,6 +225,15 @@ class JobManager:
                 self._index_db = self._index_db_factory(self._config)
             return self._index_db
 
+    async def run_serial(self, fn: Callable[[], Any]) -> Any:
+        """Run ``fn`` on the single serial executor and await its result.
+
+        The funnel for request-path work that is really model inference
+        (query embedding for search): it queues behind whatever job is
+        running, preserving the one-model-at-a-time RAM/VRAM guarantee.
+        """
+        return await asyncio.get_running_loop().run_in_executor(self._executor, fn)
+
     def llm_info(self) -> dict[str, Any]:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
 

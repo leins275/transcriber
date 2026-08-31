@@ -1418,6 +1418,99 @@ mod tests {
         });
     }
 
+    // -- search_vault hit mapping -------------------------------------------
+
+    /// Answers canned hits from `search()`; the three required trait
+    /// methods answer `Unavailable`, which this test never calls.
+    struct CannedSearchService {
+        hits: Vec<crate::service::SearchHit>,
+    }
+
+    #[async_trait::async_trait]
+    impl TranscriptionService for CannedSearchService {
+        async fn health(&self) -> Result<crate::service::ServiceHealth, ServiceError> {
+            Err(ServiceError::Unavailable {
+                detail: "canned".to_string(),
+            })
+        }
+        async fn submit(
+            &self,
+            _req: crate::service::SubmitRequest,
+        ) -> Result<String, ServiceError> {
+            Err(ServiceError::Unavailable {
+                detail: "canned".to_string(),
+            })
+        }
+        async fn status(&self, _job_id: &str) -> Result<crate::service::JobStatus, ServiceError> {
+            Err(ServiceError::Unavailable {
+                detail: "canned".to_string(),
+            })
+        }
+        async fn search(
+            &self,
+            _query: crate::service::SearchQuery,
+        ) -> Result<Vec<crate::service::SearchHit>, ServiceError> {
+            Ok(self.hits.clone())
+        }
+    }
+
+    fn hit(meeting_dir: &str, title: &str) -> crate::service::SearchHit {
+        crate::service::SearchHit {
+            kind: "transcript".to_string(),
+            project: "ELS".to_string(),
+            meeting_dir: meeting_dir.to_string(),
+            meeting_title: title.to_string(),
+            snippet: "…the matching line…".to_string(),
+            score: 0.5,
+            start_sec: Some(12.0),
+            timestamp: Some("0:12".to_string()),
+        }
+    }
+
+    #[test]
+    fn search_hits_map_to_entry_ids_and_unresolvable_hits_are_dropped() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let service = Arc::new(CannedSearchService {
+                hits: vec![
+                    hit("ELS/260812 - Security issue", "Security issue"),
+                    // A meeting the vault listing has never seen: fail closed.
+                    hit("ELS/999999 - Ghost", "Ghost"),
+                ],
+            });
+            let state = state_with_root(root.path().to_path_buf(), service);
+            let id = only_entry_id(&state).await; // seeds vault_index
+
+            let results =
+                crate::commands::search::search_vault_handler(&state, "security".to_string(), None)
+                    .await
+                    .expect("search");
+
+            assert_eq!(results.len(), 1, "the ghost hit must be dropped");
+            assert_eq!(results[0].entry_id, id);
+            assert_eq!(results[0].meeting_name, "260812 - Security issue");
+            assert_eq!(results[0].project.as_deref(), Some("ELS"));
+            assert_eq!(results[0].timestamp.as_deref(), Some("0:12"));
+        });
+    }
+
+    #[test]
+    fn a_blank_search_query_answers_empty_without_touching_the_service() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+
+            let results =
+                crate::commands::search::search_vault_handler(&state, "   ".to_string(), None)
+                    .await
+                    .expect("search");
+
+            assert!(results.is_empty());
+        });
+    }
+
     // -- project-level speaker memory ---------------------------------------
 
     #[test]

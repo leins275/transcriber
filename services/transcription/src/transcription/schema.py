@@ -197,6 +197,34 @@ class JobStatus(BaseModel):
         return max(0.0, min(1.0, value))
 
 
+class SearchRequest(BaseModel):
+    """``POST /v1/search`` request body."""
+
+    query: str = Field(min_length=1, max_length=500)
+    project: str | None = None
+    top_k: int | None = Field(default=None, ge=1, le=50)
+
+
+class SearchResultModel(BaseModel):
+    """One hybrid-search hit. ``meeting_dir`` is vault-root-relative with
+    forward slashes -- the app maps it back to an entry id; a path never
+    doubles as an identifier across the IPC boundary."""
+
+    kind: Literal["transcript", "summary", "note"]
+    project: str
+    meeting_dir: str
+    meeting_title: str
+    meeting_date: str | None = None
+    snippet: str
+    score: float
+    start_sec: float | None = None
+    timestamp: str | None = None
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultModel]
+
+
 class Health(BaseModel):
     """``GET /health`` response body (FR-2)."""
 

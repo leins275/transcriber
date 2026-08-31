@@ -130,6 +130,20 @@ export type NoteView = {
   markdown: string | null;
 };
 
+/** One hybrid-search hit over the vault (transcripts, summaries, notes).
+ * Named by entry id, never a path -- clicking one opens the recording the
+ * same way a list row does. */
+export type SearchResultView = {
+  entry_id: string;
+  kind: "transcript" | "summary" | "note";
+  meeting_name: string;
+  project: string | null;
+  snippet: string;
+  score: number;
+  start_sec: number | null;
+  timestamp: string | null;
+};
+
 /** A meeting's requested new identity. `project: null` files it under
  * `unsorted/`; the Rust side validates all three parts against exactly the
  * rules ingest applies to a filename. */

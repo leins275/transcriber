@@ -42,6 +42,7 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
 function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>) {
   const [filter, setFilter] = useState(props.filter ?? "");
   const [grouped, setGrouped] = useState(props.grouped ?? false);
+  const [search, setSearch] = useState(props.search ?? "");
   const defaults = {
     entries: [buildEntry()],
     jobs: [] as JobSnapshot[],
@@ -49,6 +50,7 @@ function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>
     onRevealJob: () => {},
     onCancelJob: () => {},
     onLoadServiceLog: () => Promise.resolve<LedgerJobView[]>([]),
+    onSearch: () => Promise.resolve([]),
   };
   return (
     <VaultPanel
@@ -58,6 +60,8 @@ function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>
       onFilterChange={setFilter}
       grouped={grouped}
       onGroupedChange={setGrouped}
+      search={search}
+      onSearchChange={setSearch}
     />
   );
 }
@@ -216,5 +220,21 @@ describe("VaultPanel", () => {
     renderPanel({ entries: [] });
     expect(screen.getByRole("region", { name: /recordings/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /service log/i })).toBeInTheDocument();
+  });
+
+  it("an active search replaces the list, and clearing it restores the list", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [buildEntry({ id: "a" }), buildEntry({ id: "b", meeting_name: "260813 - Other" })],
+      onSearch: () => Promise.resolve([]),
+    });
+    expect(screen.getByRole("list")).toBeInTheDocument();
+
+    const box = screen.getByRole("searchbox", { name: /search recordings/i });
+    await user.type(box, "дедлайн");
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+
+    await user.clear(box);
+    expect(screen.getByRole("list")).toBeInTheDocument();
   });
 });

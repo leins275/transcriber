@@ -54,6 +54,10 @@ pub mod meetings;
 /// model-download trio.
 pub mod llm;
 
+/// Hybrid vault search (`search_vault`) -- maps the service's directory-
+/// named hits back to entry ids.
+pub mod search;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever
@@ -1090,6 +1094,15 @@ pub async fn list_project_speaker_names(
     entry_id: String,
 ) -> Result<Vec<String>, AppError> {
     meetings::list_project_speaker_names_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn search_vault(
+    state: tauri::State<'_, AppState>,
+    query: String,
+    project: Option<String>,
+) -> Result<Vec<search::SearchResultView>, AppError> {
+    search::search_vault_handler(&state, query, project).await
 }
 
 #[tauri::command]

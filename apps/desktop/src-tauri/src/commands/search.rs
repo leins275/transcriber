@@ -1,0 +1,105 @@
+//! Hybrid vault search: the `search_vault` command.
+//!
+//! The service names meetings by vault-root-relative directory; this module
+//! maps every hit back to the opaque entry id `list_vault` issued (the
+//! id-not-path rule). A hit that resolves to no listed meeting is dropped
+//! -- fail closed: a meeting deleted since the last listing simply does not
+//! appear, and no path ever crosses the IPC boundary.
+
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use crate::error::AppError;
+use crate::service::SearchQuery;
+
+use super::AppState;
+
+/// Longest accepted query; the service caps at 500 too, this just fails
+/// earlier and locally.
+const MAX_QUERY_CHARS: usize = 500;
+
+/// Results per search -- fixed here rather than exposed to the UI (YAGNI).
+const TOP_K: u32 = 20;
+
+/// One search hit, shaped for the library's search results list.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SearchResultView {
+    /// The vault entry id (`list_vault`'s), never a path.
+    pub entry_id: String,
+    /// `"transcript" | "summary" | "note"` -- which document matched.
+    pub kind: String,
+    pub meeting_name: String,
+    pub project: Option<String>,
+    pub snippet: String,
+    pub score: f64,
+    pub start_sec: Option<f64>,
+    pub timestamp: Option<String>,
+}
+
+/// `search_vault` -- hybrid search over transcripts, summaries and notes.
+pub async fn search_vault_handler(
+    state: &AppState,
+    query: String,
+    project: Option<String>,
+) -> Result<Vec<SearchResultView>, AppError> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return Err(AppError::invalid_argument(format!(
+            "search query is too long (over {MAX_QUERY_CHARS} characters)"
+        )));
+    }
+
+    let service = state.service.read().await.clone();
+    let hits = service
+        .search(SearchQuery {
+            query,
+            project,
+            top_k: Some(TOP_K),
+        })
+        .await
+        .map_err(super::llm::map_service_error)?;
+
+    // Reverse map: meeting path -> entry id. Hits arrive as vault-root-
+    // relative forward-slash paths; joining against the current root and
+    // comparing `PathBuf`s makes the separator difference irrelevant.
+    let root = PathBuf::from(
+        state
+            .settings
+            .read()
+            .await
+            .meetings_root
+            .clone()
+            .ok_or_else(|| AppError::not_configured("no meetings root has been configured yet"))?,
+    );
+    let index = state.vault_index.read().await;
+    let by_path: std::collections::HashMap<&PathBuf, &String> =
+        index.iter().map(|(id, path)| (path, id)).collect();
+
+    let mut results = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let absolute = root.join(hit.meeting_dir.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let Some(entry_id) = by_path.get(&absolute) else {
+            continue; // not listed (deleted, or outside the current root)
+        };
+        results.push(SearchResultView {
+            entry_id: (*entry_id).clone(),
+            kind: hit.kind,
+            meeting_name: hit
+                .meeting_dir
+                .rsplit('/')
+                .next()
+                .unwrap_or(&hit.meeting_title)
+                .to_string(),
+            project: (hit.project != "unsorted").then_some(hit.project),
+            snippet: hit.snippet,
+            score: hit.score,
+            start_sec: hit.start_sec,
+            timestamp: hit.timestamp,
+        });
+    }
+    Ok(results)
+}

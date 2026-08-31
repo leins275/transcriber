@@ -23,6 +23,7 @@ import type {
   LlmModelsView,
   MeetingUpdate,
   NoteView,
+  SearchResultView,
   ServiceStatusView,
   SettingsView,
   SummaryView,
@@ -95,6 +96,9 @@ export const api = {
    * project-level speaker memory, offered as suggestions when labeling. */
   listProjectSpeakerNames: (entryId: string): Promise<string[]> =>
     call<string[]>("list_project_speaker_names", { entryId }),
+  /** Hybrid search over transcripts, summaries and notes. */
+  searchVault: (query: string, project: string | null): Promise<SearchResultView[]> =>
+    call<SearchResultView[]>("search_vault", { query, project }),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

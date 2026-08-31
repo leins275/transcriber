@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     JobStatus, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState,
-    ModelDownloadStatus, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest,
+    TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -160,6 +161,52 @@ struct LlmSubmitBody<'a> {
 #[derive(Deserialize)]
 struct SubmitResponse {
     job_id: String,
+}
+
+/// `POST /v1/search` request body (F2's `SearchRequest`).
+#[derive(Serialize)]
+struct SearchBody<'a> {
+    query: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+}
+
+/// One hit of `POST /v1/search`'s response (F2's `SearchResultModel`).
+#[derive(Deserialize)]
+struct SearchHitBody {
+    kind: String,
+    project: String,
+    meeting_dir: String,
+    meeting_title: String,
+    snippet: String,
+    score: f64,
+    #[serde(default)]
+    start_sec: Option<f64>,
+    #[serde(default)]
+    timestamp: Option<String>,
+}
+
+impl From<SearchHitBody> for SearchHit {
+    fn from(body: SearchHitBody) -> Self {
+        SearchHit {
+            kind: body.kind,
+            project: body.project,
+            meeting_dir: body.meeting_dir,
+            meeting_title: body.meeting_title,
+            snippet: body.snippet,
+            score: body.score,
+            start_sec: body.start_sec,
+            timestamp: body.timestamp,
+        }
+    }
+}
+
+/// `POST /v1/search` response body.
+#[derive(Deserialize)]
+struct SearchResponseBody {
+    results: Vec<SearchHitBody>,
 }
 
 /// `GET /v1/jobs/{id}` response body, reduced to the fields this seam uses.
@@ -606,6 +653,26 @@ impl TranscriptionService for HttpTranscriptionService {
             message: err.to_string(),
         })?;
         Ok(parsed.job_id)
+    }
+
+    async fn search(&self, query: SearchQuery) -> Result<Vec<SearchHit>, ServiceError> {
+        let body = SearchBody {
+            query: &query.query,
+            project: query.project.as_deref(),
+            top_k: query.top_k,
+        };
+        let request = self.authorize(self.client.post(self.endpoint("/v1/search")).json(&body));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: SearchResponseBody =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(parsed.results.into_iter().map(SearchHit::from).collect())
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

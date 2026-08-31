@@ -3,8 +3,9 @@ import styles from "./VaultPanel.module.css";
 import { JobList } from "./JobList";
 import { LedgerPanel } from "./LedgerPanel";
 import { VaultList } from "./VaultList";
+import { VaultSearch } from "./VaultSearch";
 import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGroups";
-import type { JobSnapshot, LedgerJobView, VaultMeetingView } from "../types";
+import type { JobSnapshot, LedgerJobView, SearchResultView, VaultMeetingView } from "../types";
 
 /** The two views: the recordings themselves, and F2's durable job ledger. */
 type Tab = "recordings" | "log";
@@ -46,6 +47,12 @@ export type VaultPanelProps = {
   /** The "Group by project" toggle, lifted for the same reason. */
   grouped: boolean;
   onGroupedChange: (grouped: boolean) => void;
+  /** The content-search query, lifted like `filter`. While it is active the
+   * results replace the list; the project filter narrows the list, search
+   * finds what was said -- two different jobs, both available. */
+  search: string;
+  onSearchChange: (query: string) => void;
+  onSearch: (query: string) => Promise<SearchResultView[]>;
   onOpen: (entryId: string) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
@@ -78,12 +85,16 @@ export function VaultPanel({
   onFilterChange,
   grouped,
   onGroupedChange,
+  search,
+  onSearchChange,
+  onSearch,
   onOpen,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
 }: VaultPanelProps) {
   const [tab, setTab] = useState<Tab>("recordings");
+  const searchActive = search.trim().length >= 2;
 
   const projects = useMemo(() => projectCodes(entries), [entries]);
   const unsorted = useMemo(() => unsortedEntries(entries), [entries]);
@@ -182,71 +193,82 @@ export function VaultPanel({
             </p>
           ) : (
             <>
-              {showFilterRow && (
-                <div className={styles.filterRow}>
-                  <select
-                    className={styles.pickerSelect}
-                    aria-label="Project"
-                    value={validFilter}
-                    onChange={(event) => onFilterChange(event.target.value)}
-                  >
-                    <option value="">All projects</option>
-                    {projects.map((code) => (
-                      <option key={code} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                    {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
-                  </select>
-                  <label className={styles.groupToggle}>
-                    <input
-                      type="checkbox"
-                      className={styles.groupSwitch}
-                      checked={grouped}
-                      onChange={(event) => onGroupedChange(event.target.checked)}
-                    />
-                    Group by project
-                  </label>
-                </div>
-              )}
-              {validFilter === UNSORTED_FILTER && (
-                <p className={styles.hint}>
-                  These did not follow the <span className="mono">Project - YYMMDD - Title</span>{" "}
-                  naming convention. Open one and rename it to file it under a project.
-                </p>
-              )}
-              {!grouped ? (
-                <VaultList entries={shown} onOpen={onOpen} />
-              ) : (
+              <VaultSearch
+                query={search}
+                onQueryChange={onSearchChange}
+                onSearch={onSearch}
+                onOpen={onOpen}
+              />
+              {searchActive ? null : (
                 <>
-                  {shownProjects.map((code) => {
-                    const group = entriesForProject(entries, code);
-                    return (
-                      <div key={code} className={styles.group}>
-                        <div className={styles.groupHead}>
-                          <span className={styles.groupKicker}>Project</span>
-                          {/* A real heading, not a styled span: this is the
+                  {showFilterRow && (
+                    <div className={styles.filterRow}>
+                      <select
+                        className={styles.pickerSelect}
+                        aria-label="Project"
+                        value={validFilter}
+                        onChange={(event) => onFilterChange(event.target.value)}
+                      >
+                        <option value="">All projects</option>
+                        {projects.map((code) => (
+                          <option key={code} value={code}>
+                            {code}
+                          </option>
+                        ))}
+                        {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
+                      </select>
+                      <label className={styles.groupToggle}>
+                        <input
+                          type="checkbox"
+                          className={styles.groupSwitch}
+                          checked={grouped}
+                          onChange={(event) => onGroupedChange(event.target.checked)}
+                        />
+                        Group by project
+                      </label>
+                    </div>
+                  )}
+                  {validFilter === UNSORTED_FILTER && (
+                    <p className={styles.hint}>
+                      These did not follow the{" "}
+                      <span className="mono">Project - YYMMDD - Title</span> naming convention. Open
+                      one and rename it to file it under a project.
+                    </p>
+                  )}
+                  {!grouped ? (
+                    <VaultList entries={shown} onOpen={onOpen} />
+                  ) : (
+                    <>
+                      {shownProjects.map((code) => {
+                        const group = entriesForProject(entries, code);
+                        return (
+                          <div key={code} className={styles.group}>
+                            <div className={styles.groupHead}>
+                              <span className={styles.groupKicker}>Project</span>
+                              {/* A real heading, not a styled span: this is the
                               structure of the list, and it is how the group is
                               reached by anything navigating by headings. */}
-                          <h3 className={`${styles.groupName} mono`}>{code}</h3>
-                          <span className={styles.groupCount}>
-                            {group.length} recording{group.length === 1 ? "" : "s"}
-                          </span>
+                              <h3 className={`${styles.groupName} mono`}>{code}</h3>
+                              <span className={styles.groupCount}>
+                                {group.length} recording{group.length === 1 ? "" : "s"}
+                              </span>
+                            </div>
+                            <VaultList entries={group} onOpen={onOpen} showProject={false} />
+                          </div>
+                        );
+                      })}
+                      {showUnsortedGroup && (
+                        <div className={styles.group}>
+                          <div className={styles.groupHead}>
+                            <h3 className={`${styles.groupName} mono`}>Unsorted</h3>
+                            <span className={styles.groupCount}>
+                              {unsorted.length} recording{unsorted.length === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                          <VaultList entries={unsorted} onOpen={onOpen} showProject={false} />
                         </div>
-                        <VaultList entries={group} onOpen={onOpen} showProject={false} />
-                      </div>
-                    );
-                  })}
-                  {showUnsortedGroup && (
-                    <div className={styles.group}>
-                      <div className={styles.groupHead}>
-                        <h3 className={`${styles.groupName} mono`}>Unsorted</h3>
-                        <span className={styles.groupCount}>
-                          {unsorted.length} recording{unsorted.length === 1 ? "" : "s"}
-                        </span>
-                      </div>
-                      <VaultList entries={unsorted} onOpen={onOpen} showProject={false} />
-                    </div>
+                      )}
+                    </>
                   )}
                 </>
               )}

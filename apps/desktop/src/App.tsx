@@ -112,6 +112,9 @@ function App() {
   // coming back must not silently reset the operator's project filter.
   const [vaultFilter, setVaultFilter] = useState<string>("");
   const [vaultGrouped, setVaultGrouped] = useState(false);
+  // The content-search query, lifted for the same unmount-survival reason.
+  const [vaultSearch, setVaultSearch] = useState<string>("");
+  const searchVault = useCallback((query: string) => api.searchVault(query, null), []);
   // The Settings page (redesign turn 6): the old sidebar's vault/model/
   // service content, behind the header's gear. Rendered over whatever else
   // is open; closing it returns there untouched.
@@ -561,6 +564,9 @@ function App() {
                     onFilterChange={setVaultFilter}
                     grouped={vaultGrouped}
                     onGroupedChange={setVaultGrouped}
+                    search={vaultSearch}
+                    onSearchChange={setVaultSearch}
+                    onSearch={searchVault}
                     onOpen={setOpenEntryId}
                     onRevealJob={handleReveal}
                     onCancelJob={handleCancelJob}
