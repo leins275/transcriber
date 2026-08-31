@@ -465,16 +465,27 @@ class JobManager:
         """
         try:
             diarizer = await asyncio.to_thread(self._get_diarizer)
-            turns = await loop.run_in_executor(
+            output = await loop.run_in_executor(
                 self._executor,
                 functools.partial(diarizer.diarize, Path(job.source_path), cancel=job.cancel_token),
             )
-            labelled, speaker_count = label_segments(segments, turns)
+            labelled, speaker_count, label_mapping = label_segments(segments, output.turns)
+            # Embeddings arrive keyed by the diarizer's raw cluster labels;
+            # the document stores them under the normalized display labels
+            # ("Speaker 1"...) so they join against `speakers.json` renames.
+            speaker_embeddings: dict[str, list[float]] | None = None
+            if output.embeddings:
+                speaker_embeddings = {
+                    label_mapping[raw]: vector
+                    for raw, vector in output.embeddings.items()
+                    if raw in label_mapping
+                } or None
             return labelled, DiarizationInfo(
                 status="succeeded",
                 model=diarizer.model,
                 device=diarizer.device,
                 speaker_count=speaker_count,
+                speaker_embeddings=speaker_embeddings,
             )
         except ServiceError as exc:
             if exc.kind is ErrorKind.CANCELLED:

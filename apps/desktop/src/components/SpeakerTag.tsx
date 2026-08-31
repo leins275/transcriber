@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import styles from "./SpeakerTag.module.css";
 
 export type SpeakerTagProps = {
@@ -6,6 +6,10 @@ export type SpeakerTagProps = {
   speaker: string | null;
   /** Names already in use in this transcript, offered for reuse. */
   known: string[];
+  /** Names remembered across the whole project — offered while typing (a
+   * datalist), never as buttons: a project can hold many more people than
+   * this call does. */
+  suggestions?: string[];
   /** Attribute this turn to `name`, or clear it with `null`. */
   onAssign: (name: string | null) => void;
   /** Rename `from` to `to` everywhere in the transcript. */
@@ -24,10 +28,17 @@ export type SpeakerTagProps = {
  *
  * Presentational only: no invoke, no listen, no fetch.
  */
-export function SpeakerTag({ speaker, known, onAssign, onRename }: SpeakerTagProps) {
+export function SpeakerTag({
+  speaker,
+  known,
+  suggestions = [],
+  onAssign,
+  onRename,
+}: SpeakerTagProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(speaker ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
+  const suggestionsId = useId();
 
   useEffect(() => {
     if (editing) inputRef.current?.focus();
@@ -64,6 +75,7 @@ export function SpeakerTag({ speaker, known, onAssign, onRename }: SpeakerTagPro
           className={styles.input}
           value={draft}
           aria-label={speaker === null ? "Name this speaker" : `Rename ${speaker}`}
+          list={suggestions.length > 0 ? suggestionsId : undefined}
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => {
@@ -76,6 +88,13 @@ export function SpeakerTag({ speaker, known, onAssign, onRename }: SpeakerTagPro
             }
           }}
         />
+        {suggestions.length > 0 && (
+          <datalist id={suggestionsId}>
+            {suggestions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        )}
         <span className={styles.hint}>
           {speaker === null ? "Enter to name" : "renames every segment · Enter to save"}
         </span>

@@ -21,6 +21,9 @@ import type {
 export type RecordingPageProps = {
   entry: VaultMeetingView;
   projects: string[];
+  /** Project-level speaker memory: names assigned across this meeting's
+   * project siblings, suggested while typing a speaker name. */
+  projectSpeakers: string[];
   onBack: () => void;
   onReveal: (entryId: string) => void;
   onReadTranscript: (entryId: string) => Promise<TranscriptView>;
@@ -86,6 +89,7 @@ function messageOf(error: unknown): string {
 export function RecordingPage({
   entry,
   projects,
+  projectSpeakers,
   onBack,
   onReveal,
   onReadTranscript,
@@ -458,7 +462,11 @@ export function RecordingPage({
                 Reading transcript…
               </p>
             ) : transcript ? (
-              <TranscriptViewer transcript={transcript} onSaveSpeakers={saveSpeakers} />
+              <TranscriptViewer
+                transcript={transcript}
+                onSaveSpeakers={saveSpeakers}
+                suggestedSpeakers={projectSpeakers}
+              />
             ) : (
               <div className={styles.emptyPanel}>
                 <p className={styles.status}>

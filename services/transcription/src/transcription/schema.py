@@ -93,6 +93,18 @@ class DiarizationInfo(BaseModel):
     speaker_count: int | None = None
     error_kind: ErrorKind | None = None
     error_message: str | None = None
+    # One voice-embedding vector per normalized speaker label ("Speaker 1"
+    # ...), when the pipeline could produce them -- the raw material for
+    # recognizing the same voice across meetings. Omitted (not nulled) when
+    # absent so pre-feature documents stay byte-identical.
+    speaker_embeddings: dict[str, list[float]] | None = None
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_embeddings(self, handler: Any) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if data.get("speaker_embeddings") is None:
+            data.pop("speaker_embeddings", None)
+        return data
 
 
 class TranscriptDoc(BaseModel):

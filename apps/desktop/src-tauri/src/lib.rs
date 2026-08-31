@@ -219,6 +219,7 @@ pub fn run() {
             commands::read_summary,
             commands::read_note,
             commands::write_note,
+            commands::list_project_speaker_names,
             commands::transcribe_vault_entry,
             commands::cancel_job,
             commands::prepare_update,

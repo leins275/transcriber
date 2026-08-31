@@ -49,6 +49,7 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
   const defaults = {
     entry: buildEntry(),
     projects: ["RDDM", "ELS"],
+    projectSpeakers: [],
     onBack: () => {},
     onReveal: () => {},
     onReadTranscript: () => Promise.resolve(buildTranscript()),

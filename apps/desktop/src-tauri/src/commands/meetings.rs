@@ -673,6 +673,54 @@ pub async fn write_note_handler(
         .map_err(|join_err| AppError::internal(format!("write_note task panicked: {join_err}")))?
 }
 
+/// `list_project_speaker_names` — the distinct speaker names the operator
+/// has assigned across all of this meeting's project siblings.
+///
+/// This is the project-level speaker memory: name "Speaker 1 = Даниил" in
+/// one meeting, and the next meeting in the project offers "Даниил" as a
+/// suggestion instead of asking for the name again. Only `speakers.json`
+/// assignments count — they are operator-confirmed names, unlike raw
+/// diarization labels. Best-effort like the vault listing: an unreadable
+/// sibling contributes nothing rather than failing the call.
+pub async fn list_project_speaker_names_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<Vec<String>, AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+
+    tokio::task::spawn_blocking(move || {
+        let Some(project_dir) = meeting_dir.parent().map(Path::to_path_buf) else {
+            return Ok(Vec::new());
+        };
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&project_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                for name in read_speaker_labels(&path).assignments.into_values() {
+                    let trimmed = name.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if !names.iter().any(|known| known == trimmed) {
+                        names.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        names.sort_by_key(|name| name.to_lowercase());
+        Ok(names)
+    })
+    .await
+    .map_err(|join_err| {
+        AppError::internal(format!(
+            "list_project_speaker_names task panicked: {join_err}"
+        ))
+    })?
+}
+
 /// `transcribe_vault_entry` — runs transcription over a recording that is
 /// already filed in the vault.
 ///
@@ -1356,6 +1404,69 @@ mod tests {
 
             let view = read_note_handler(&state, &id).await.expect("read note");
             assert_eq!(view.markdown.as_deref(), Some(""));
+        });
+    }
+
+    // -- project-level speaker memory ---------------------------------------
+
+    #[test]
+    fn project_speaker_names_gather_across_sibling_meetings_deduped_and_sorted() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            // Two sibling meetings in the same project, with overlapping and
+            // differently-trimmed names; one unreadable speakers.json that
+            // must degrade to nothing.
+            let sibling_a = root.path().join("ELS").join("260813 - Follow-up");
+            let sibling_b = root.path().join("ELS").join("260814 - Retro");
+            std::fs::create_dir_all(&sibling_a).expect("mkdir");
+            std::fs::create_dir_all(&sibling_b).expect("mkdir");
+            write_speaker_labels(
+                &sibling_a,
+                &SpeakerLabels {
+                    assignments: HashMap::from([
+                        ("0".to_string(), "Даниил".to_string()),
+                        ("1".to_string(), " maxim ".to_string()),
+                    ]),
+                },
+            )
+            .expect("labels a");
+            write_speaker_labels(
+                &sibling_b,
+                &SpeakerLabels {
+                    assignments: HashMap::from([
+                        ("0".to_string(), "Даниил".to_string()),
+                        ("1".to_string(), "Anna".to_string()),
+                        ("2".to_string(), "   ".to_string()),
+                    ]),
+                },
+            )
+            .expect("labels b");
+            std::fs::write(
+                root.path()
+                    .join("ELS")
+                    .join("260812 - Security issue")
+                    .join("speakers.json"),
+                "{not json",
+            )
+            .expect("write junk");
+
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let entries = list_vault_handler(&state).await.expect("list vault");
+            let id = entries
+                .iter()
+                .find(|entry| entry.meeting_name == "260812 - Security issue")
+                .expect("the seeded meeting is listed")
+                .id
+                .clone();
+
+            let names = list_project_speaker_names_handler(&state, &id)
+                .await
+                .expect("list names");
+
+            // Deduped, trimmed, blank dropped, sorted case-insensitively;
+            // the malformed sibling contributed nothing and failed nothing.
+            assert_eq!(names, vec!["Anna", "maxim", "Даниил"]);
         });
     }
 

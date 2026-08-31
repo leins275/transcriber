@@ -91,6 +91,10 @@ export const api = {
   readSummary: (entryId: string): Promise<SummaryView> =>
     call<SummaryView>("read_summary", { entryId }),
   readNote: (entryId: string): Promise<NoteView> => call<NoteView>("read_note", { entryId }),
+  /** The distinct speaker names assigned across the meeting's project --
+   * project-level speaker memory, offered as suggestions when labeling. */
+  listProjectSpeakerNames: (entryId: string): Promise<string[]> =>
+    call<string[]>("list_project_speaker_names", { entryId }),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

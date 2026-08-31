@@ -85,6 +85,28 @@ function App() {
   // state rather than a router: this app has a handful of places to be, and
   // a URL would be a fiction in a window with no address bar.
   const [openEntryId, setOpenEntryId] = useState<string | null>(null);
+  // Project-level speaker memory for the open recording: names assigned
+  // across its project siblings, suggested while typing a speaker name.
+  // Best-effort — a failed read degrades to no suggestions.
+  const [projectSpeakers, setProjectSpeakers] = useState<string[]>([]);
+  useEffect(() => {
+    if (openEntryId === null) {
+      setProjectSpeakers([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .listProjectSpeakerNames(openEntryId)
+      .then((names) => {
+        if (!cancelled) setProjectSpeakers(names ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setProjectSpeakers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openEntryId]);
   // The library's filter controls, lifted here so they survive the
   // VaultPanel unmount that opening a recording (or Settings) causes --
   // coming back must not silently reset the operator's project filter.
@@ -499,6 +521,7 @@ function App() {
                 <RecordingPage
                   entry={openEntry}
                   projects={projectCodes(vaultEntries)}
+                  projectSpeakers={projectSpeakers}
                   onBack={() => setOpenEntryId(null)}
                   onReveal={handleRevealVaultEntry}
                   onReadTranscript={readTranscript}

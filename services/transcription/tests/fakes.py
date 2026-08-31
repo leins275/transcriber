@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from transcription.diarization import SpeakerTurn
+from transcription.diarization import DiarizationOutput, SpeakerTurn
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptResult
 
@@ -148,23 +148,25 @@ class FakeDiarizer:
         config: Any = None,
         *,
         turns: list[SpeakerTurn] | None = None,
+        embeddings: dict[str, list[float]] | None = None,
         raise_kind: ErrorKind | None = None,
         model: str = "fake-diarization-model",
         device: str = "cpu",
     ) -> None:
         self.config = config
         self._turns = turns if turns is not None else _default_turns()
+        self._embeddings = embeddings
         self.raise_kind = raise_kind
         self.model = model
         self.device = device
         self.calls: list[Path] = []
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> list[SpeakerTurn]:
+    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput:
         cancel.raise_if_cancelled()
         self.calls.append(audio_path)
         if self.raise_kind is not None:
             raise ServiceError(self.raise_kind, f"fake diarizer raised {self.raise_kind.value}")
-        return list(self._turns)
+        return DiarizationOutput(turns=list(self._turns), embeddings=self._embeddings)
 
 
 class FakeLlm:

@@ -35,22 +35,37 @@ class FakeAnnotation:
         for start, end, label in self._tracks:
             yield FakeAnnotationTurn(start, end), "_", label
 
+    def labels(self) -> list[str]:
+        # pyannote answers the distinct labels in sorted order; the
+        # embeddings matrix rows follow this order.
+        return sorted({label for _start, _end, label in self._tracks})
+
 
 @dataclass
 class FakePipeline:
     tracks: list[tuple[float, float, str]]
     raise_on_call: Exception | None = None
+    # What `return_embeddings=True` answers alongside the annotation; a
+    # pipeline without embedding support raises TypeError on the kwarg.
+    embeddings: list[list[float]] | None = None
+    supports_embeddings: bool = True
     devices: list[Any] = field(default_factory=list)
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     def to(self, device: Any) -> None:
         self.devices.append(device)
 
-    def __call__(self, audio: str, **kwargs: Any) -> FakeAnnotation:
+    def __call__(self, audio: str, **kwargs: Any) -> Any:
+        wants_embeddings = bool(kwargs.pop("return_embeddings", False))
+        if wants_embeddings and not self.supports_embeddings:
+            raise TypeError("unexpected keyword argument 'return_embeddings'")
         self.calls.append((audio, kwargs))
         if self.raise_on_call is not None:
             raise self.raise_on_call
-        return FakeAnnotation(self.tracks)
+        annotation = FakeAnnotation(self.tracks)
+        if wants_embeddings:
+            return annotation, self.embeddings
+        return annotation
 
 
 class FakePipelineClass:
@@ -102,9 +117,9 @@ def test_diarize_returns_sorted_speaker_turns(monkeypatch: pytest.MonkeyPatch) -
     diarizer = PyannoteDiarizer(_config())
     _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
 
-    turns = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
 
-    assert turns == [
+    assert output.turns == [
         SpeakerTurn(start=0.0, end=2.0, speaker="SPEAKER_00"),
         SpeakerTurn(start=5.0, end=6.0, speaker="SPEAKER_01"),
     ]
@@ -259,3 +274,72 @@ def test_an_explicit_device_is_honoured_over_auto(monkeypatch: pytest.MonkeyPatc
     diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
 
     assert diarizer.device == "cpu"
+
+
+# -- per-speaker embeddings (project-level speaker memory groundwork) --------
+
+
+def test_embeddings_are_mapped_to_raw_labels_in_labels_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = FakePipeline(
+        tracks=[(5.0, 6.0, "SPEAKER_01"), (0.0, 2.0, "SPEAKER_00")],
+        embeddings=[[1.0, 0.0], [0.0, 1.0]],  # rows follow labels() order: 00, 01
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+
+    assert output.embeddings == {
+        "SPEAKER_00": [1.0, 0.0],
+        "SPEAKER_01": [0.0, 1.0],
+    }
+
+
+def test_a_pipeline_without_embedding_support_still_diarizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A hand-picked pipeline may predate `return_embeddings`; the TypeError
+    # triggers one retry without the kwarg and the turns still land.
+    pipeline = FakePipeline(tracks=[(0.0, 2.0, "SPEAKER_00")], supports_embeddings=False)
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+
+    assert output.turns == [SpeakerTurn(start=0.0, end=2.0, speaker="SPEAKER_00")]
+    assert output.embeddings is None
+
+
+def test_a_non_finite_embedding_row_is_dropped_not_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # pyannote hands back a NaN row for a speaker with no clean speech;
+    # storing it would poison any later similarity math.
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00"), (3.0, 4.0, "SPEAKER_01")],
+        embeddings=[[0.5, 0.5], [float("nan"), 1.0]],
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+
+    assert output.embeddings == {"SPEAKER_00": [0.5, 0.5]}
+
+
+def test_a_row_count_mismatch_degrades_to_no_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00"), (3.0, 4.0, "SPEAKER_01")],
+        embeddings=[[0.5, 0.5]],  # one row short
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+
+    assert output.embeddings is None
+    assert len(output.turns) == 2  # the real artifact is untouched

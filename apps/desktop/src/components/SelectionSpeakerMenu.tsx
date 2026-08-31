@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import styles from "./SelectionSpeakerMenu.module.css";
 
 export type SelectionSpeakerMenuProps = {
   /** Names already in use in this transcript, in first-speech order. */
   known: string[];
+  /** Names remembered across the whole project — offered while typing (a
+   * datalist), never as buttons; same split as `SpeakerTag`. */
+  suggestions?: string[];
   /** Viewport point the popover hangs from — the selection's rectangle. */
   anchor: { x: number; y: number };
   /** Attribute the current selection to `name`. */
@@ -30,12 +33,14 @@ export type SelectionSpeakerMenuProps = {
  */
 export function SelectionSpeakerMenu({
   known,
+  suggestions = [],
   anchor,
   onAssign,
   onDismiss,
 }: SelectionSpeakerMenuProps) {
   const [draft, setDraft] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
+  const suggestionsId = useId();
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -103,6 +108,7 @@ export function SelectionSpeakerMenu({
           className={styles.input}
           value={draft}
           aria-label="Attribute selection to a new speaker"
+          list={suggestions.length > 0 ? suggestionsId : undefined}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -111,6 +117,13 @@ export function SelectionSpeakerMenu({
             }
           }}
         />
+        {suggestions.length > 0 && (
+          <datalist id={suggestionsId}>
+            {suggestions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        )}
         <span className={styles.hint}>Enter to assign</span>
       </span>
     </div>

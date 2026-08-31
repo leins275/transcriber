@@ -102,6 +102,45 @@ async def test_a_diarized_job_labels_segments_and_records_the_pass(
         await manager.aclose()
 
 
+async def test_speaker_embeddings_land_in_the_document_under_display_labels(
+    config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    # Keyed by the diarizer's raw cluster labels; the document must hold
+    # them under the normalized display labels so they join against the
+    # operator's speakers.json renames.
+    diarizer = FakeDiarizer(
+        embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]},
+    )
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        await _run_one(manager, audio_file, output_dir, diarize=True)
+
+        doc = _read_transcript(output_dir)
+        assert doc["diarization"]["speaker_embeddings"] == {
+            "Speaker 1": [1.0, 0.0],
+            "Speaker 2": [0.0, 1.0],
+        }
+    finally:
+        await manager.aclose()
+
+
+async def test_a_diarized_document_without_embeddings_omits_the_key(
+    config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: FakeDiarizer())
+    try:
+        await _run_one(manager, audio_file, output_dir, diarize=True)
+
+        doc = _read_transcript(output_dir)
+        # Omitted, not nulled: a document produced before (or without) the
+        # embeddings feature stays byte-identical.
+        assert "speaker_embeddings" not in doc["diarization"]
+    finally:
+        await manager.aclose()
+
+
 async def test_an_undiarized_job_writes_a_pre_feature_document(
     config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:

@@ -31,6 +31,9 @@ export type TranscriptViewerProps = {
    * inline; the labels stay on screen either way, so a failed save never
    * silently loses the operator's work. */
   onSaveSpeakers?: (assignments: Record<string, string>) => Promise<void>;
+  /** Project-level speaker memory: names assigned across this meeting's
+   * project siblings, offered while typing a name. */
+  suggestedSpeakers?: string[];
 };
 
 function messageOf(error: unknown): string {
@@ -56,7 +59,11 @@ function messageOf(error: unknown): string {
  * Presentational apart from the save callback: no invoke, no listen, no
  * fetch.
  */
-export function TranscriptViewer({ transcript, onSaveSpeakers }: TranscriptViewerProps) {
+export function TranscriptViewer({
+  transcript,
+  onSaveSpeakers,
+  suggestedSpeakers = [],
+}: TranscriptViewerProps) {
   const [view, setView] = useState<"timeline" | "text">("timeline");
   const [query, setQuery] = useState("");
   // Held locally so a label lands the instant it is typed; the save is
@@ -242,6 +249,7 @@ export function TranscriptViewer({ transcript, onSaveSpeakers }: TranscriptViewe
                     <SpeakerTag
                       speaker={turn.speaker}
                       known={known}
+                      suggestions={suggestedSpeakers}
                       onAssign={(name) => persist(assignSpeaker(speakers, turn, name))}
                       onRename={(from, to) => persist(renameSpeaker(speakers, from, to))}
                     />
@@ -273,6 +281,7 @@ export function TranscriptViewer({ transcript, onSaveSpeakers }: TranscriptViewe
             {pending !== null && (
               <SelectionSpeakerMenu
                 known={known}
+                suggestions={suggestedSpeakers}
                 anchor={pending.anchor}
                 onAssign={assignSelection}
                 onDismiss={dismissSelection}

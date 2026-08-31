@@ -97,6 +97,30 @@ describe("SelectionSpeakerMenu", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("offers project-remembered names as typing suggestions, not buttons", () => {
+    // Project-level speaker memory: the datalist suggests while typing; the
+    // buttons stay reserved for this transcript's own speakers.
+    const { container } = renderMenu({ known: ["Maxim"], suggestions: ["Даниил", "Anna"] });
+
+    expect(knownButtons()).toEqual(["Maxim"]);
+    // The `list` attribute upgrades the input's role from textbox to
+    // combobox — the suggestions make it one.
+    const input = screen.getByRole("combobox", { name: /new speaker/i });
+    const listId = input.getAttribute("list");
+    expect(listId).toBeTruthy();
+    const options = Array.from(
+      container.querySelectorAll(`datalist[id="${listId}"] option`),
+      (option) => option.getAttribute("value"),
+    );
+    expect(options).toEqual(["Даниил", "Anna"]);
+  });
+
+  it("renders no datalist when there are no suggestions", () => {
+    renderMenu({ suggestions: [] });
+
+    expect(screen.getByRole("textbox", { name: /new speaker/i }).getAttribute("list")).toBeNull();
+  });
+
   it("stops listening once unmounted", () => {
     const onDismiss = vi.fn();
     const { unmount } = renderMenu({ onDismiss });

@@ -43,6 +43,21 @@ class SpeakerTurn:
             raise ValueError(f"turn end {self.end!r} precedes start {self.start!r}")
 
 
+@dataclass(frozen=True, kw_only=True)
+class DiarizationOutput:
+    """Everything one diarization pass produced.
+
+    ``embeddings`` maps a raw diarization label (``SPEAKER_00``, ...) to that
+    speaker's voice-embedding vector, when the pipeline could produce them --
+    the raw material for recognizing the same voice across meetings. ``None``
+    when the engine (or a hand-picked pipeline) has no embedding support:
+    embeddings are a bonus artifact and their absence is never an error.
+    """
+
+    turns: list[SpeakerTurn]
+    embeddings: dict[str, list[float]] | None = None
+
+
 def _overlap(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
     return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
@@ -115,6 +130,16 @@ def normalize_labels(segments: Sequence[Mapping[str, Any]]) -> list[dict[str, An
     "Speaker 1" is always the first voice heard, which is what a reader
     scanning the transcript expects.
     """
+    out, _mapping = normalize_labels_with_mapping(segments)
+    return out
+
+
+def normalize_labels_with_mapping(
+    segments: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """:func:`normalize_labels`, also answering the ``raw -> display`` map --
+    the join key for anything else the diarizer said about a raw label
+    (its voice embedding, for one)."""
     mapping: dict[str, str] = {}
     out: list[dict[str, Any]] = []
     for segment in segments:
@@ -126,13 +151,14 @@ def normalize_labels(segments: Sequence[Mapping[str, Any]]) -> list[dict[str, An
                 mapping[raw_str] = f"{SPEAKER_LABEL_PREFIX}{len(mapping) + 1}"
             renamed["speaker"] = mapping[raw_str]
         out.append(renamed)
-    return out
+    return out, mapping
 
 
 def label_segments(
     segments: Sequence[Mapping[str, Any]], turns: Sequence[SpeakerTurn]
-) -> tuple[list[dict[str, Any]], int]:
-    """Assign and normalize in one pass; returns ``(segments, speaker_count)``."""
-    labelled = normalize_labels(assign_speakers(segments, turns))
+) -> tuple[list[dict[str, Any]], int, dict[str, str]]:
+    """Assign and normalize in one pass; returns
+    ``(segments, speaker_count, raw -> display label map)``."""
+    labelled, mapping = normalize_labels_with_mapping(assign_speakers(segments, turns))
     speakers = {seg["speaker"] for seg in labelled if seg.get("speaker") is not None}
-    return labelled, len(speakers)
+    return labelled, len(speakers), mapping

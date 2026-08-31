@@ -1085,6 +1085,14 @@ pub async fn write_note(
 }
 
 #[tauri::command]
+pub async fn list_project_speaker_names(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<Vec<String>, AppError> {
+    meetings::list_project_speaker_names_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
 pub async fn transcribe_vault_entry(
     state: tauri::State<'_, AppState>,
     entry_id: String,

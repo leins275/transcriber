@@ -14,10 +14,11 @@ the whisper model: the second diarized job pays nothing to load it.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any, Protocol
 
-from transcription.diarization import SpeakerTurn
+from transcription.diarization import DiarizationOutput, SpeakerTurn
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers.base import CancelToken
 
@@ -54,7 +55,7 @@ class DiarizerProtocol(Protocol):
     model: str
     device: str
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> list[SpeakerTurn]: ...
+    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput: ...
 
 
 def _classify_diarize_failure(exc: Exception) -> ErrorKind:
@@ -62,6 +63,34 @@ def _classify_diarize_failure(exc: Exception) -> ErrorKind:
     if any(marker in message for marker in _MODEL_LOAD_ERROR_MARKERS):
         return ErrorKind.MODEL_LOAD
     return ErrorKind.AUDIO_DECODE
+
+
+def _embeddings_by_label(annotation: Any, embedding_rows: Any) -> dict[str, list[float]] | None:
+    """Map `annotation.labels()` onto the embedding matrix's rows.
+
+    pyannote's ``return_embeddings=True`` answers one row per speaker, in
+    ``annotation.labels()`` order. Any surprise here -- a missing method, a
+    row count mismatch, a row of NaNs for a speaker with no clean speech --
+    degrades to fewer (or no) embeddings with a warning, never an error:
+    the transcript's speaker turns are the artifact, embeddings are a bonus.
+    """
+    if embedding_rows is None:
+        return None
+    try:
+        labels = [str(label) for label in annotation.labels()]
+        by_label: dict[str, list[float]] = {}
+        for label, row in zip(labels, embedding_rows, strict=True):
+            vector = [float(value) for value in row]
+            if all(math.isfinite(value) for value in vector):
+                by_label[label] = vector
+        return by_label or None
+    except Exception:
+        _logger.warning(
+            "could not map diarization embeddings to speaker labels",
+            exc_info=True,
+            extra={"event": "diarizer_embeddings_skipped"},
+        )
+        return None
 
 
 class PyannoteDiarizer:
@@ -158,8 +187,9 @@ class PyannoteDiarizer:
         )
         return pipeline
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> list[SpeakerTurn]:
-        """Run diarization over the whole file; returns speaker turns.
+    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput:
+        """Run diarization over the whole file; returns speaker turns plus,
+        when the pipeline supports it, one voice embedding per speaker.
 
         The pyannote pipeline is not cooperatively cancellable mid-run, so
         the token is honoured at the boundaries: before the (possibly
@@ -177,16 +207,30 @@ class PyannoteDiarizer:
             call_kwargs["max_speakers"] = self._max_speakers
 
         try:
-            annotation = pipeline(str(audio_path), **call_kwargs)
+            # The stock speaker-diarization pipeline computes per-speaker
+            # embeddings internally either way; asking for them back costs
+            # nothing. A hand-picked pipeline without the kwarg gets one
+            # retry without it -- embeddings are a bonus, never a failure.
+            try:
+                result = pipeline(str(audio_path), return_embeddings=True, **call_kwargs)
+            except TypeError:
+                result = pipeline(str(audio_path), **call_kwargs)
         except Exception as exc:
             kind = _classify_diarize_failure(exc)
             raise ServiceError(kind, f"diarization failed on {audio_path.name}: {exc}") from exc
 
         cancel.raise_if_cancelled()
 
+        if isinstance(result, tuple):
+            annotation, embedding_rows = result
+        else:
+            annotation, embedding_rows = result, None
+
         turns = [
             SpeakerTurn(start=float(turn.start), end=float(turn.end), speaker=str(label))
             for turn, _track, label in annotation.itertracks(yield_label=True)
         ]
         turns.sort(key=lambda t: (t.start, t.end))
-        return turns
+        return DiarizationOutput(
+            turns=turns, embeddings=_embeddings_by_label(annotation, embedding_rows)
+        )

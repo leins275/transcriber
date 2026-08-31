@@ -138,12 +138,15 @@ def test_label_segments_reports_the_distinct_speaker_count() -> None:
     ]
     segments = [_seg(0, 0.0, 0.9), _seg(1, 1.1, 1.9), _seg(2, 50.0, 51.0)]
 
-    labelled, speaker_count = label_segments(segments, turns)
+    labelled, speaker_count, mapping = label_segments(segments, turns)
 
     assert speaker_count == 2
     assert labelled[0]["speaker"] == "Speaker 1"
     assert labelled[1]["speaker"] == "Speaker 2"
     assert labelled[2]["speaker"] is None
+    # The raw -> display map is the join key for per-label extras (voice
+    # embeddings); first speech order, not cluster-id order.
+    assert mapping == {"SPEAKER_01": "Speaker 1", "SPEAKER_00": "Speaker 2"}
 
 
 def test_overlapping_turns_split_by_who_holds_more_of_the_segment() -> None:
