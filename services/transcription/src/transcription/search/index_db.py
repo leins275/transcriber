@@ -447,11 +447,16 @@ class IndexDb:
             return []
         fetch_k = max(k * VEC_OVERFETCH_FACTOR, VEC_MIN_K)
         with self._lock:
-            rows = self._conn.execute(
-                "SELECT chunk_id, distance FROM chunks_vec"
-                " WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                (_pack(embedding), fetch_k),
-            ).fetchall()
+            try:
+                rows = self._conn.execute(
+                    "SELECT chunk_id, distance FROM chunks_vec"
+                    " WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                    (_pack(embedding), fetch_k),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                # A read-only open of an index built without the extension
+                # has no chunks_vec table at all; text channels still serve.
+                return []
             pairs: list[tuple[int, int]] = []
             seen_docs: set[int] = set()
             for row in rows:

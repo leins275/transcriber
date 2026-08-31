@@ -32,6 +32,12 @@ def test_console_script_entry_point_declared_without_importing_cli() -> None:
     assert scripts["transcription-service"] == "transcription.cli:main"
 
 
+def test_the_mcp_console_script_is_declared() -> None:
+    pyproject = _load_pyproject()
+    scripts = pyproject["project"]["scripts"]
+    assert scripts["transcriber-mcp"] == "transcription.mcp_server:main"
+
+
 def test_requires_python_is_at_least_312() -> None:
     pyproject = _load_pyproject()
     assert pyproject["project"]["requires-python"] == ">=3.12"

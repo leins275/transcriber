@@ -156,6 +156,31 @@ and version, so `uv sync --extra llm-cuda` over an already-installed CPU
 wheel audits it as satisfied. Force the swap once with
 `uv sync --extra llm-cuda --reinstall-package llama-cpp-python`.
 
+## Hybrid search and the MCP server
+
+`POST /v1/jobs {"job_type": "index"}` incrementally walks `vault_root` into
+the search index (`index_db_path`): transcripts (speaker renames applied),
+summaries and notes, chunked with breadcrumbs and embedded by the bge-m3
+GGUF (CPU-only, fetched via `POST /v1/embedding-model/download`). The
+desktop app fires this quietly after every finished job and note save; a
+queued index job absorbs repeat submissions. The index is derived data --
+deleting the file costs one re-index.
+
+`POST /v1/search` `{"query", "project"?, "top_k"?}` fuses four channels
+with weighted Reciprocal Rank Fusion: sqlite-vec cosine kNN, FTS5 BM25 over
+chunk text, exact-title containment, and trigram fuzz over titles/speaker
+names. It runs on the same serial worker as everything else, and degrades
+to text-only when the embedding model (or the sqlite-vec extension) is
+unavailable.
+
+**`transcriber-mcp`** is a standalone stdio MCP server over the same vault
+and index -- point Claude Desktop at it and ask questions about your
+meetings **without the app running** (see `mcp_server.py`'s docstring for
+both launch configs). Tools: `hybrid_search`, `list_projects`,
+`list_meetings`, `read_transcript` (time-window slicing, speaker renames
+applied), `read_summary`, `read_note`. Read-only: it never writes the
+vault or the index.
+
 ## Speaker diarization (pyannote)
 
 With `diarize` on (config default, `--diarize`, or a per-job

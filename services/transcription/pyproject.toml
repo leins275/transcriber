@@ -24,10 +24,15 @@ dependencies = [
   # built without enable_load_extension, which `search/index_db.py` degrades
   # around (text-only search) rather than requiring.
   "sqlite-vec>=0.1.6,<0.2",
+  # The stdio MCP server (`transcriber-mcp`) Claude Desktop and friends
+  # spawn to query the vault. Core, not an extra: its transitive deps
+  # (anyio, httpx, pydantic, starlette) are already in the tree.
+  "mcp>=1.2,<2",
 ]
 
 [project.scripts]
 transcription-service = "transcription.cli:main"
+transcriber-mcp = "transcription.mcp_server:main"
 
 [project.optional-dependencies]
 # CUDA runtime wheels for CTranslate2 4.8, which requires cuDNN 9 (not 8).
