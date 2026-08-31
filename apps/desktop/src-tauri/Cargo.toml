@@ -20,7 +20,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
-tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "io-util", "sync"] }
+# `macros` is load-bearing for the chat stream's `tokio::select!`: dev
+# builds get it via feature unification with dev-dependencies, but the
+# installer's `tauri build` compiles the lib alone and would lose it.
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "process",
+  "time",
+  "io-util",
+  "sync",
+  "macros",
+] }
 # `stream` is load-bearing for the chat SSE: `Response::bytes_stream()`
 # does not exist without it.
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
