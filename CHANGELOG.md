@@ -3,6 +3,25 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.15.0 — 2026-08-31
+
+### Bug fixes
+
+- Canonicalize search/chat hit paths before the vault-index lookup
+
+### Documentation
+
+- Reflect the search/chat/MCP architecture in CLAUDE.md and the library docstring
+
+### Features
+
+- Project page with streaming local-LLM chat over project materials
+- Transcriber-mcp — standalone stdio MCP server over the vault
+- Hybrid search over the vault — /v1/search endpoint and library search UI
+- Hybrid search foundation — vault index job, embeddings, index DB
+- Project-level speaker memory with voice-embedding groundwork
+- Editable per-meeting note (note.md) on the recording page
+
 ## 0.14.0 — 2026-08-30
 
 ### Features

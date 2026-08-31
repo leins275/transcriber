@@ -4199,7 +4199,7 @@ dependencies = [
 
 [[package]]
 name = "transcriber-desktop"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -4387,7 +4387,7 @@ dependencies = [
 
 [[package]]
 name = "vault"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "chrono",
  "serde_json",
