@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.17.0 — 2026-08-31
+
+### Features
+
+- Chat redesigned as the library's own tab (turn 9)
+
 ## 0.16.0 — 2026-08-31
 
 ### Features
