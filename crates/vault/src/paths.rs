@@ -53,6 +53,14 @@ pub const TRANSCRIPT_FILE_NAME: &str = "transcript.json";
 /// this crate creates or writes it (FR-15, out of scope).
 pub const SUMMARY_FILE_NAME: &str = "summary.md";
 
+/// The reserved `note.md` file name — the user's own markdown note for a
+/// meeting, written by the app's note editor. A placeholder here like
+/// [`SUMMARY_FILE_NAME`]: nothing in this crate creates or writes it, and
+/// `list_meetings` never recurses far enough to need a listing exclusion.
+/// The exact string is a cross-language contract with the Python service's
+/// `artifacts.py`.
+pub const NOTE_FILE_NAME: &str = "note.md";
+
 /// The reserved `unsorted` directory name at the vault root (FR-10,
 /// FR-15).
 pub const UNSORTED_DIR_NAME: &str = "unsorted";

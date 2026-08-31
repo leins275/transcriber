@@ -217,6 +217,8 @@ pub fn run() {
             commands::delete_vault_entry,
             commands::set_speaker_labels,
             commands::read_summary,
+            commands::read_note,
+            commands::write_note,
             commands::transcribe_vault_entry,
             commands::cancel_job,
             commands::prepare_update,

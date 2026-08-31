@@ -32,6 +32,14 @@ from pathlib import Path
 # reserved over there for the same reason.
 EXPORTS_DIR_NAME = "exports"
 
+# Reserved artifact file names inside a meeting folder (mirrored from
+# crates/vault/src/paths.rs). `note.md` is the operator's own note, written
+# by the app's note editor -- the service only ever reads it (indexing).
+TRANSCRIPT_FILE_NAME = "transcript.json"
+SUMMARY_FILE_NAME = "summary.md"
+NOTE_FILE_NAME = "note.md"
+SPEAKERS_FILE_NAME = "speakers.json"
+
 # The reserved vault-root directory for meetings with no project
 # (mirrored from crates/vault/src/paths.rs `UNSORTED_DIR_NAME`).
 UNSORTED_DIR_NAME = "unsorted"

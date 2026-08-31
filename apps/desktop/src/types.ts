@@ -122,6 +122,14 @@ export type SummaryView = {
   markdown: string | null;
 };
 
+/** A meeting's `note.md` -- the operator's own markdown note, edited in the
+ * app. `markdown: null` means no note exists yet. */
+export type NoteView = {
+  entry_id: string;
+  path: string;
+  markdown: string | null;
+};
+
 /** A meeting's requested new identity. `project: null` files it under
  * `unsorted/`; the Rust side validates all three parts against exactly the
  * rules ingest applies to a filename. */

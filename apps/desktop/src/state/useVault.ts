@@ -1,7 +1,13 @@
 import { useCallback, useState } from "react";
 import { api } from "../api";
 import { sortVaultEntries } from "../lib/vaultGroups";
-import type { MeetingUpdate, SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type {
+  MeetingUpdate,
+  NoteView,
+  SummaryView,
+  TranscriptView,
+  VaultMeetingView,
+} from "../types";
 
 /**
  * Holds the vault listing and the per-meeting actions over it, so `App.tsx`
@@ -57,6 +63,13 @@ export function useVault() {
     [],
   );
 
+  const readNote = useCallback((entryId: string): Promise<NoteView> => api.readNote(entryId), []);
+
+  const saveNote = useCallback(
+    (entryId: string, markdown: string) => api.writeNote(entryId, markdown),
+    [],
+  );
+
   const saveSpeakers = useCallback(
     (entryId: string, assignments: Record<string, string>) =>
       api.setSpeakerLabels(entryId, assignments),
@@ -71,6 +84,8 @@ export function useVault() {
     reveal,
     readTranscript,
     readSummary,
+    readNote,
+    saveNote,
     saveSpeakers,
     update,
     remove,

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingPage } from "./RecordingPage";
-import type { SummaryView, TranscriptView, VaultMeetingView } from "../types";
+import type { NoteView, SummaryView, TranscriptView, VaultMeetingView } from "../types";
 
 function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView {
   return {
@@ -39,6 +39,12 @@ const emptySummary: SummaryView = {
   markdown: null,
 };
 
+const emptyNote: NoteView = {
+  entry_id: "v-1",
+  path: "D:\\Meetings\\RDDM\\260709 - tech support 1\\note.md",
+  markdown: null,
+};
+
 function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> = {}) {
   const defaults = {
     entry: buildEntry(),
@@ -47,6 +53,8 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
     onReveal: () => {},
     onReadTranscript: () => Promise.resolve(buildTranscript()),
     onReadSummary: () => Promise.resolve(emptySummary),
+    onReadNote: () => Promise.resolve(emptyNote),
+    onSaveNote: () => Promise.resolve(),
     onSaveSpeakers: () => Promise.resolve(),
     onUpdate: () => Promise.resolve(),
     onDelete: () => Promise.resolve(),
@@ -344,5 +352,66 @@ describe("RecordingPage", () => {
     });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/transcript unreadable/i);
+  });
+
+  // -- the Note tab -------------------------------------------------------
+
+  it("offers a Note tab alongside Transcript and Summary", async () => {
+    renderPage();
+    await screen.findByText(/может еще/);
+
+    expect(screen.getByRole("tab", { name: "Note" })).toBeInTheDocument();
+  });
+
+  it("keeps a half-typed note draft alive across a tab switch", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(/может еще/);
+
+    await user.click(screen.getByRole("tab", { name: "Note" }));
+    await user.click(await screen.findByRole("button", { name: "Add note" }));
+    await user.type(screen.getByRole("textbox", { name: "Meeting note" }), "draft in flight");
+
+    // Away to the transcript and back: the panel hides, it never unmounts.
+    await user.click(screen.getByRole("tab", { name: "Transcript" }));
+    await user.click(screen.getByRole("tab", { name: "Note" }));
+
+    expect(screen.getByRole("textbox", { name: "Meeting note" })).toHaveValue("draft in flight");
+  });
+
+  it("guards Back while a note draft is unsaved, and lets a confirmed Back through", async () => {
+    const onBack = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      const user = userEvent.setup();
+      renderPage({ onBack });
+      await screen.findByText(/может еще/);
+
+      await user.click(screen.getByRole("tab", { name: "Note" }));
+      await user.click(await screen.findByRole("button", { name: "Add note" }));
+      await user.type(screen.getByRole("textbox", { name: "Meeting note" }), "unsaved");
+
+      await user.click(screen.getByRole("button", { name: /recordings/i }));
+      expect(onBack).not.toHaveBeenCalled();
+
+      confirmSpy.mockReturnValue(true);
+      await user.click(screen.getByRole("button", { name: /recordings/i }));
+      expect(onBack).toHaveBeenCalled();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("copies the note tab's content when it is the visible tab", async () => {
+    const user = userEvent.setup();
+    renderPage({
+      onReadNote: () => Promise.resolve({ ...emptyNote, markdown: "note body" }),
+    });
+    await screen.findByText(/может еще/);
+
+    await user.click(screen.getByRole("tab", { name: "Note" }));
+    await screen.findByText("note body");
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
   });
 });

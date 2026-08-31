@@ -22,6 +22,7 @@ import type {
   LlmModelDownloadStatus,
   LlmModelsView,
   MeetingUpdate,
+  NoteView,
   ServiceStatusView,
   SettingsView,
   SummaryView,
@@ -89,6 +90,11 @@ export const api = {
     call<void>("set_speaker_labels", { entryId, assignments }),
   readSummary: (entryId: string): Promise<SummaryView> =>
     call<SummaryView>("read_summary", { entryId }),
+  readNote: (entryId: string): Promise<NoteView> => call<NoteView>("read_note", { entryId }),
+  /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
+   * draft, so a save is by definition the whole note. */
+  writeNote: (entryId: string, markdown: string): Promise<void> =>
+    call<void>("write_note", { entryId, markdown }),
   /** Re-runs transcription over a recording already filed in the vault --
    * never a second ingest, which would file a duplicate under a suffixed
    * name. `language` is the operator's per-recording override; `null` leaves

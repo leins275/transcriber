@@ -40,6 +40,8 @@
 //!       source.<ext>
 //!       summary.md                      (F2's LLM summary; carries the
 //!                                        action items as a section)
+//!       note.md                         (the user's own note, written by
+//!                                        the app's note editor)
 //!       export.md + <name>.pdf          (per-recording export)
 //!       action items/<slug>/<slug>.md   (legacy: the retired extraction job)
 //!       facts/<slug>/<slug>.md          (legacy: the retired facts job)
@@ -54,7 +56,7 @@
 //! that later artifacts (a transcript, a summary, a per-recording export)
 //! can be written next to the source; an unsorted meeting folder takes
 //! exactly the same contents as a filed one. `source.*`,
-//! `transcript.json`, `summary.md`, `action items` (legacy — the retired
+//! `transcript.json`, `summary.md`, `note.md`, `action items` (legacy — the retired
 //! extraction job's tree, still reserved), `facts` (legacy — the retired
 //! facts job's tree, still reserved), `exports` (legacy — the old dated
 //! export tree; exports now land in the meeting folder itself) (all inside
@@ -145,7 +147,7 @@ pub use list::{list_meetings, MeetingEntry};
 pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{
-    ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, REPORTS_DIR_NAME,
+    ACTION_ITEMS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME, REPORTS_DIR_NAME,
     RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME,
     UNSORTED_DIR_NAME,
 };

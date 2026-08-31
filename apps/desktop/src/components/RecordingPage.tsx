@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import styles from "./RecordingPage.module.css";
 import { MeetingEditor } from "./MeetingEditor";
+import { NotePanel } from "./NotePanel";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
 import { formatDuration } from "../lib/format";
@@ -10,6 +11,7 @@ import { groupIntoTurns } from "../lib/turns";
 import type {
   JobType,
   MeetingUpdate,
+  NoteView,
   SummaryView,
   TranscriptLanguage,
   TranscriptView,
@@ -23,6 +25,8 @@ export type RecordingPageProps = {
   onReveal: (entryId: string) => void;
   onReadTranscript: (entryId: string) => Promise<TranscriptView>;
   onReadSummary: (entryId: string) => Promise<SummaryView>;
+  onReadNote: (entryId: string) => Promise<NoteView>;
+  onSaveNote: (entryId: string, markdown: string) => Promise<void>;
   onSaveSpeakers: (entryId: string, assignments: Record<string, string>) => Promise<void>;
   onUpdate: (entryId: string, update: MeetingUpdate) => Promise<void>;
   onDelete: (entryId: string) => Promise<void>;
@@ -40,7 +44,7 @@ export type RecordingPageProps = {
   summaryReloadToken: number;
 };
 
-type Tab = "transcript" | "summary";
+type Tab = "transcript" | "summary" | "note";
 type Panel = "none" | "edit" | "delete";
 
 /** The languages the app can name. A transcript written before this feature —
@@ -86,6 +90,8 @@ export function RecordingPage({
   onReveal,
   onReadTranscript,
   onReadSummary,
+  onReadNote,
+  onSaveNote,
   onSaveSpeakers,
   onUpdate,
   onDelete,
@@ -106,6 +112,9 @@ export function RecordingPage({
   // What the visible tab holds, reported up by the mounted panel, so Copy
   // can act on the tab the operator is looking at.
   const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState<string | null>(null);
+  // The note panel reports an unsaved draft; Back is guarded on it.
+  const [noteDirty, setNoteDirty] = useState(false);
 
   // Opening a different recording resets the page-local view state; stale
   // panel content must never survive into another meeting's Copy.
@@ -114,6 +123,8 @@ export function RecordingPage({
     setPanel("none");
     setMenuOpen(false);
     setSummaryText(null);
+    setNoteText(null);
+    setNoteDirty(false);
   }, [entry.id]);
 
   useEffect(() => {
@@ -145,7 +156,18 @@ export function RecordingPage({
   );
 
   // Copy acts on the visible tab; a tab with nothing loaded copies nothing.
-  const copyText = tab === "transcript" ? (transcript?.text.trim() ?? null) : summaryText;
+  const copyText =
+    tab === "transcript"
+      ? (transcript?.text.trim() ?? null)
+      : tab === "summary"
+        ? summaryText
+        : noteText;
+
+  // A half-typed note must not be lost to a stray click on Back.
+  const guardedBack = useCallback(() => {
+    if (noteDirty && !window.confirm("Discard unsaved note changes?")) return;
+    onBack();
+  }, [noteDirty, onBack]);
 
   const copyVisible = useCallback(async () => {
     if (!copyText) return;
@@ -224,7 +246,7 @@ export function RecordingPage({
     <section className={styles.page} aria-label="Recording">
       <div className={styles.head}>
         <div className={styles.breadcrumb}>
-          <button type="button" className="btn btn-ghost" onClick={onBack}>
+          <button type="button" className="btn btn-ghost" onClick={guardedBack}>
             ← Recordings
           </button>
           <span className={styles.crumbSeparator}>/</span>
@@ -269,6 +291,17 @@ export function RecordingPage({
               onClick={() => setTab("summary")}
             >
               Summary
+            </button>
+            <button
+              type="button"
+              role="tab"
+              id="recording-tab-note"
+              aria-selected={tab === "note"}
+              aria-controls="recording-panel-note"
+              className={styles.tab}
+              onClick={() => setTab("note")}
+            >
+              Note
             </button>
           </div>
 
@@ -460,6 +493,25 @@ export function RecordingPage({
             />
           </div>
         )}
+
+        {/* Unlike its siblings, the note panel stays mounted and merely
+            hides: it can hold an unsaved draft, and unmounting on a tab
+            switch would silently discard it. */}
+        <div
+          role="tabpanel"
+          id="recording-panel-note"
+          aria-labelledby="recording-tab-note"
+          hidden={tab !== "note"}
+        >
+          <NotePanel
+            key={entry.id}
+            entryId={entry.id}
+            onLoad={onReadNote}
+            onSave={onSaveNote}
+            onContentChange={setNoteText}
+            onDirtyChange={setNoteDirty}
+          />
+        </div>
       </div>
 
       <div className={styles.footer}>

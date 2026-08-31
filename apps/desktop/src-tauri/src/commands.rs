@@ -1068,6 +1068,23 @@ pub async fn read_summary(
 }
 
 #[tauri::command]
+pub async fn read_note(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<meetings::NoteView, AppError> {
+    meetings::read_note_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn write_note(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+    markdown: String,
+) -> Result<(), AppError> {
+    meetings::write_note_handler(&state, &entry_id, markdown).await
+}
+
+#[tauri::command]
 pub async fn transcribe_vault_entry(
     state: tauri::State<'_, AppState>,
     entry_id: String,

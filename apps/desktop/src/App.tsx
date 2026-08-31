@@ -74,6 +74,8 @@ function App() {
     reveal: revealVaultEntry,
     readTranscript,
     readSummary,
+    readNote,
+    saveNote,
     saveSpeakers,
     update: updateVaultEntry,
     remove: deleteVaultEntry,
@@ -501,6 +503,8 @@ function App() {
                   onReveal={handleRevealVaultEntry}
                   onReadTranscript={readTranscript}
                   onReadSummary={readSummary}
+                  onReadNote={readNote}
+                  onSaveNote={saveNote}
                   onSaveSpeakers={saveSpeakers}
                   onUpdate={handleUpdateVaultEntry}
                   onDelete={handleDeleteVaultEntry}

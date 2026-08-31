@@ -591,6 +591,88 @@ pub async fn read_summary_handler(
     .map_err(|join_err| AppError::internal(format!("read_summary task panicked: {join_err}")))?
 }
 
+/// A meeting's `note.md`, if the operator has written one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NoteView {
+    pub entry_id: String,
+    /// The absolute path the note lives at, present or not — shown so the
+    /// operator knows exactly where their note is filed.
+    pub path: String,
+    /// `None` when no note exists yet.
+    pub markdown: Option<String>,
+}
+
+/// An upper bound on `note.md`, matching [`MAX_SUMMARY_BYTES`]: a meeting
+/// note is prose; a file larger than this is not one.
+const MAX_NOTE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// `read_note` — returns `note.md` from the meeting folder.
+pub async fn read_note_handler(state: &AppState, entry_id: &str) -> Result<NoteView, AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    let path = meeting_dir.join(vault::NOTE_FILE_NAME);
+    let entry_id = entry_id.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        let display_path = path.to_string_lossy().into_owned();
+        let markdown = match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_NOTE_BYTES => {
+                std::fs::read_to_string(&path).ok()
+            }
+            _ => None,
+        };
+        Ok(NoteView {
+            entry_id,
+            path: display_path,
+            markdown,
+        })
+    })
+    .await
+    .map_err(|join_err| AppError::internal(format!("read_note task panicked: {join_err}")))?
+}
+
+/// Writes `note.md` atomically: a temp file in the same directory, then a
+/// rename, so a reader never observes a half-written note and a failure
+/// mid-write leaves the previous note intact. Same discipline as
+/// [`write_speaker_labels`].
+fn write_note(meeting_dir: &Path, markdown: &str) -> Result<(), AppError> {
+    let target = meeting_dir.join(vault::NOTE_FILE_NAME);
+    let temp = meeting_dir.join(format!(".{}.tmp", vault::NOTE_FILE_NAME));
+    std::fs::write(&temp, markdown.as_bytes())
+        .map_err(|err| AppError::io(format!("could not write {}: {err}", temp.display())))?;
+    if let Err(err) = std::fs::rename(&temp, &target) {
+        // Leave nothing behind on the failure path.
+        let _ = std::fs::remove_file(&temp);
+        return Err(AppError::io(format!(
+            "could not replace {}: {err}",
+            target.display()
+        )));
+    }
+    Ok(())
+}
+
+/// `write_note` — replaces a meeting's `note.md` wholesale.
+///
+/// Wholesale because the editor holds the full draft; an empty string
+/// writes an empty file rather than deleting it — no delete-on-empty
+/// magic, the operator can remove the file in the explorer if they want it
+/// gone.
+pub async fn write_note_handler(
+    state: &AppState,
+    entry_id: &str,
+    markdown: String,
+) -> Result<(), AppError> {
+    if markdown.len() as u64 > MAX_NOTE_BYTES {
+        return Err(AppError::invalid_argument(
+            "the note is too large to save (4 MB limit)".to_string(),
+        ));
+    }
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+
+    tokio::task::spawn_blocking(move || write_note(&meeting_dir, &markdown))
+        .await
+        .map_err(|join_err| AppError::internal(format!("write_note task panicked: {join_err}")))?
+}
+
 /// `transcribe_vault_entry` — runs transcription over a recording that is
 /// already filed in the vault.
 ///
@@ -1213,6 +1295,86 @@ mod tests {
                 .join("260812 - Security issue")
                 .join("source.mp4")
                 .is_file());
+        });
+    }
+
+    // -- note.md -----------------------------------------------------------
+
+    #[test]
+    fn a_note_round_trips_and_leaves_no_temp_file_behind() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let id = only_entry_id(&state).await;
+
+            write_note_handler(&state, &id, "# Заметка\n\nDetails here.".to_string())
+                .await
+                .expect("write note");
+
+            let view = read_note_handler(&state, &id).await.expect("read note");
+            assert_eq!(view.markdown.as_deref(), Some("# Заметка\n\nDetails here."));
+            assert!(view.path.ends_with("note.md"), "path was {}", view.path);
+
+            let meeting_dir = root.path().join("ELS").join("260812 - Security issue");
+            assert!(
+                !meeting_dir.join(".note.md.tmp").exists(),
+                "the temp file must be gone after a successful write"
+            );
+        });
+    }
+
+    #[test]
+    fn reading_a_missing_note_answers_none_but_still_names_the_path() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let id = only_entry_id(&state).await;
+
+            let view = read_note_handler(&state, &id).await.expect("read note");
+
+            assert_eq!(view.markdown, None);
+            assert!(view.path.ends_with("note.md"), "path was {}", view.path);
+        });
+    }
+
+    #[test]
+    fn an_empty_note_writes_an_empty_file_rather_than_deleting() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let id = only_entry_id(&state).await;
+
+            write_note_handler(&state, &id, "draft".to_string())
+                .await
+                .expect("write note");
+            write_note_handler(&state, &id, String::new())
+                .await
+                .expect("write empty note");
+
+            let view = read_note_handler(&state, &id).await.expect("read note");
+            assert_eq!(view.markdown.as_deref(), Some(""));
+        });
+    }
+
+    #[test]
+    fn an_oversized_note_is_refused_before_touching_the_vault() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path());
+            let state = state_with_root(root.path().to_path_buf(), Arc::new(FakeService::new()));
+            let id = only_entry_id(&state).await;
+
+            let oversized = "x".repeat(usize::try_from(MAX_NOTE_BYTES).expect("cap fits") + 1);
+            let err = write_note_handler(&state, &id, oversized)
+                .await
+                .expect_err("an oversized note must be refused");
+
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            let meeting_dir = root.path().join("ELS").join("260812 - Security issue");
+            assert!(!meeting_dir.join("note.md").exists(), "nothing was written");
         });
     }
 }
