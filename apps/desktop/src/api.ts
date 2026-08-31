@@ -115,6 +115,9 @@ export const api = {
   },
   /** Stops the in-flight chat turn, if any. */
   cancelChat: (): Promise<void> => call<void>("cancel_chat"),
+  /** Asks the service for an incremental search-index pass now. Cheap when
+   * nothing changed; the service absorbs repeat submissions. */
+  reindexVault: (): Promise<void> => call<void>("reindex_vault"),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

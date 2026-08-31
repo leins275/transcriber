@@ -1119,6 +1119,11 @@ pub async fn search_vault(
 }
 
 #[tauri::command]
+pub async fn reindex_vault(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    search::reindex_vault_handler(&state).await
+}
+
+#[tauri::command]
 pub async fn chat_stream(
     state: tauri::State<'_, AppState>,
     messages: Vec<chat::ChatMessageArg>,

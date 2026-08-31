@@ -1,3 +1,4 @@
+import { useState } from "react";
 import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
@@ -17,6 +18,8 @@ export type SettingsPageProps = {
   onChangeRoot: () => void;
   onStartLlmModelDownload: (modelId: string) => void;
   onCancelLlmModelDownload: (modelId: string) => void;
+  /** Queues an incremental search-index pass over the whole vault. */
+  onReindex: () => Promise<void>;
 };
 
 function extensionList(extensions: string[]): string {
@@ -135,8 +138,28 @@ export function SettingsPage({
   onChangeRoot,
   onStartLlmModelDownload,
   onCancelLlmModelDownload,
+  onReindex,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
+  const [reindexState, setReindexState] = useState<"idle" | "queueing" | "queued" | "failed">(
+    "idle",
+  );
+  const [reindexError, setReindexError] = useState<string | null>(null);
+
+  const reindex = () => {
+    setReindexState("queueing");
+    setReindexError(null);
+    onReindex()
+      .then(() => setReindexState("queued"))
+      .catch((caught: unknown) => {
+        setReindexState("failed");
+        const message =
+          typeof caught === "object" && caught !== null && "message" in caught
+            ? String((caught as { message: unknown }).message)
+            : String(caught);
+        setReindexError(message);
+      });
+  };
   return (
     <section className={styles.page} role="region" aria-label="Settings">
       <button type="button" className={`btn btn-ghost ${styles.back}`} onClick={onBack}>
@@ -222,6 +245,30 @@ export function SettingsPage({
               </p>
             </>
           )}
+        </div>
+      </div>
+
+      <div className={styles.row}>
+        <div className={styles.kicker}>Search</div>
+        <div className={styles.value}>
+          <div className={styles.line}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={reindexState === "queueing" || serviceStatus.state !== "ready"}
+              onClick={reindex}
+            >
+              {reindexState === "queueing" ? "Queueing…" : "Rebuild search index"}
+            </button>
+            {reindexState === "queued" && (
+              <span className={styles.detail}>Queued — runs after any current job.</span>
+            )}
+          </div>
+          {reindexError && <p className={styles.warning}>{reindexError}</p>}
+          <p className={styles.hint}>
+            The index updates itself after every transcription and note save; this catches up a
+            vault that changed outside the app. Incremental — unchanged meetings are skipped.
+          </p>
         </div>
       </div>
 

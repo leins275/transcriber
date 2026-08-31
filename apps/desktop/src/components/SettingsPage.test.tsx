@@ -81,6 +81,7 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onChangeRoot: () => {},
     onStartLlmModelDownload: () => {},
     onCancelLlmModelDownload: () => {},
+    onReindex: () => Promise.resolve(),
     ...overrides,
   };
   return render(<SettingsPage {...props} />);
@@ -206,5 +207,34 @@ describe("SettingsPage", () => {
     });
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     expect(screen.getByText(/filing still works/i)).toBeInTheDocument();
+  });
+
+  it("queues a search-index rebuild and confirms it", async () => {
+    const onReindex = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ onReindex });
+
+    await user.click(screen.getByRole("button", { name: /rebuild search index/i }));
+
+    expect(onReindex).toHaveBeenCalled();
+    expect(await screen.findByText(/queued/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a refused reindex instead of a silent no-op", async () => {
+    const onReindex = vi.fn().mockRejectedValue({ kind: "service", message: "service is down" });
+    const user = userEvent.setup();
+    renderPage({ onReindex });
+
+    await user.click(screen.getByRole("button", { name: /rebuild search index/i }));
+
+    expect(await screen.findByText(/service is down/i)).toBeInTheDocument();
+  });
+
+  it("disables the rebuild button while the service is not ready", () => {
+    renderPage({
+      serviceStatus: { state: "unavailable", base_url: null, detail: "spawn failed" },
+    });
+
+    expect(screen.getByRole("button", { name: /rebuild search index/i })).toBeDisabled();
   });
 });

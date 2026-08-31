@@ -51,6 +51,19 @@ pub struct SearchResultView {
     pub timestamp: Option<String>,
 }
 
+/// `reindex_vault` -- asks the service for an incremental index pass NOW,
+/// with the error surfaced (unlike the quiet after-job submissions): this
+/// backs the Settings button and the once-per-session catch-up at startup,
+/// where "the service refused" is information the operator should see.
+pub async fn reindex_vault_handler(state: &AppState) -> Result<(), AppError> {
+    let service = state.service.read().await.clone();
+    service
+        .submit_index()
+        .await
+        .map(|_job_id| ())
+        .map_err(super::llm::map_service_error)
+}
+
 /// `search_vault` -- hybrid search over transcripts, summaries and notes.
 pub async fn search_vault_handler(
     state: &AppState,

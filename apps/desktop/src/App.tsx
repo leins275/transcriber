@@ -190,6 +190,20 @@ function App() {
       });
   }, [serviceStatus.state]);
 
+  // One quiet search-index catch-up per session, once the service is
+  // reachable: the index otherwise only updates after a job or a note
+  // save, which would leave a vault filled before this feature (or edited
+  // outside the app) unsearchable until the next transcription. Incremental
+  // on the service side, so an unchanged vault costs one stat-walk.
+  const reindexedRef = useRef(false);
+  useEffect(() => {
+    if (serviceStatus.state !== "ready" || reindexedRef.current) return;
+    reindexedRef.current = true;
+    api.reindexVault().catch(() => {
+      // An older service that does not know the job type: nothing to do.
+    });
+  }, [serviceStatus.state]);
+
   // The assistant (LLM) model catalog, same gating; polled while any
   // model's download is in flight so Settings shows live progress. The
   // "ready" gate also refetches after a model switch: selecting a model
@@ -528,6 +542,7 @@ function App() {
               onChangeRoot={handleChooseFolder}
               onStartLlmModelDownload={handleStartLlmModelDownload}
               onCancelLlmModelDownload={handleCancelLlmModelDownload}
+              onReindex={() => api.reindexVault()}
             />
           ) : inSetup ? (
             <FirstRun
