@@ -211,6 +211,8 @@ struct Inner {
     /// the only place a caller can observe what actually went on the wire
     /// (per-job `language`, FR-5), since `submit()` itself only returns an id.
     submissions: Vec<SubmitRequest>,
+    /// How many fire-and-forget `submit_index` calls arrived, for assertions.
+    index_submissions: usize,
 }
 
 impl Inner {
@@ -291,6 +293,7 @@ impl FakeService {
                 llm_active: FAKE_LLM_CATALOG[0].0.to_string(),
                 llm_submissions: Vec::new(),
                 submissions: Vec::new(),
+                index_submissions: 0,
             }),
         }
     }
@@ -326,6 +329,14 @@ impl FakeService {
             .expect("fake service mutex poisoned")
             .submissions
             .clone()
+    }
+
+    /// How many `submit_index` calls this fake has accepted.
+    pub fn index_submission_count(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .index_submissions
     }
 
     /// Every derived-job submission this fake has accepted, in order.
@@ -537,6 +548,20 @@ impl TranscriptionService for FakeService {
             },
         );
         Ok(job_id)
+    }
+
+    async fn submit_index(&self) -> Result<String, ServiceError> {
+        // Accepted, counted and forgotten, like the real service's cheap
+        // incremental pass -- enough for `--fake-service` dev sessions to
+        // not log errors and for chain tests to observe the trigger.
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        inner.index_submissions += 1;
+        Ok("fake-index".to_string())
     }
 
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {

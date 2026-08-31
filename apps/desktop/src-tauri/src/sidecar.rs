@@ -112,6 +112,11 @@ impl SidecarSpawnConfig {
         ];
         if let Some(root) = settings.meetings_root.as_ref() {
             envs.push(("TRANSCRIBER_ALLOWED_ROOTS".to_string(), root.clone()));
+            // The search indexer walks the vault; same source of truth as
+            // the allowlist, kept as its own variable because the service
+            // treats "where may I read" and "what do I index" as different
+            // questions.
+            envs.push(("TRANSCRIBER_VAULT_ROOT".to_string(), root.clone()));
         }
         if let Some(path) = settings.model.path.as_ref() {
             envs.push(("TRANSCRIBER_MODEL_PATH".to_string(), path.clone()));
@@ -179,6 +184,9 @@ impl SidecarSpawnConfig {
         ];
         if let Some(root) = settings.meetings_root.as_ref() {
             envs.push(("TRANSCRIBER_ALLOWED_ROOTS".to_string(), root.clone()));
+            // Same rationale as the dev spawn: the vault root feeds the
+            // service's search indexer.
+            envs.push(("TRANSCRIBER_VAULT_ROOT".to_string(), root.clone()));
         }
         if let Some(id) = settings.model.id.as_ref() {
             envs.push(("TRANSCRIBER_MODEL".to_string(), id.clone()));
@@ -798,6 +806,10 @@ mod tests {
             Some("D:\\Meetings")
         );
         assert_eq!(
+            env.get("TRANSCRIBER_VAULT_ROOT").map(String::as_str),
+            Some("D:\\Meetings")
+        );
+        assert_eq!(
             env.get("TRANSCRIBER_MODEL_PATH").map(String::as_str),
             Some("C:\\models")
         );
@@ -876,6 +888,10 @@ mod tests {
         );
         assert_eq!(
             env.get("TRANSCRIBER_ALLOWED_ROOTS").map(String::as_str),
+            Some("D:\\Meetings")
+        );
+        assert_eq!(
+            env.get("TRANSCRIBER_VAULT_ROOT").map(String::as_str),
             Some("D:\\Meetings")
         );
         assert_eq!(

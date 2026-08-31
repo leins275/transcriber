@@ -100,6 +100,8 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         # `None` on this GPU-less-probed host, mirroring
         # `cuda_runtime_present`'s convention.
         "llm_gpu_build_present": None,
+        # The search-embedding GGUF is likewise absent in a fresh app dir.
+        "embedding_model_present": False,
     }
 
 

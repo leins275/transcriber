@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from transcription.errors import ErrorKind, ServiceError
 
 if TYPE_CHECKING:
-    from transcription.llm.base import LlmProvider
+    from transcription.llm.base import EmbeddingProvider, LlmProvider
 
 # The built-in engine's registry name (also the config default). Modules
 # outside this package compare against this constant rather than the literal
@@ -48,6 +48,18 @@ def validate_llm_provider_name(name: str) -> None:
             ErrorKind.INVALID_REQUEST,
             f"unknown llm provider {name!r}; known llm providers: {known}",
         )
+
+
+def get_embedder(config: Any) -> EmbeddingProvider:
+    """The embedding engine behind hybrid search, imported lazily.
+
+    One implementation, no registry: embeddings are infrastructure, not a
+    choice. Tests substitute a fake through the ``embedder_factory`` seams
+    on `JobManager`/`create_app` instead.
+    """
+    from transcription.llm.embeddings import LlamaCppEmbedder  # noqa: PLC0415
+
+    return LlamaCppEmbedder(config)
 
 
 def get_llm_provider(name: str, config: Any) -> LlmProvider:

@@ -7,6 +7,8 @@ network-free (FR-15).
 
 from __future__ import annotations
 
+import hashlib
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,41 @@ from typing import Any
 from transcription.diarization import DiarizationOutput, SpeakerTurn
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptResult
+
+
+class FakeEmbedder:
+    """A deterministic, model-free `EmbeddingProvider` stand-in.
+
+    Each text embeds to a unit-normalized 8-dim vector derived from its
+    sha256, so identical texts always agree and different texts (almost)
+    never do -- enough to exercise storage, rebuild and ranking paths.
+    """
+
+    name = "fake-embedder"
+    DIM = 8
+
+    def __init__(self, *, raise_kind: ErrorKind | None = None) -> None:
+        self.raise_kind = raise_kind
+        self.calls: list[list[str]] = []
+        self.unload_calls = 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if self.raise_kind is not None:
+            raise ServiceError(self.raise_kind, f"fake embedder raised {self.raise_kind.value}")
+        self.calls.append(list(texts))
+        vectors: list[list[float]] = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            raw = [float(byte) - 127.5 for byte in digest[: self.DIM]]
+            norm = math.sqrt(sum(value * value for value in raw)) or 1.0
+            vectors.append([value / norm for value in raw])
+        return vectors
+
+    def dim(self) -> int:
+        return self.DIM
+
+    def unload(self) -> None:
+        self.unload_calls += 1
 
 
 @dataclass(frozen=True, kw_only=True)

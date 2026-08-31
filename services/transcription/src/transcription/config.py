@@ -26,8 +26,9 @@ _SECRET_KEYS = frozenset({"token", "hf_token"})
 
 _TRUE_STRINGS = frozenset({"1", "true", "yes"})
 
-# Config-file keys this service does not know about get silently ignored (F4 owns the
-# file's overall schema); this key is the one exception it reads on its own behalf.
+# The meetings-vault root. A real `Config` field (the search indexer walks
+# it), and additionally appended to `allowed_roots` at the end of the layer
+# merge so configuring the vault always authorizes paths under it.
 _VAULT_ROOT_KEY = "vault_root"
 
 # F3's config.json schema (docs/config-contract.md) nests the model choice as
@@ -151,6 +152,24 @@ class Config:
     # multi-GB working set is released and never sits next to a loaded
     # whisper model; reloading is mmap-fast.
     llm_keep_loaded: bool = False
+    # --- Hybrid search (index + embeddings) ---
+    # The meetings-vault root the index job walks. Set by the desktop app
+    # (config.json `vault_root` / TRANSCRIBER_VAULT_ROOT); empty disables
+    # index jobs. Whatever value wins the layer merge is also appended to
+    # `allowed_roots`.
+    vault_root: str = ""
+    # The search index database; empty means `<app_dir>/data/index.sqlite3`.
+    # Rebuildable by design -- deleting it costs one re-index, never data.
+    index_db_path: str = ""
+    search_top_k: int = 10
+    # The embedding GGUF behind vector search. One curated entry
+    # (`llm_catalog.EMBEDDING_ENTRY`); the repo/revision/file fields are the
+    # same hand-picked-GGUF escape hatch the LLM pins have. Weights live in
+    # `llm_model_path` beside the LLM's GGUF.
+    embedding_model: str = llm_catalog.EMBEDDING_ENTRY.id
+    embedding_model_repo: str = llm_catalog.EMBEDDING_ENTRY.repo
+    embedding_model_revision: str = llm_catalog.EMBEDDING_ENTRY.revision
+    embedding_model_file: str = llm_catalog.EMBEDDING_ENTRY.file
 
     def public(self) -> dict[str, Any]:
         """What ``/health`` and logs may show: no token (FR-9)."""
@@ -169,6 +188,8 @@ class Config:
             "llm_model": self.llm_model,
             "llm_ctx": self.llm_ctx,
             "llm_gpu_layers": self.llm_gpu_layers,
+            "embedding_model": self.embedding_model,
+            "search_top_k": self.search_top_k,
         }
 
 
@@ -303,19 +324,17 @@ def load_config(
     # 1. defaults come from the dataclass field defaults themselves — nothing to do
     #    here until a layer actually supplies a value.
 
-    # 2. config file (unknown keys ignored; vault_root and model are
-    #    special-cased below -- neither is a plain scalar the generic loop
-    #    can copy verbatim).
+    # 2. config file (unknown keys ignored; `model` is special-cased below --
+    #    not a plain scalar the generic loop can copy verbatim. `vault_root`
+    #    IS a plain field now; its append to allowed_roots happens after the
+    #    last layer so every source of it authorizes the path).
     for key, value in file_data.items():
-        if key in (_VAULT_ROOT_KEY, _MODEL_KEY):
+        if key == _MODEL_KEY:
             continue
         if key in known_fields:
             values[key] = value
 
     allowed_roots: list[str] = list(values.get("allowed_roots") or [])
-    vault_root = file_data.get(_VAULT_ROOT_KEY)
-    if vault_root:
-        allowed_roots.append(str(vault_root))
 
     # F3's nested `"model": {"id": ..., "path": ...}` (see _MODEL_KEY above):
     # unpack onto the flat `model`/`model_path` fields instead of assigning
@@ -365,10 +384,20 @@ def load_config(
     if "allowed_roots" in overrides:
         allowed_roots = list(overrides["allowed_roots"])
 
+    # Whichever layer won `vault_root`, paths under it must resolve: the
+    # vault is by definition somewhere this service reads and writes.
+    final_vault_root = str(values.get(_VAULT_ROOT_KEY) or "")
+    if final_vault_root:
+        values[_VAULT_ROOT_KEY] = final_vault_root
+        if final_vault_root not in allowed_roots:
+            allowed_roots.append(final_vault_root)
+
     values["allowed_roots"] = tuple(allowed_roots)
 
     if "db_path" not in values or not values["db_path"]:
         values["db_path"] = str(app_dir / "data" / "jobs.sqlite3")
+    if "index_db_path" not in values or not values["index_db_path"]:
+        values["index_db_path"] = str(app_dir / "data" / "index.sqlite3")
     if "model_path" not in values or not values["model_path"]:
         values["model_path"] = str(app_dir / "models")
     if "llm_model_path" not in values or not values["llm_model_path"]:
@@ -421,6 +450,8 @@ def load_config(
         values["llm_temperature"] = float(values["llm_temperature"])
     if "llm_keep_loaded" in values:
         values["llm_keep_loaded"] = _parse_bool(values["llm_keep_loaded"])
+    if "search_top_k" in values:
+        values["search_top_k"] = int(values["search_top_k"])
 
     token = values.get("token") or secrets.token_hex(32)
     values["token"] = token

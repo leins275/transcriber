@@ -90,3 +90,23 @@ class LlmProvider(Protocol):
     def unload(self) -> None:
         """Release the loaded model's memory; a later call reloads lazily."""
         ...
+
+
+class EmbeddingProvider(Protocol):
+    """The embedding seam behind hybrid search -- same isolation rule as
+    :class:`LlmProvider`: nothing outside ``llm/`` imports the engine
+    library, everything embeds through this."""
+
+    name: str
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """One unit-normalized vector per input text, in order."""
+        ...
+
+    def dim(self) -> int:
+        """The embedding width every :meth:`embed` vector has."""
+        ...
+
+    def unload(self) -> None:
+        """Release the loaded model's memory; a later call reloads lazily."""
+        ...

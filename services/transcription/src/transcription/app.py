@@ -73,6 +73,7 @@ def create_app(
     model_download_factory: Callable[[], ModelDownload] | None = None,
     llm_model_download_factory: Callable[[], ModelDownload] | None = None,
     llm_models_factory_for: Callable[[CatalogEntry | None], ModelDownload] | None = None,
+    embedding_model_download_factory: Callable[[], ModelDownload] | None = None,
     job_manager_factory: Callable[[Config, Ledger], JobManager] | None = None,
 ) -> FastAPI:
     """Build the FastAPI app for one process run (FR-2); no import-time side effects (NFR-1).
@@ -109,6 +110,15 @@ def create_app(
     # slot of the same manager map, so the two surfaces can never race two
     # transfers of one file.
     llm_model_download_manager = llm_models_manager.manager_for_active()
+    # The search-embedding GGUF gets its own slot at
+    # `/v1/embedding-model/download` -- same wire shape, no CUDA phase.
+    embedding_model_download_manager = ModelDownloadManager(
+        config,
+        factory=(
+            embedding_model_download_factory
+            or (lambda: model_routes.build_embedding_model_download(config))
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -127,6 +137,7 @@ def create_app(
     app.state.model_download_manager = model_download_manager
     app.state.llm_model_download_manager = llm_model_download_manager
     app.state.llm_models_manager = llm_models_manager
+    app.state.embedding_model_download_manager = embedding_model_download_manager
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         """Bearer-auth dependency for every `/v1/*` route (FR-9).
@@ -216,6 +227,8 @@ def create_app(
             # what lets the app offer "Enable GPU acceleration" exactly when
             # it would help.
             "llm_gpu_build_present": llm_gpu_build_present(config),
+            # The search-embedding model's counterpart to llm_model_present.
+            "embedding_model_present": model_routes.is_embedding_model_present(config),
         }
 
     v1_deps = [Depends(require_token)]
@@ -302,5 +315,12 @@ def create_app(
         )
     )
     app.include_router(build_llm_models_router(require_token))
+    app.include_router(
+        build_model_router(
+            require_token,
+            prefix="/v1/embedding-model/download",
+            state_attr="embedding_model_download_manager",
+        )
+    )
 
     return app

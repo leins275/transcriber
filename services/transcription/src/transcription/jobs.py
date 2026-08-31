@@ -25,14 +25,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from transcription import artifacts, exporting, paths, transcript
+from transcription import artifacts, exporting, llm_catalog, paths, transcript
 from transcription.config import Config
 from transcription.diarization import label_segments
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.ledger import Ledger
-from transcription.llm import BUILTIN_ENGINE, get_llm_provider, validate_llm_provider_name
-from transcription.llm.base import LlmProvider, LlmTruncatedError, Message
+from transcription.llm import (
+    BUILTIN_ENGINE,
+    get_embedder,
+    get_llm_provider,
+    validate_llm_provider_name,
+)
+from transcription.llm.base import EmbeddingProvider, LlmProvider, LlmTruncatedError, Message
 from transcription.llm.chunking import chunk_lines, input_budget_tokens
 from transcription.llm.prompts import render_transcript_lines
 from transcription.llm.reasoning import split_reasoning
@@ -41,14 +46,16 @@ from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
 from transcription.schema import DiarizationInfo, Segment
+from transcription.search.index_db import IndexDb
+from transcription.search.indexer import index_vault
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
 # Every job type this manager can run. All of them share the single serial
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
-# concurrently.
-KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export"})
+# concurrently (the index job's embedder is CPU-only on top of that).
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index"})
 
 _logger = logging.getLogger("transcription")
 
@@ -93,6 +100,8 @@ class JobManager:
         *,
         diarizer_factory: Callable[[Config], DiarizerProtocol] | None = None,
         llm_factory: Callable[[Config], LlmProvider] | None = None,
+        embedder_factory: Callable[[Config], EmbeddingProvider] | None = None,
+        index_db_factory: Callable[[Config], IndexDb] | None = None,
     ) -> None:
         self._config = config
         self._ledger = ledger
@@ -113,6 +122,24 @@ class JobManager:
             llm_factory
             if llm_factory is not None
             else (lambda config: get_llm_provider(BUILTIN_ENGINE, config))
+        )
+        # The search-index pair (embedder + database), cached the same way;
+        # both factories are the matching test seams.
+        self._embedder: EmbeddingProvider | None = None
+        self._embedder_factory: Callable[[Config], EmbeddingProvider] = (
+            embedder_factory if embedder_factory is not None else get_embedder
+        )
+        self._index_db: IndexDb | None = None
+        self._index_db_factory: Callable[[Config], IndexDb] = (
+            index_db_factory
+            if index_db_factory is not None
+            else (
+                lambda config: IndexDb(
+                    config.index_db_path,
+                    embedding_model=config.embedding_model,
+                    embedding_dim=llm_catalog.EMBEDDING_DIM,
+                )
+            )
         )
         # Guards `self._providers` against two threads racing to construct
         # the same not-yet-cached provider (E15: resolution now happens off
@@ -136,6 +163,9 @@ class JobManager:
                 pass
             self._worker_task = None
         self._executor.shutdown(wait=False)
+        if self._index_db is not None:
+            self._index_db.close()
+            self._index_db = None
 
     def _get_provider(self, name: str) -> TranscriptionProvider:
         """Resolve (and cache) the provider instance for `name`.
@@ -178,6 +208,23 @@ class JobManager:
                 self._llm = self._llm_factory(self._config)
             return self._llm
 
+    def _get_embedder(self) -> EmbeddingProvider:
+        """Resolve (and cache) the embedding engine (same off-event-loop
+        rule as `_get_provider`)."""
+        with self._provider_lock:
+            if self._embedder is None:
+                self._embedder = self._embedder_factory(self._config)
+            return self._embedder
+
+    def _get_index_db(self) -> IndexDb:
+        """Resolve (and cache) the index database. One long-lived instance:
+        the index job writes through it and search reads through it, all on
+        the serial executor."""
+        with self._provider_lock:
+            if self._index_db is None:
+                self._index_db = self._index_db_factory(self._config)
+            return self._index_db
+
     def llm_info(self) -> dict[str, Any]:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
 
@@ -209,7 +256,7 @@ class JobManager:
         job_type: str = "transcribe",
         audio_path: str | None = None,
         input_path: str | None = None,
-        output_dir: str,
+        output_dir: str | None = None,
         language: str | None = None,
         provider: str | None = None,
         model: str | None = None,
@@ -238,6 +285,26 @@ class JobManager:
                     ErrorKind.INVALID_REQUEST, "a transcribe job requires audio_path"
                 )
             resolved_source = paths.resolve_under_roots(audio_path, allowed_roots, must_exist=True)
+        elif job_type == "index":
+            # Vault-wide, no request paths: source is the configured vault
+            # root, "output" is the index database (the ledger's columns are
+            # NOT NULL). Debounced -- an already-queued index job will see
+            # any change a second submission was announcing, so its id is
+            # answered instead of queueing duplicate work.
+            if not self._config.vault_root:
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    "index jobs require a configured vault_root",
+                )
+            for existing in self._jobs.values():
+                if existing.job_type == "index" and existing.status == "queued":
+                    return existing.job_id
+            resolved_source = Path(self._config.vault_root)
+            if not resolved_source.is_dir():
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    f"vault_root is not a directory: {resolved_source}",
+                )
         else:
             if not input_path:
                 raise ServiceError(
@@ -259,11 +326,22 @@ class JobManager:
                     ErrorKind.INVALID_REQUEST,
                     f"no transcript.json in {resolved_source.name}; transcribe first",
                 )
-        resolved_output = paths.ensure_output_dir(output_dir, allowed_roots)
+        if job_type == "index":
+            resolved_output = Path(self._config.index_db_path)
+        else:
+            if not output_dir:
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST, f"a {job_type} job requires output_dir"
+                )
+            resolved_output = paths.ensure_output_dir(output_dir, allowed_roots)
 
         if job_type == "transcribe":
             provider_name = provider or self._config.provider
             model_name = model or self._config.model
+        elif job_type == "index":
+            # No LLM, no whisper: the CPU embedder is the only model here.
+            provider_name = "none"
+            model_name = self._config.embedding_model
         elif job_type == "export":
             # Deterministic assembly: no model runs at all.
             provider_name = "none"
@@ -661,27 +739,34 @@ class JobManager:
         heavy work ever overlaps.
         """
         start = time.monotonic()
-        uses_llm = job.job_type != "export"
+        uses_llm = job.job_type == "summarize"
         try:
             if uses_llm:
                 provider = await self._resolve_llm(job)
                 job.status = "running"
                 self._ledger.mark_running(job.job_id, device=provider.describe().device)
-                if job.job_type == "summarize":
-                    body = functools.partial(self._summarize_sync, job, provider)
-                else:
-                    # Unreachable in practice -- the pydantic `JobType` literal
-                    # and `KNOWN_JOB_TYPES` both gate the type long before the
-                    # worker sees it. Kept explicit so a future LLM job type
-                    # cannot silently inherit the summarize path.
-                    raise ServiceError(
-                        ErrorKind.INVALID_REQUEST,
-                        f"unsupported llm job type {job.job_type!r}",
-                    )
-            else:
+                body = functools.partial(self._summarize_sync, job, provider)
+            elif job.job_type == "index":
+                # The embedder is constructed here (cheap); its lazy weight
+                # load -- and any failure of it -- happens inside the walk,
+                # where the indexer degrades to text-only rows.
+                embedder = await asyncio.to_thread(self._get_embedder)
+                job.status = "running"
+                self._ledger.mark_running(job.job_id)
+                body = functools.partial(self._index_sync, job, embedder)
+            elif job.job_type == "export":
                 job.status = "running"
                 self._ledger.mark_running(job.job_id)
                 body = functools.partial(self._export_sync, job)
+            else:
+                # Unreachable in practice -- the pydantic `JobType` literal
+                # and `KNOWN_JOB_TYPES` both gate the type long before the
+                # worker sees it. Kept explicit so a future job type cannot
+                # silently inherit another's path.
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    f"unsupported job type {job.job_type!r}",
+                )
             manifest = await loop.run_in_executor(self._executor, body)
 
             elapsed = time.monotonic() - start
@@ -724,6 +809,13 @@ class JobManager:
                     self._llm.unload()
                 except Exception:  # noqa: BLE001 - unload must never take the worker down
                     _logger.warning("failed to unload the LLM after job %s", job.job_id)
+            # The embedder always unloads after an index job (~700 MB RSS,
+            # mmap-fast reload; no keep-loaded semantics on purpose).
+            if job.job_type == "index" and self._embedder is not None:
+                try:
+                    self._embedder.unload()
+                except Exception:  # noqa: BLE001 - unload must never take the worker down
+                    _logger.warning("failed to unload the embedder after job %s", job.job_id)
 
     def _load_transcript_lines(self, meeting_dir: Path) -> tuple[list[str], dict[str, Any]]:
         """The meeting's transcript as `[m:ss] Speaker: text` lines, with the
@@ -855,6 +947,24 @@ class JobManager:
                 Path(job.output_path) / "summary.reasoning.md",
             )
         return {"artifacts": [str(summary_path)]}
+
+    def _index_sync(self, job: JobState, embedder: EmbeddingProvider) -> dict[str, Any]:
+        """One incremental index pass over the vault (runs on the serial
+        executor -- embedding never overlaps whisper/LLM inference)."""
+        db = self._get_index_db()
+
+        def on_progress(fraction: float) -> None:
+            job.progress = max(0.0, min(1.0, fraction))
+
+        stats = index_vault(
+            Path(job.source_path),
+            db,
+            embedder,
+            on_progress=on_progress,
+            cancel=job.cancel_token,
+        )
+        job.warnings.extend(stats.warnings)
+        return {"stats": stats.as_dict()}
 
     def _export_sync(self, job: JobState) -> dict[str, Any]:
         meeting_dir = Path(job.source_path)

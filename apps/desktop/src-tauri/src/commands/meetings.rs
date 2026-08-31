@@ -670,7 +670,18 @@ pub async fn write_note_handler(
 
     tokio::task::spawn_blocking(move || write_note(&meeting_dir, &markdown))
         .await
-        .map_err(|join_err| AppError::internal(format!("write_note task panicked: {join_err}")))?
+        .map_err(|join_err| {
+            AppError::internal(format!("write_note task panicked: {join_err}"))
+        })??;
+
+    // The note just changed; let the search index catch up. Fire-and-forget
+    // like the post-job re-index in `jobs.rs`: a service that does not know
+    // the job type (or is down) answers an error this deliberately drops.
+    let service = state.service.read().await.clone();
+    tokio::spawn(async move {
+        let _ = service.submit_index().await;
+    });
+    Ok(())
 }
 
 /// `list_project_speaker_names` — the distinct speaker names the operator

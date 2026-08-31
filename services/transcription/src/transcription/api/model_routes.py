@@ -171,6 +171,36 @@ def build_llm_model_download(
     )
 
 
+def build_embedding_model_download(
+    config: Config,
+    *,
+    hub_client: HubClient | None = None,
+    transport: Transport | None = None,
+) -> LlmGgufDownload:
+    """The GGUF download for the search-embedding model (bge-m3).
+
+    The exact :func:`build_llm_model_download` shape over the config's
+    embedding pins; the file lands in ``llm_model_path`` beside the LLM's
+    GGUF. Never wrapped in a CUDA phase -- the embedder is CPU-only.
+    """
+    wanted = config.embedding_model_file.casefold()
+    return LlmGgufDownload(
+        target_file=config.embedding_model_file,
+        models_dir=config.llm_model_path,
+        allowed_roots=default_allowed_roots(config),
+        repo_id=config.embedding_model_repo,
+        revision=config.embedding_model_revision,
+        hub_client=hub_client,
+        transport=transport,
+        file_filter=lambda remote: remote.path.casefold() == wanted,
+    )
+
+
+def is_embedding_model_present(config: Config) -> bool:
+    """Whether the embedding GGUF is on disk (file presence, like the LLM)."""
+    return (Path(config.llm_model_path) / config.embedding_model_file).is_file()
+
+
 def is_llm_model_present(config: Config, entry: CatalogEntry | None = None) -> bool:
     """Whether the GGUF file is on disk (the load-time check the llama.cpp
     provider itself makes -- presence of the file, not any ``.ready``

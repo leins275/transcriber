@@ -709,6 +709,11 @@ async fn poll_until_terminal(
                         if let Some(next) = follow_up {
                             queue_follow_up(&shared, &snapshot, next).await;
                         }
+                        // Every finished stage may have written a new
+                        // artifact; let the search index catch up. One call
+                        // site (not per chain stage) so an LLM-less install,
+                        // whose chain ends at transcription, indexes too.
+                        submit_index_quiet(&shared);
                     }
                     return;
                 }
@@ -758,6 +763,19 @@ async fn poll_until_terminal(
 /// moment a model is installed. The export stage makes no LLM call, so it
 /// carries no such gate -- and it is only ever reached through the LLM
 /// stage anyway.
+/// Fire-and-forget incremental search re-index, submitted after every
+/// clean `Done`. Never a snapshot, never polled, never user-visible; a
+/// service that does not know the job type (or is down) answers an error
+/// this deliberately drops. The service side debounces, so a burst of
+/// finished stages costs one vault stat-walk.
+fn submit_index_quiet(shared: &Arc<Shared>) {
+    let shared = Arc::clone(shared);
+    tokio::spawn(async move {
+        let service = shared.service.read().await.clone();
+        let _ = service.submit_index().await;
+    });
+}
+
 async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: FollowUp) {
     let Some(finished_dir) = finished.meeting_dir.clone() else {
         return;
@@ -1282,6 +1300,67 @@ mod tests {
                 );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
+        });
+    }
+
+    #[test]
+    fn every_clean_done_fires_one_quiet_index_submission_and_a_failure_fires_none() {
+        run(async {
+            // The success side: a full drop chain (transcribe -> summarize
+            // -> export) fires one fire-and-forget re-index per Done.
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+            wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while fake.index_submission_count() < 3 {
+                assert!(
+                    Instant::now() < deadline,
+                    "expected 3 index submissions (one per Done stage), saw {}",
+                    fake.index_submission_count()
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+
+            // The failure side: a failed transcription fires none.
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260102 - Broken.mp4");
+            let fake = Arc::new(FakeService::new());
+            fake.queue_failure("scripted failure");
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Failed,
+                Duration::from_secs(5),
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(
+                fake.index_submission_count(),
+                0,
+                "a failed stage must not trigger a re-index"
+            );
         });
     }
 

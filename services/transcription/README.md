@@ -87,6 +87,11 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
 | `llm_think_headroom_tokens` | `TRANSCRIBER_LLM_THINK_HEADROOM_TOKENS` | `2048` (extra output budget for the reasoning `<think>` block on free-text calls) |
 | `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the multi-GB working set after each LLM job) |
+| `vault_root` | `TRANSCRIBER_VAULT_ROOT` | none -- the meetings vault the `index` job walks; whatever layer wins is also appended to `allowed_roots` |
+| `index_db_path` | `TRANSCRIBER_INDEX_DB_PATH` | `<app_dir>/data/index.sqlite3` (rebuildable derived data -- deleting it costs one re-index) |
+| `search_top_k` | `TRANSCRIBER_SEARCH_TOP_K` | `10` |
+| `embedding_model` | `TRANSCRIBER_EMBEDDING_MODEL` | `bge-m3` (the one curated search-embedding GGUF) |
+| `embedding_model_repo` / `embedding_model_revision` / `embedding_model_file` | `TRANSCRIBER_EMBEDDING_MODEL_REPO` / `..._REVISION` / `..._FILE` | the `bge-m3` pins; setting them explicitly is the hand-picked-GGUF escape hatch. The file lives in `llm_model_path`, fetched via `POST /v1/embedding-model/download` |
 
 `Config.public()` (what `/health` and log lines may show) never includes
 `token` or `hf_token`.

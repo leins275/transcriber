@@ -91,6 +91,18 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `POST /v1/jobs` with `job_type: "index"` -- F2's vault-wide
+    /// incremental search re-index. Fire-and-forget by every caller: never
+    /// polled, never a user-visible job, and an error (an older service
+    /// that does not know the type) is simply dropped. Default: unsupported
+    /// (the house rule -- pipeline fakes must not need an edit to keep
+    /// compiling).
+    async fn submit_index(&self) -> Result<String, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "index jobs are not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/llm-model/download` -- the GGUF slot's status. Same wire
     /// shape as the whisper trio, its own independent transfer. Default:
     /// unsupported (see `model_download_status`).

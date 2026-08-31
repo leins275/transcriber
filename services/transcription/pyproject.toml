@@ -19,6 +19,11 @@ dependencies = [
   # Harmless on machines with no NVIDIA driver -- only imported inside the
   # auto-fit path, behind a try/except.
   "nvidia-ml-py>=12",
+  # Vector search inside SQLite (the hybrid search index). A small prebuilt
+  # loadable extension (vec0.dll); loading can still fail on an interpreter
+  # built without enable_load_extension, which `search/index_db.py` degrades
+  # around (text-only search) rather than requiring.
+  "sqlite-vec>=0.1.6,<0.2",
 ]
 
 [project.scripts]
@@ -135,5 +140,5 @@ files = ["src"]
 [[tool.mypy.overrides]]
 # All of these are imported lazily inside their seam modules only; none
 # ships usable type stubs.
-module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*", "pynvml.*"]
+module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*", "pynvml.*", "sqlite_vec.*"]
 ignore_missing_imports = true

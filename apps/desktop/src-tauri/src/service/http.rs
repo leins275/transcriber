@@ -593,6 +593,21 @@ impl TranscriptionService for HttpTranscriptionService {
         Ok(parsed.job_id)
     }
 
+    async fn submit_index(&self) -> Result<String, ServiceError> {
+        let body = serde_json::json!({ "job_type": "index" });
+        let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: SubmitResponse = response.json().await.map_err(|err| ServiceError::Decode {
+            message: err.to_string(),
+        })?;
+        Ok(parsed.job_id)
+    }
+
     async fn llm_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let request = self.authorize(self.client.get(self.endpoint("/v1/llm-model/download")));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -1029,6 +1044,31 @@ mod tests {
                 }
                 other => panic!("expected Unavailable, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn submit_index_posts_exactly_the_bare_job_type_and_decodes_the_id() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .and(body_json(serde_json::json!({ "job_type": "index" })))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "job_id": "idx-1"
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let job_id = service
+                .submit_index()
+                .await
+                .expect("submit_index should succeed");
+
+            assert_eq!(job_id, "idx-1");
         });
     }
 

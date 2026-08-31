@@ -82,6 +82,52 @@ def split_oversized(
     ]
 
 
+def chunk_line_ranges_with_overlap(
+    lines: list[str],
+    budget_tokens: int,
+    overlap_tokens: int,
+    count_tokens: TokenCounter = estimate_tokens,
+) -> list[tuple[int, int]]:
+    """Group ``lines`` into half-open ``(start, end)`` index ranges of at most
+    ``budget_tokens``, with consecutive ranges sharing ~``overlap_tokens``
+    worth of trailing lines.
+
+    Index ranges rather than joined text, so the caller can map a chunk back
+    to whatever its lines carry (segment timestamps, for the search index).
+    Unlike :func:`chunk_lines` a single over-budget line is emitted as its
+    own one-line range instead of being split -- splitting would break the
+    line <-> range mapping, and the embedder truncates defensively anyway.
+    """
+    if budget_tokens <= 0:
+        raise ValueError(f"budget_tokens must be positive, got {budget_tokens}")
+    if overlap_tokens < 0 or overlap_tokens >= budget_tokens:
+        raise ValueError(f"overlap_tokens must be in [0, budget_tokens), got {overlap_tokens}")
+
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    current_tokens = 0
+    for index, line in enumerate(lines):
+        line_tokens = count_tokens(line)
+        if index > start and current_tokens + line_tokens > budget_tokens:
+            ranges.append((start, index))
+            # Back up over trailing lines worth ~overlap_tokens, but always
+            # move forward past the previous range's start.
+            overlap_start = index
+            overlap_budget = overlap_tokens
+            while overlap_start > start + 1:
+                trailing = count_tokens(lines[overlap_start - 1])
+                if trailing > overlap_budget:
+                    break
+                overlap_budget -= trailing
+                overlap_start -= 1
+            start = overlap_start
+            current_tokens = sum(count_tokens(text) for text in lines[start:index])
+        current_tokens += line_tokens
+    if start < len(lines):
+        ranges.append((start, len(lines)))
+    return ranges
+
+
 def chunk_lines(
     lines: list[str],
     budget_tokens: int,

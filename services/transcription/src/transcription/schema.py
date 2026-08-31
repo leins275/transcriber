@@ -22,7 +22,7 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # (no LLM call). `facts` and `action_items` jobs existed once; both were
 # retired in favour of the summary carrying the notable facts and the
 # action items, and submitting one now answers `invalid_request`.
-JobType = Literal["transcribe", "summarize", "export"]
+JobType = Literal["transcribe", "summarize", "export", "index"]
 
 
 class Segment(BaseModel):
@@ -136,15 +136,16 @@ class JobCreate(BaseModel):
     """``POST /v1/jobs`` request body (FR-2).
 
     A ``transcribe`` job (the default, so pre-feature clients are untouched)
-    takes ``audio_path``; every other job type takes ``input_path`` -- the
-    meeting folder (``summarize``/``export``) it reads. Exactly one of the
-    two must be supplied, matching the job type.
+    takes ``audio_path``; the per-meeting derived jobs (``summarize``/
+    ``export``) take ``input_path`` -- the meeting folder they read. An
+    ``index`` job takes neither path and no ``output_dir``: it walks the
+    configured ``vault_root`` into the configured index database.
     """
 
     job_type: JobType = "transcribe"
     audio_path: str | None = Field(default=None, min_length=1)
     input_path: str | None = Field(default=None, min_length=1)
-    output_dir: str = Field(min_length=1)
+    output_dir: str | None = Field(default=None, min_length=1)
     # The operator's language universe is exactly {ru, en} (FR-3); anything
     # else -- including `""` -- is rejected here, before `JobManager.submit`,
     # so an invalid request never leaves a ledger row behind (NFR-3).
@@ -159,6 +160,12 @@ class JobCreate(BaseModel):
 
     @model_validator(mode="after")
     def _require_the_path_matching_the_job_type(self) -> JobCreate:
+        if self.job_type == "index":
+            if self.audio_path is not None or self.input_path is not None or self.output_dir:
+                raise ValueError("an index job takes no paths; it walks the configured vault")
+            return self
+        if not self.output_dir:
+            raise ValueError(f"a {self.job_type} job requires output_dir")
         if self.job_type == "transcribe":
             if not self.audio_path or self.input_path is not None:
                 raise ValueError("a transcribe job takes audio_path (and no input_path)")

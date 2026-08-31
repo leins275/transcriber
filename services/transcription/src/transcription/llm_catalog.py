@@ -51,6 +51,23 @@ CATALOG: tuple[CatalogEntry, ...] = (
 
 DEFAULT_ENTRY = CATALOG[0]
 DEFAULT_MODEL_ID = DEFAULT_ENTRY.id
+
+# The embedding model behind hybrid search -- deliberately NOT in `CATALOG`
+# (that tuple is the LLM download UI; embeddings are infrastructure, not a
+# choice). BGE-M3: multilingual (top-tier Russian+English retrieval), needs
+# no query/passage instruction prefixes, XLM-RoBERTa architecture with
+# long-standing llama.cpp support under the pinned llama-cpp-python.
+EMBEDDING_ENTRY = CatalogEntry(
+    id="bge-m3",
+    label="BGE-M3 (search embeddings)",
+    repo="gpustack/bge-m3-GGUF",
+    revision="2d48f1737679ad900d5c26c5aad5410e9c70fdca",
+    file="bge-m3-Q8_0.gguf",
+    size_bytes=634_553_760,
+)
+# bge-m3's embedding width; `chunks_vec`'s vec0 column is declared with it
+# and a dimension change drops + recreates that table.
+EMBEDDING_DIM = 1024
 # Ids the catalog used to carry (the 35B MoE, retired when model switching
 # was removed). A config.json that still names one -- written by the old
 # Settings switcher -- migrates to the default instead of failing to load.
