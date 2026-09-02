@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.19.0 — 2026-09-02
+
+### Features
+
+- Turkish decoding, cross-meeting speaker naming, date-aware retrieval
+
 ## 0.18.0 — 2026-09-02
 
 ### Features
