@@ -117,12 +117,13 @@ def _decode_failure(exc: Exception, audio_path: Path, device: str) -> ServiceErr
     return ServiceError(ErrorKind.AUDIO_DECODE, f"failed to decode {audio_path.name}: {exc}")
 
 
-# The operator's language universe (F2 spec: "exactly two"). Auto-detection
-# chooses between these and nothing else, so a mis-detected third language can
-# never reach the decoder.
-_DECODE_LANGUAGES = ("ru", "en")
-# Used only if the model reports a distribution naming neither target -- the
-# decode language must still be exactly one of `_DECODE_LANGUAGES` (FR-1).
+# The operator's language universe (F2 spec pinned "exactly two"; Turkish
+# added 2026-09). Auto-detection chooses between these and nothing else, so
+# a mis-detected outside language can never reach the decoder.
+_DECODE_LANGUAGES = ("ru", "en", "tr")
+# Used only if the model reports a distribution naming no target at all --
+# the decode language must still be exactly one of `_DECODE_LANGUAGES`
+# (FR-1).
 _DEFAULT_LANGUAGE = "en"
 # The probability recorded with that fallback: the model gave the chosen
 # language no weight at all. FR-4 requires `language_probability` to be
@@ -144,9 +145,9 @@ _DETECTION_PREFIX_SEC = 600
 
 
 def _constrain_language(all_language_probs: Any) -> tuple[str, float]:
-    """Argmax over `{ru, en}` alone, from faster-whisper's full ~100-language
-    distribution (FR-1). Returns the chosen language and the probability it
-    was chosen on (`0.0` when neither target was reported at all)."""
+    """Argmax over `_DECODE_LANGUAGES` alone, from faster-whisper's full
+    ~100-language distribution (FR-1). Returns the chosen language and the
+    probability it was chosen on (`0.0` when no target was reported)."""
     candidates = [
         (language, probability)
         for language, probability in (all_language_probs or [])

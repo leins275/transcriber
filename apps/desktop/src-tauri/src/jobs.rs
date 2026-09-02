@@ -150,8 +150,8 @@ enum PendingWork {
         source_dest: PathBuf,
         classification: Option<String>,
         /// The operator's per-recording language choice, already validated
-        /// by the command layer: `Some("ru")`/`Some("en")` force that
-        /// decode language, `None` leaves F2 to its constrained
+        /// by the command layer: `Some("ru")`/`Some("en")`/`Some("tr")`
+        /// force that decode language, `None` leaves F2 to its constrained
         /// auto-detection. Only this arm can carry one -- a dropped file
         /// has no control attached to it (FR-5, Q1).
         language: Option<String>,
@@ -372,7 +372,8 @@ impl JobRegistry {
     /// would have to re-learn all three.
     ///
     /// `language` is the operator's per-recording choice (FR-5): `None` is
-    /// the default and means F2 picks, `Some("ru")`/`Some("en")` force it.
+    /// the default and means F2 picks, `Some("ru")`/`Some("en")`/
+    /// `Some("tr")` force it.
     /// Validation belongs to the command layer, which owns the IPC contract.
     pub async fn enqueue_filed(
         &self,

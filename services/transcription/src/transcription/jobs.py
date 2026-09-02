@@ -48,6 +48,7 @@ from transcription.providers.base import CancelToken, ProviderInfo, Transcriptio
 from transcription.schema import DiarizationInfo, Segment
 from transcription.search.index_db import IndexDb
 from transcription.search.indexer import index_vault
+from transcription.speaker_matching import auto_assign_speakers
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -713,6 +714,22 @@ class JobManager:
                 diarization=diarization_info,
             )
             transcript.write_atomic(doc, job.output_path)
+
+            # Cross-meeting speaker recognition: a diarized voice already
+            # named in a sibling meeting pre-names this one's speakers
+            # (additive only -- operator assignments are never touched).
+            # Best-effort like diarization itself: a failure is a warning.
+            if diarization_info is not None and diarization_info.speaker_embeddings:
+                try:
+                    await asyncio.to_thread(
+                        auto_assign_speakers,
+                        Path(job.output_path),
+                        diarization_info.speaker_embeddings,
+                        segment_dicts,
+                        threshold=self._config.speaker_match_threshold,
+                    )
+                except Exception as exc:  # noqa: BLE001 - never job-fatal
+                    job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
 
             job.status = "succeeded"
             job.progress = 1.0

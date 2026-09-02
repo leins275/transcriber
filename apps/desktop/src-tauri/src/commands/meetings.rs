@@ -421,8 +421,11 @@ pub async fn delete_vault_entry_handler(state: &AppState, entry_id: &str) -> Res
 /// A sidecar rather than a field inside `transcript.json`, for one reason:
 /// `transcript.json` is F2's artifact, written whole by
 /// `transcript.write_atomic` every time a recording is transcribed. Labels
-/// the operator applied by hand must survive a re-transcription, and the
-/// only way to guarantee that is to keep them in a file F2 never touches.
+/// the operator applied by hand must survive a re-transcription, so they
+/// live outside that file. F2's cross-meeting speaker recognition may
+/// *add* names here for segments that have none (`speaker_matching.py`),
+/// but by contract it never overwrites an existing assignment -- the
+/// operator's word stays final.
 const SPEAKERS_FILE_NAME: &str = "speakers.json";
 
 /// An upper bound on the labels file. One entry per segment of a very long
@@ -804,7 +807,8 @@ pub async fn transcribe_vault_entry_handler(
 ) -> Result<JobSnapshot, AppError> {
     // IPC arguments are untrusted, so the language is checked here rather
     // than left for F2 to reject: the pinned contract is exactly
-    // `"ru" | "en" | null`, and anything else fails before a job exists.
+    // `"ru" | "en" | "tr" | null`, and anything else fails before a job
+    // exists.
     let language = validate_language(language)?;
 
     let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
@@ -841,9 +845,9 @@ pub async fn transcribe_vault_entry_handler(
 /// default) is not a language: it hands the choice to F2's constrained
 /// detection, which is why it is deliberately absent from this list rather
 /// than spelled as an empty string.
-const SUPPORTED_LANGUAGES: [&str; 2] = ["ru", "en"];
+const SUPPORTED_LANGUAGES: [&str; 3] = ["ru", "en", "tr"];
 
-/// Gate on the pinned IPC contract `{ language: "ru" | "en" | null }`.
+/// Gate on the pinned IPC contract `{ language: "ru" | "en" | "tr" | null }`.
 /// Rejects every other value -- including `""` and differently-cased
 /// spellings -- so a malformed argument can never reach the wire.
 fn validate_language(language: Option<String>) -> Result<Option<String>, AppError> {
@@ -1304,12 +1308,12 @@ mod tests {
     }
 
     #[test]
-    fn transcribe_rejects_a_language_outside_ru_en_and_enqueues_nothing() {
+    fn transcribe_rejects_a_language_outside_the_universe_and_enqueues_nothing() {
         // IPC arguments are untrusted: anything but the pinned
-        // `"ru" | "en" | null` contract is refused *before* a job exists,
-        // rather than being forwarded for F2 to reject.
+        // `"ru" | "en" | "tr" | null` contract is refused *before* a job
+        // exists, rather than being forwarded for F2 to reject.
         run(async {
-            for bogus in ["de", "", "EN", "ru "] {
+            for bogus in ["de", "", "EN", "ru ", "TR"] {
                 let root = tempdir().expect("tempdir");
                 make_meeting(root.path());
                 let state =
@@ -1333,9 +1337,9 @@ mod tests {
     }
 
     #[test]
-    fn transcribe_accepts_ru_en_and_auto_and_carries_the_choice_to_the_service() {
+    fn transcribe_accepts_ru_en_tr_and_auto_and_carries_the_choice_to_the_service() {
         run(async {
-            for expected in [Some("ru"), Some("en"), None] {
+            for expected in [Some("ru"), Some("en"), Some("tr"), None] {
                 let root = tempdir().expect("tempdir");
                 make_meeting(root.path());
                 let service = Arc::new(FakeService::new());

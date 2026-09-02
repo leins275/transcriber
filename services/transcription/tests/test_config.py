@@ -552,8 +552,8 @@ def test_language_is_normalized_to_lowercase(tmp_app_dir: Path) -> None:
     assert load_config(env=env).language == "en"
 
 
-@pytest.mark.parametrize("language", ["ru", "en"])
-def test_language_accepts_ru_and_en(tmp_app_dir: Path, language: str) -> None:
+@pytest.mark.parametrize("language", ["ru", "en", "tr"])
+def test_language_accepts_the_whole_universe(tmp_app_dir: Path, language: str) -> None:
     _write_config(tmp_app_dir, {"language": language})
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 

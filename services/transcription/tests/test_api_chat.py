@@ -127,6 +127,21 @@ def test_the_stream_is_sources_then_deltas_then_done(config: Config, vault_root:
     assert events[-1][1]["finish_reason"] == "stop"
 
 
+def test_a_question_naming_a_date_retrieves_that_day_only(config: Config, vault_root: Path) -> None:
+    """The user's own repro: "саммари за <date>" must never cite meetings
+    from other days. The vault's one meeting is 260831; naming 260830
+    yields no sources at all, naming 260831 yields it."""
+    llm = FakeLlm(responses=["Ничего не нашлось.", "Вот саммари [S1]."])
+    app = _app(config, vault_root, llm)
+    with TestClient(app) as client:
+        wrong_day = _chat(client, "саммари по всем встречам за 260830, коротко")
+        right_day = _chat(client, "саммари по всем встречам за 260831, коротко")
+
+    assert wrong_day[0][1]["sources"] == []
+    right_sources = right_day[0][1]["sources"]
+    assert right_sources and right_sources[0]["meeting_dir"] == "ACME/260831 - Weekly sync"
+
+
 def test_think_blocks_never_reach_the_stream(config: Config, vault_root: Path) -> None:
     llm = FakeLlm(responses=["<think>secret chain of thought</think>The answer."])
     app = _app(config, vault_root, llm)

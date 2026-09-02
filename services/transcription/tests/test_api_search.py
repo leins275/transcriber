@@ -134,6 +134,32 @@ def test_the_project_filter_narrows_results(app) -> None:  # noqa: ANN001
         assert all(result["project"] == "OTHER" for result in results)
 
 
+def test_the_date_filter_narrows_results_in_both_spellings(app) -> None:  # noqa: ANN001
+    with TestClient(app) as client:
+        vault_form = client.post(
+            "/v1/search", json={"query": "дедлайн", "date": "260830"}, headers=AUTH
+        )
+        results = vault_form.json()["results"]
+        assert results
+        assert all(result["meeting_date"] == "2026-08-30" for result in results)
+
+        iso_form = client.post(
+            "/v1/search", json={"query": "дедлайн", "date": "2026-08-30"}, headers=AUTH
+        )
+        assert [r["meeting_dir"] for r in iso_form.json()["results"]] == [
+            r["meeting_dir"] for r in results
+        ]
+
+
+def test_an_unparseable_date_degrades_to_no_filter(app) -> None:  # noqa: ANN001
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/search", json={"query": "дедлайн", "date": "not-a-day"}, headers=AUTH
+        )
+        dates = {result["meeting_date"] for result in response.json()["results"]}
+        assert dates == {"2026-08-30", "2026-08-31"}
+
+
 def test_a_note_hit_carries_its_kind(app) -> None:  # noqa: ANN001
     with TestClient(app) as client:
         response = client.post("/v1/search", json={"query": "postmortem"}, headers=AUTH)

@@ -41,6 +41,7 @@ from transcription.config import Config, load_config
 from transcription.exporting import load_speaker_overrides, load_transcript
 from transcription.llm import get_embedder
 from transcription.llm.prompts import render_transcript_lines
+from transcription.search.dates import normalize_date_param
 from transcription.search.index_db import IndexDb
 from transcription.search.service import SearchService
 
@@ -131,15 +132,20 @@ def build_server(config: Config) -> Any:
 
     @server.tool()
     def hybrid_search(
-        query: str, project: str | None = None, top_k: int = 10
+        query: str, project: str | None = None, top_k: int = 10, date: str | None = None
     ) -> list[dict[str, Any]] | str:
         """Search all meeting transcripts, summaries and notes (hybrid:
         semantic + full-text + fuzzy titles). Returns ranked hits with a
-        snippet, the meeting's vault-relative directory and a timestamp."""
+        snippet, the meeting's vault-relative directory and a timestamp.
+        ``date`` (``YYMMDD`` or ``YYYY-MM-DD``) hard-filters to that
+        meeting day."""
         service = vault.search_service()
         if service is None:
             return _NO_INDEX_MESSAGE
-        results = service.search(query, project=project, top_k=top_k)
+        normalized = normalize_date_param(date)
+        results = service.search(
+            query, project=project, top_k=top_k, dates={normalized} if normalized else None
+        )
         return [result.as_dict() for result in results]
 
     @server.tool()

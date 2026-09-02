@@ -51,11 +51,12 @@ type Tab = "transcript" | "summary" | "note";
 type Panel = "none" | "edit" | "delete";
 
 /** The languages the app can name. A transcript written before this feature —
- * or in anything outside the operator's two — carries a code we do not label,
- * and the meta line then shows nothing rather than a placeholder. */
+ * or in anything outside the operator's universe — carries a code we do not
+ * label, and the meta line then shows nothing rather than a placeholder. */
 const LANGUAGE_NAMES: Record<string, string | undefined> = {
   ru: "Russian",
   en: "English",
+  tr: "Turkish",
 };
 
 /** The overflow menu's transcribe choices: the language is picked on the
@@ -65,6 +66,7 @@ const TRANSCRIBE_CHOICES: { label: string; suffix: string; language: TranscriptL
     { label: "Auto", suffix: "(Auto)", language: null },
     { label: "Russian", suffix: "in Russian", language: "ru" },
     { label: "English", suffix: "in English", language: "en" },
+    { label: "Turkish", suffix: "in Turkish", language: "tr" },
   ];
 
 function messageOf(error: unknown): string {

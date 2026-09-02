@@ -68,7 +68,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `db_path` | `TRANSCRIBER_DB_PATH` | `<app_dir>/data/jobs.sqlite3` |
 | `allowed_roots` | `TRANSCRIBER_ALLOWED_ROOTS` (`os.pathsep`-separated) | empty (fail closed) |
 | `token` | `TRANSCRIBER_TOKEN` | auto-generated, >= 32 chars |
-| `language` | `TRANSCRIBER_LANGUAGE` | none (auto-detect) |
+| `language` | `TRANSCRIBER_LANGUAGE` | none (constrained auto-detect over `ru`/`en`/`tr`) |
 | `filter_hallucinations` | `TRANSCRIBER_FILTER_HALLUCINATIONS` | `true` |
 | `job_timeout_sec` | `TRANSCRIBER_JOB_TIMEOUT_SEC` | none |
 | `log_level` | `TRANSCRIBER_LOG_LEVEL` | `INFO` |
@@ -76,6 +76,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model` | `TRANSCRIBER_DIARIZATION_MODEL` | `pyannote/speaker-diarization-3.1` |
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
+| `speaker_match_threshold` | `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` | `0.5` -- cosine floor for pre-naming a diarized voice already named in a sibling meeting; above `1.0` disables auto-naming |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
 | `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`, the only entry); a config still naming the retired `qwen3.6-35b-a3b` migrates to the default |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
@@ -170,12 +171,20 @@ desktop app fires this quietly after every finished job and note save; a
 queued index job absorbs repeat submissions. The index is derived data --
 deleting the file costs one re-index.
 
-`POST /v1/search` `{"query", "project"?, "top_k"?}` fuses four channels
-with weighted Reciprocal Rank Fusion: sqlite-vec cosine kNN, FTS5 BM25 over
-chunk text, exact-title containment, and trigram fuzz over titles/speaker
-names. It runs on the same serial worker as everything else, and degrades
-to text-only when the embedding model (or the sqlite-vec extension) is
-unavailable.
+`POST /v1/search` `{"query", "project"?, "top_k"?, "date"?}` fuses four
+channels with weighted Reciprocal Rank Fusion: sqlite-vec cosine kNN, FTS5
+BM25 over chunk text, exact-title containment, and trigram fuzz over
+titles/speaker names. `date` (the vault's `YYMMDD` or ISO `YYYY-MM-DD`)
+hard-filters every channel to that meeting day via the `meeting_date` tag;
+an unparseable value degrades to no filter. It runs on the same serial
+worker as everything else, and degrades to text-only when the embedding
+model (or the sqlite-vec extension) is unavailable.
+
+The chat (`POST /v1/chat`) applies the same day filter automatically: a
+question naming dates -- `260902`, `2026-09-02`, `02.09.2026`, or the
+words "сегодня"/"today"/"вчера"/"yesterday" (`search/dates.py`) --
+retrieves those meeting days and nothing else, so "summarize today's
+meetings" can never cite last month's.
 
 **`transcriber-mcp`** is a standalone stdio MCP server over the same vault
 and index -- point Claude Desktop at it and ask questions about your
@@ -215,6 +224,16 @@ is still written -- without speakers -- and the failure is attributed in
 the document's `diarization` block (`status: "failed"`, `error_kind`,
 `error_message`) and the service log. Cancelling the job mid-pass cancels
 the job as usual.
+
+When the pipeline also yields per-speaker voice embeddings, they are
+stored in the `diarization` block (`speaker_embeddings`, keyed by display
+label) and immediately put to work: **cross-meeting speaker recognition**
+compares each new voice against voices the operator has already named in
+sibling meetings (their `speakers.json` joined to their stored
+embeddings) and pre-fills the new meeting's `speakers.json` on a match at
+or above `speaker_match_threshold`. Additive only -- an assignment the
+operator made by hand is never overwritten -- and best-effort: any failure
+is a job warning, never a failed job.
 
 ### Model weights and CUDA runtime are prerequisites, not this service's job
 

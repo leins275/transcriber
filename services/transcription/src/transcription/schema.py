@@ -146,11 +146,11 @@ class JobCreate(BaseModel):
     audio_path: str | None = Field(default=None, min_length=1)
     input_path: str | None = Field(default=None, min_length=1)
     output_dir: str | None = Field(default=None, min_length=1)
-    # The operator's language universe is exactly {ru, en} (FR-3); anything
+    # The operator's language universe is exactly {ru, en, tr} (FR-3); anything
     # else -- including `""` -- is rejected here, before `JobManager.submit`,
     # so an invalid request never leaves a ledger row behind (NFR-3).
     # `None` (or an omitted field) means constrained auto-detection (FR-1).
-    language: Literal["ru", "en"] | None = None
+    language: Literal["ru", "en", "tr"] | None = None
     provider: str | None = None
     model: str | None = None
     meeting: dict[str, Any] | None = None
@@ -203,6 +203,10 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=500)
     project: str | None = None
     top_k: int | None = Field(default=None, ge=1, le=50)
+    # Hard day filter over the index's `meeting_date` tag: the vault's
+    # `YYMMDD` or ISO `YYYY-MM-DD`. An unparseable value degrades to no
+    # filter rather than an error.
+    date: str | None = Field(default=None, max_length=10)
 
 
 class SearchResultModel(BaseModel):

@@ -45,10 +45,11 @@ _VAULT_ROOT_KEY = "vault_root"
 # being copied through the generic loop.
 _MODEL_KEY = "model"
 
-# The operator's language universe is exactly these two (F2 FR-3); anything
-# else -- from the config file, `TRANSCRIBER_LANGUAGE`, or `--language` -- is
-# a configuration error rather than a value handed to the decoder.
-_ALLOWED_LANGUAGES = ("ru", "en")
+# The operator's language universe (F2 FR-3, Turkish added 2026-09);
+# anything else -- from the config file, `TRANSCRIBER_LANGUAGE`, or
+# `--language` -- is a configuration error rather than a value handed to
+# the decoder.
+_ALLOWED_LANGUAGES = ("ru", "en", "tr")
 
 _DEFAULT_LLM_ENTRY = llm_catalog.DEFAULT_ENTRY
 
@@ -92,6 +93,12 @@ class Config:
     # Re-segmentation: a pause between words at least this long starts a new
     # segment (utterance), in addition to sentence-ending punctuation.
     resegment_gap_sec: float = 0.6
+    # Cross-meeting speaker recognition: after a diarized transcription, a
+    # new speaker whose voice embedding matches an already-named voice from
+    # a sibling meeting (cosine similarity at or above this floor) is
+    # pre-named in speakers.json. Raise toward 1.0 for fewer, surer
+    # matches; set above 1.0 to disable auto-naming entirely.
+    speaker_match_threshold: float = 0.5
     # Speaker diarization (pyannote): off by default -- it needs the optional
     # `diarization` extra installed and, for the hub-hosted gated model, a
     # Hugging Face token. A per-job `diarize` flag overrides this default.
@@ -224,7 +231,8 @@ def _parse_bool(value: object) -> bool:
 
 
 def _normalize_language(value: object) -> str | None:
-    """Normalize a layered ``language`` value, rejecting anything but ru/en.
+    """Normalize a layered ``language`` value, rejecting anything outside
+    :data:`_ALLOWED_LANGUAGES`.
 
     Unset and empty (``None``, ``""``, whitespace) mean "no explicit language"
     -- constrained auto-detection, not an error (FR-3).
@@ -447,6 +455,8 @@ def load_config(
         values["vad_min_silence_ms"] = int(values["vad_min_silence_ms"])
     if "resegment_gap_sec" in values:
         values["resegment_gap_sec"] = float(values["resegment_gap_sec"])
+    if "speaker_match_threshold" in values:
+        values["speaker_match_threshold"] = float(values["speaker_match_threshold"])
     if "diarize" in values:
         values["diarize"] = _parse_bool(values["diarize"])
     for speakers_key in ("diarization_min_speakers", "diarization_max_speakers"):

@@ -41,6 +41,7 @@ from transcription.schema import (
     SearchResultModel,
 )
 from transcription.search.chat import RetrievedChunk, build_chat_messages
+from transcription.search.dates import extract_query_dates, normalize_date_param
 from transcription.search.service import SearchService
 
 _logger = logging.getLogger("transcription")
@@ -65,8 +66,12 @@ def build_search_router(require_token: Callable[..., None]) -> APIRouter:
     @router.post("/v1/search", response_model=SearchResponse, dependencies=deps)
     async def search(request: Request, payload: SearchRequest) -> SearchResponse:
         service = _search_service(request)
+        normalized = normalize_date_param(payload.date)
+        dates = {normalized} if normalized else None
         results = await _job_manager(request).run_serial(
-            lambda: service.search(payload.query, project=payload.project, top_k=payload.top_k)
+            lambda: service.search(
+                payload.query, project=payload.project, top_k=payload.top_k, dates=dates
+            )
         )
         return SearchResponse(results=[SearchResultModel(**result.as_dict()) for result in results])
 
@@ -149,9 +154,18 @@ def build_search_router(require_token: Callable[..., None]) -> APIRouter:
         # provider resolves here (and reports a missing GGUF as model_load)
         # rather than mid-stream.
         provider: LlmProvider = await manager.resolve_llm_for_chat()
+        # A question that names dates ("за сегодня", "260902", "2026-09-02")
+        # retrieves those meeting days and nothing else -- the meeting_date
+        # tag every doc carries becomes a hard filter, so "summarize
+        # today's meetings" can never cite last month's.
+        question_dates = extract_query_dates(question) or None
         pairs = await manager.run_serial(
             functools.partial(
-                service.retrieve, question, project=payload.project, top_k=config.search_top_k
+                service.retrieve,
+                question,
+                project=payload.project,
+                top_k=config.search_top_k,
+                dates=question_dates,
             )
         )
         chunks = [RetrievedChunk(result=result, text=text) for result, text in pairs]

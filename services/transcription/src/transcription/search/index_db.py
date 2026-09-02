@@ -375,7 +375,13 @@ class IndexDb:
 
     # -- reads (search + MCP) --------------------------------------------
 
-    def fts_query(self, match: str, limit: int, project: str | None = None) -> list[int]:
+    def fts_query(
+        self,
+        match: str,
+        limit: int,
+        project: str | None = None,
+        dates: set[str] | None = None,
+    ) -> list[int]:
         """BM25-ranked doc ids for an FTS5 MATCH over chunk text -- collapsed
         per doc keeping each doc's best rank position."""
         sql = (
@@ -388,6 +394,9 @@ class IndexDb:
         if project is not None:
             sql += " AND docs.project = ?"
             params.append(project)
+        if dates:
+            sql += f" AND docs.meeting_date IN ({','.join('?' for _ in dates)})"
+            params.extend(sorted(dates))
         sql += " GROUP BY chunks.doc_id ORDER BY best_rank LIMIT ?"
         params.append(limit)
         with self._lock:
@@ -422,12 +431,24 @@ class IndexDb:
         start = row["start_sec"]
         return str(row["text"]), (float(start) if start is not None else None)
 
-    def title_trigram_query(self, match: str, limit: int, project: str | None = None) -> list[int]:
+    def title_trigram_query(
+        self,
+        match: str,
+        limit: int,
+        project: str | None = None,
+        dates: set[str] | None = None,
+    ) -> list[int]:
         sql = "SELECT rowid AS doc_id FROM titles_fts WHERE titles_fts MATCH ?"
         params: list[object] = [match]
         if project is not None:
             sql += " AND project = ?"
             params.append(project)
+        if dates:
+            # `titles_fts` carries no date column; the docs row does. The
+            # f-string interpolates `?` placeholders only (values bind).
+            placeholders = ",".join("?" for _ in dates)
+            sql += f" AND rowid IN (SELECT doc_id FROM docs WHERE meeting_date IN ({placeholders}))"  # noqa: S608
+            params.extend(sorted(dates))
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
         with self._lock:
@@ -437,12 +458,17 @@ class IndexDb:
                 return []
         return [int(row["doc_id"]) for row in rows]
 
-    def exact_title_docs(self, query: str, project: str | None = None) -> list[int]:
+    def exact_title_docs(
+        self,
+        query: str,
+        project: str | None = None,
+        dates: set[str] | None = None,
+    ) -> list[int]:
         """Docs whose meeting title contains the query, case-insensitively."""
         needle = query.strip().casefold()
         if not needle:
             return []
-        sql = "SELECT doc_id, meeting_title, project FROM docs"
+        sql = "SELECT doc_id, meeting_title, project, meeting_date FROM docs"
         with self._lock:
             rows = self._conn.execute(sql).fetchall()
         return [
@@ -450,10 +476,15 @@ class IndexDb:
             for row in rows
             if needle in str(row["meeting_title"]).casefold()
             and (project is None or str(row["project"]) == project)
+            and (not dates or row["meeting_date"] in dates)
         ]
 
     def vec_query(
-        self, embedding: list[float], k: int, project: str | None = None
+        self,
+        embedding: list[float],
+        k: int,
+        project: str | None = None,
+        dates: set[str] | None = None,
     ) -> list[tuple[int, int]]:
         """Nearest chunks by cosine distance: ``(doc_id, chunk_id)`` pairs in
         rank order, collapsed per doc keeping the best chunk."""
@@ -475,7 +506,8 @@ class IndexDb:
             seen_docs: set[int] = set()
             for row in rows:
                 chunk = self._conn.execute(
-                    "SELECT chunks.doc_id AS doc_id, docs.project AS project"
+                    "SELECT chunks.doc_id AS doc_id, docs.project AS project,"
+                    " docs.meeting_date AS meeting_date"
                     " FROM chunks JOIN docs ON docs.doc_id = chunks.doc_id"
                     " WHERE chunks.chunk_id = ?",
                     (int(row["chunk_id"]),),
@@ -483,6 +515,8 @@ class IndexDb:
                 if chunk is None:
                     continue
                 if project is not None and str(chunk["project"]) != project:
+                    continue
+                if dates and chunk["meeting_date"] not in dates:
                     continue
                 doc_id = int(chunk["doc_id"])
                 if doc_id in seen_docs:
