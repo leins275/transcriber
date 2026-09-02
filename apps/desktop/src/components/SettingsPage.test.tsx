@@ -4,7 +4,13 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "./SettingsPage";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { LlmCatalogModel, LlmModelsView, ServiceStatusView, SettingsView } from "../types";
+import type {
+  EmbeddingModelDownloadStatus,
+  LlmCatalogModel,
+  LlmModelsView,
+  ServiceStatusView,
+  SettingsView,
+} from "../types";
 
 function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
   return {
@@ -64,6 +70,21 @@ function llmCatalog(overrides: Partial<LlmModelsView> = {}): LlmModelsView {
   };
 }
 
+function embeddingStatus(
+  overrides: Partial<EmbeddingModelDownloadStatus> = {},
+): EmbeddingModelDownloadStatus {
+  return {
+    state: "idle",
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    percent: 0,
+    error_kind: null,
+    error_message: null,
+    model_present: true,
+    ...overrides,
+  };
+}
+
 const readyStatus: ServiceStatusView = {
   state: "ready",
   base_url: "http://127.0.0.1:8734",
@@ -81,6 +102,9 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onChangeRoot: () => {},
     onStartLlmModelDownload: () => {},
     onCancelLlmModelDownload: () => {},
+    embeddingStatus: null as EmbeddingModelDownloadStatus | null,
+    onStartEmbeddingModelDownload: () => {},
+    onCancelEmbeddingModelDownload: () => {},
     onReindex: () => Promise.resolve(),
     ...overrides,
   };
@@ -236,5 +260,56 @@ describe("SettingsPage", () => {
     });
 
     expect(screen.getByRole("button", { name: /rebuild search index/i })).toBeDisabled();
+  });
+
+  it("offers Enable vector search when the embedding model is absent", async () => {
+    const user = userEvent.setup();
+    const onStartEmbeddingModelDownload = vi.fn();
+    renderPage({
+      embeddingStatus: embeddingStatus({ model_present: false }),
+      onStartEmbeddingModelDownload,
+    });
+
+    expect(screen.getByText(/search matches words only/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /enable vector search/i }));
+    expect(onStartEmbeddingModelDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows progress and Cancel while the embedding model downloads", async () => {
+    const user = userEvent.setup();
+    const onCancelEmbeddingModelDownload = vi.fn();
+    renderPage({
+      embeddingStatus: embeddingStatus({
+        state: "downloading",
+        model_present: false,
+        percent: 40,
+      }),
+      onCancelEmbeddingModelDownload,
+    });
+
+    expect(screen.getByText(/Downloading · 40%/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable vector search/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(onCancelEmbeddingModelDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the installed embedding model without a download button", () => {
+    renderPage({ embeddingStatus: embeddingStatus({ model_present: true }) });
+
+    expect(screen.getByText("Vector search (BGE-M3)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /enable vector search/i })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a failed embedding download's message", () => {
+    renderPage({
+      embeddingStatus: embeddingStatus({
+        state: "error",
+        model_present: false,
+        error_kind: "network",
+        error_message: "connection reset while fetching bge-m3-Q8_0.gguf",
+      }),
+    });
+
+    expect(screen.getByText(/connection reset/)).toBeInTheDocument();
   });
 });

@@ -241,6 +241,18 @@ export type LlmModelDownloadStatus = {
   gpu_build_present: boolean | null;
 };
 
+/** The bge-m3 (search embeddings) download status — the LLM trio's shape
+ * minus the GPU field (the embedder is CPU-only by design). */
+export type EmbeddingModelDownloadStatus = {
+  state: "idle" | "downloading" | "verifying" | "complete" | "cancelled" | "error";
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  error_kind: string | null;
+  error_message: string | null;
+  model_present: boolean;
+};
+
 /** One curated model's download slot (the plain download fields; the
  * health-derived extras live once on `LlmModelsView`). */
 export type LlmModelDownload = {

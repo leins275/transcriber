@@ -34,6 +34,7 @@ import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
 import type {
   AppError,
+  EmbeddingModelDownloadStatus,
   JobType,
   LlmModelsView,
   MeetingUpdate,
@@ -244,6 +245,58 @@ function App() {
     api
       .cancelLlmModelDownloadFor(modelId)
       .then(setLlmModels)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+
+  // The search-embedding model (bge-m3), same gating as the LLM catalog:
+  // fetched when the service is ready, polled while a transfer is in
+  // flight. A download that completes queues a reindex right away, so the
+  // existing text-only index gains its vectors without a manual step.
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingModelDownloadStatus | null>(null);
+  useEffect(() => {
+    if (serviceStatus.state !== "ready") return;
+    api
+      .embeddingModelDownloadStatus()
+      .then(setEmbeddingStatus)
+      .catch(() => {
+        // Older service / unreachable: stays `null`, the row renders inert.
+      });
+  }, [serviceStatus.state]);
+  const embeddingTransferring =
+    embeddingStatus?.state === "downloading" || embeddingStatus?.state === "verifying";
+  useEffect(() => {
+    if (!embeddingTransferring) return;
+    const handle = setInterval(() => {
+      api
+        .embeddingModelDownloadStatus()
+        .then(setEmbeddingStatus)
+        .catch(() => {});
+    }, 1500);
+    return () => clearInterval(handle);
+  }, [embeddingTransferring]);
+  const embeddingWasPresent = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (embeddingStatus === null) return;
+    const was = embeddingWasPresent.current;
+    embeddingWasPresent.current = embeddingStatus.model_present;
+    if (was === false && embeddingStatus.model_present) {
+      api.reindexVault().catch(() => {
+        // The startup catch-up or the next finished job re-embeds instead.
+      });
+    }
+  }, [embeddingStatus]);
+
+  const handleStartEmbeddingModelDownload = useCallback(() => {
+    api
+      .startEmbeddingModelDownload()
+      .then(setEmbeddingStatus)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+
+  const handleCancelEmbeddingModelDownload = useCallback(() => {
+    api
+      .cancelEmbeddingModelDownload()
+      .then(setEmbeddingStatus)
       .catch((error: AppError) => setLastError(error));
   }, []);
 
@@ -548,6 +601,9 @@ function App() {
               onChangeRoot={handleChooseFolder}
               onStartLlmModelDownload={handleStartLlmModelDownload}
               onCancelLlmModelDownload={handleCancelLlmModelDownload}
+              embeddingStatus={embeddingStatus}
+              onStartEmbeddingModelDownload={handleStartEmbeddingModelDownload}
+              onCancelEmbeddingModelDownload={handleCancelEmbeddingModelDownload}
               onReindex={() => api.reindexVault()}
             />
           ) : inSetup ? (

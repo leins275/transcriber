@@ -1145,6 +1145,27 @@ pub async fn index_status(
 }
 
 #[tauri::command]
+pub async fn embedding_model_download_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<search::EmbeddingModelDownloadStatusView, AppError> {
+    search::embedding_model_download_status_handler(&state).await
+}
+
+#[tauri::command]
+pub async fn start_embedding_model_download(
+    state: tauri::State<'_, AppState>,
+) -> Result<search::EmbeddingModelDownloadStatusView, AppError> {
+    search::start_embedding_model_download_handler(&state).await
+}
+
+#[tauri::command]
+pub async fn cancel_embedding_model_download(
+    state: tauri::State<'_, AppState>,
+) -> Result<search::EmbeddingModelDownloadStatusView, AppError> {
+    search::cancel_embedding_model_download_handler(&state).await
+}
+
+#[tauri::command]
 pub async fn chat_stream(
     state: tauri::State<'_, AppState>,
     messages: Vec<chat::ChatMessageArg>,

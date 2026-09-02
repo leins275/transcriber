@@ -98,6 +98,7 @@ async def test_hybrid_search_finds_text_without_any_model(config: Config, vault_
 async def test_listings_report_projects_meetings_and_artifacts(
     config: Config, vault_root: Path
 ) -> None:
+    (vault_root / ".transcriber").mkdir()  # the index's own home
     server = build_server(config)
 
     projects = await _call(server, "list_projects", {})
@@ -105,6 +106,7 @@ async def test_listings_report_projects_meetings_and_artifacts(
 
     assert "ACME" in projects
     assert "reports" not in projects  # reserved dirs are not projects
+    assert ".transcriber" not in projects  # dot-dirs are not projects
     assert "260831 - Weekly sync" in meetings
     assert "'has_summary': True" in meetings or '"has_summary": true' in meetings
     assert "'has_note': False" in meetings or '"has_note": false' in meetings

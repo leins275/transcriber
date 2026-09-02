@@ -154,12 +154,16 @@ class Config:
     llm_keep_loaded: bool = False
     # --- Hybrid search (index + embeddings) ---
     # The meetings-vault root the index job walks. Set by the desktop app
-    # (config.json `vault_root` / TRANSCRIBER_VAULT_ROOT); empty disables
+    # (config.json `vault_root` / TRANSCRIBER_VAULT_ROOT, with the app
+    # schema's `meetings_root` key as a file-layer fallback); empty disables
     # index jobs. Whatever value wins the layer merge is also appended to
     # `allowed_roots`.
     vault_root: str = ""
-    # The search index database; empty means `<app_dir>/data/index.sqlite3`.
-    # Rebuildable by design -- deleting it costs one re-index, never data.
+    # The search index database; empty means `<vault_root>/.transcriber/
+    # index.sqlite3` (the index travels with its vault, so switching vaults
+    # never mixes contexts), falling back to `<app_dir>/data/index.sqlite3`
+    # when no vault root is configured. Rebuildable by design -- deleting it
+    # costs one re-index, never data.
     index_db_path: str = ""
     search_top_k: int = 10
     # The embedding GGUF behind vector search. One curated entry
@@ -334,6 +338,16 @@ def load_config(
         if key in known_fields:
             values[key] = value
 
+    # The app's schema calls the vault `meetings_root` (docs/config-contract.md)
+    # and never writes a `vault_root` key; when spawned as a sidecar the env
+    # override below carries it, but a standalone launch (`transcriber-mcp`)
+    # has only the file. Read the app's spelling as a fallback so the vault --
+    # and the index inside it -- resolves either way.
+    if not values.get(_VAULT_ROOT_KEY):
+        meetings_root = file_data.get("meetings_root")
+        if isinstance(meetings_root, str) and meetings_root:
+            values[_VAULT_ROOT_KEY] = meetings_root
+
     allowed_roots: list[str] = list(values.get("allowed_roots") or [])
 
     # F3's nested `"model": {"id": ..., "path": ...}` (see _MODEL_KEY above):
@@ -397,7 +411,13 @@ def load_config(
     if "db_path" not in values or not values["db_path"]:
         values["db_path"] = str(app_dir / "data" / "jobs.sqlite3")
     if "index_db_path" not in values or not values["index_db_path"]:
-        values["index_db_path"] = str(app_dir / "data" / "index.sqlite3")
+        # The index lives inside the vault it describes, so switching vaults
+        # switches indexes with it (context segregation for free); vault-less
+        # configs (index jobs disabled anyway) keep the app-dir fallback.
+        if final_vault_root:
+            values["index_db_path"] = str(Path(final_vault_root) / ".transcriber" / "index.sqlite3")
+        else:
+            values["index_db_path"] = str(app_dir / "data" / "index.sqlite3")
     if "model_path" not in values or not values["model_path"]:
         values["model_path"] = str(app_dir / "models")
     if "llm_model_path" not in values or not values["llm_model_path"]:

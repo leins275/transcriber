@@ -2,7 +2,13 @@ import { useState } from "react";
 import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { LlmCatalogModel, LlmModelsView, ServiceStatusView, SettingsView } from "../types";
+import type {
+  EmbeddingModelDownloadStatus,
+  LlmCatalogModel,
+  LlmModelsView,
+  ServiceStatusView,
+  SettingsView,
+} from "../types";
 
 export type SettingsPageProps = {
   settings: SettingsView;
@@ -18,6 +24,11 @@ export type SettingsPageProps = {
   onChangeRoot: () => void;
   onStartLlmModelDownload: (modelId: string) => void;
   onCancelLlmModelDownload: (modelId: string) => void;
+  /** The search-embedding (bge-m3) download slot -- `null` while unknown,
+   * which renders the row inert rather than showing a false "missing". */
+  embeddingStatus: EmbeddingModelDownloadStatus | null;
+  onStartEmbeddingModelDownload: () => void;
+  onCancelEmbeddingModelDownload: () => void;
   /** Queues an incremental search-index pass over the whole vault. */
   onReindex: () => Promise<void>;
 };
@@ -138,6 +149,9 @@ export function SettingsPage({
   onChangeRoot,
   onStartLlmModelDownload,
   onCancelLlmModelDownload,
+  embeddingStatus,
+  onStartEmbeddingModelDownload,
+  onCancelEmbeddingModelDownload,
   onReindex,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
@@ -251,6 +265,47 @@ export function SettingsPage({
       <div className={styles.row}>
         <div className={styles.kicker}>Search</div>
         <div className={styles.value}>
+          {embeddingStatus && (
+            <div>
+              <div className={styles.line}>
+                {embeddingStatus.model_present && CHECK_ICON}
+                Vector search (BGE-M3)
+                {embeddingStatus.state === "downloading" ||
+                embeddingStatus.state === "verifying" ? (
+                  <>
+                    {`Downloading · ${Math.round(embeddingStatus.percent)}%`}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={onCancelEmbeddingModelDownload}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  !embeddingStatus.model_present && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={serviceStatus.state !== "ready"}
+                      onClick={onStartEmbeddingModelDownload}
+                    >
+                      Enable vector search (~630 MB)
+                    </button>
+                  )
+                )}
+              </div>
+              {embeddingStatus.error_message && (
+                <p className={styles.warning}>{embeddingStatus.error_message}</p>
+              )}
+              {!embeddingStatus.model_present && (
+                <p className={styles.hint}>
+                  Without it, search matches words only. The embedding model lets search and chat
+                  find meetings by meaning; once downloaded, the index re-embeds automatically.
+                </p>
+              )}
+            </div>
+          )}
           <div className={styles.line}>
             <button
               type="button"

@@ -349,6 +349,19 @@ class IndexDb:
         self._conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
         self._conn.execute("DELETE FROM docs WHERE doc_id = ?", (doc_id,))
 
+    def docs_missing_embeddings(self) -> set[tuple[str, str]]:
+        """``(meeting_dir, kind)`` of every doc with at least one unembedded
+        chunk -- rows indexed while the embedding model was missing. The
+        indexer re-embeds them (bypassing the mtime/hash skip) once the
+        model is actually available."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT docs.meeting_dir AS meeting_dir, docs.kind AS kind"
+                " FROM docs JOIN chunks ON chunks.doc_id = docs.doc_id"
+                " WHERE chunks.embedding IS NULL"
+            ).fetchall()
+        return {(str(row["meeting_dir"]), str(row["kind"])) for row in rows}
+
     def delete_docs_not_in(self, live: set[tuple[str, str]]) -> int:
         """Orphan sweep: drop docs whose (meeting_dir, kind) is gone from disk."""
         with self._lock, self._conn:

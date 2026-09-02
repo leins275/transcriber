@@ -91,6 +91,65 @@ def test_vault_root_key_seeds_allowed_roots(tmp_app_dir: Path) -> None:
     assert Path(vault).resolve() in [Path(r).resolve() for r in cfg.allowed_roots]
 
 
+def test_meetings_root_is_read_as_the_vault_root_fallback(tmp_app_dir: Path) -> None:
+    """The app writes `meetings_root`, never `vault_root`; a standalone
+    launch (transcriber-mcp) must still find the vault from the file alone."""
+    vault = tmp_app_dir / "vault"
+    vault.mkdir()
+    _write_config(tmp_app_dir, {"meetings_root": str(vault)})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.vault_root == str(vault)
+    assert cfg.index_db_path == str(vault / ".transcriber" / "index.sqlite3")
+
+
+def test_explicit_vault_root_wins_over_the_meetings_root_fallback(tmp_app_dir: Path) -> None:
+    vault = tmp_app_dir / "vault"
+    vault.mkdir()
+    _write_config(tmp_app_dir, {"meetings_root": "ignored", "vault_root": str(vault)})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.vault_root == str(vault)
+
+
+def test_index_db_defaults_inside_the_vault(tmp_app_dir: Path) -> None:
+    """The index travels with its vault: switching vaults switches indexes."""
+    vault = tmp_app_dir / "vault"
+    vault.mkdir()
+    _write_config(tmp_app_dir, {"vault_root": str(vault)})
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.index_db_path == str(vault / ".transcriber" / "index.sqlite3")
+
+
+def test_index_db_falls_back_to_app_dir_without_a_vault(tmp_app_dir: Path) -> None:
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.index_db_path == str(tmp_app_dir / "data" / "index.sqlite3")
+
+
+def test_explicit_index_db_path_wins_over_the_vault_default(tmp_app_dir: Path) -> None:
+    vault = tmp_app_dir / "vault"
+    vault.mkdir()
+    _write_config(
+        tmp_app_dir,
+        {"vault_root": str(vault), "index_db_path": str(tmp_app_dir / "elsewhere.sqlite3")},
+    )
+    env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
+
+    cfg = load_config(env=env)
+
+    assert cfg.index_db_path == str(tmp_app_dir / "elsewhere.sqlite3")
+
+
 def test_app_dir_selects_default_db_and_model_paths(tmp_app_dir: Path) -> None:
     env = {"TRANSCRIBER_APP_DIR": str(tmp_app_dir)}
 

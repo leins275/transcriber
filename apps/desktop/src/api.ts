@@ -22,6 +22,7 @@ import type {
   ChatStoredMessage,
   ChatSummaryView,
   ChatWireMessage,
+  EmbeddingModelDownloadStatus,
   IndexStatusView,
   JobSnapshot,
   LedgerJobView,
@@ -125,6 +126,14 @@ export const api = {
   /** One project's index state for the chat tab's chip and panel. */
   indexStatus: (project: string): Promise<IndexStatusView> =>
     call<IndexStatusView>("index_status", { project }),
+  // The search-embedding GGUF (bge-m3) download trio: what turns text-only
+  // search into vector search.
+  embeddingModelDownloadStatus: (): Promise<EmbeddingModelDownloadStatus> =>
+    call<EmbeddingModelDownloadStatus>("embedding_model_download_status"),
+  startEmbeddingModelDownload: (): Promise<EmbeddingModelDownloadStatus> =>
+    call<EmbeddingModelDownloadStatus>("start_embedding_model_download"),
+  cancelEmbeddingModelDownload: (): Promise<EmbeddingModelDownloadStatus> =>
+    call<EmbeddingModelDownloadStatus>("cancel_embedding_model_download"),
   /** Appends a block to a meeting's note.md (the "Add to meeting notes"
    * action under a chat answer). */
   appendToNote: (entryId: string, markdown: string): Promise<void> =>

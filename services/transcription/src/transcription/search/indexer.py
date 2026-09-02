@@ -182,6 +182,19 @@ def _embed_chunks(
     return out
 
 
+def _embedder_ready(embedder: EmbeddingProvider) -> bool:
+    """Whether the embedder's weights are actually on disk. Providers
+    without a ``model_file`` (test fakes) count as ready; the real
+    llama.cpp embedder is ready exactly when the bge-m3 GGUF exists."""
+    model_file = getattr(embedder, "model_file", None)
+    if model_file is None:
+        return True
+    try:
+        return bool(Path(model_file()).is_file())
+    except Exception:
+        return False
+
+
 def index_vault(
     vault_root: Path,
     db: IndexDb,
@@ -198,13 +211,27 @@ def index_vault(
     scanned = indexed = skipped = 0
     live: set[tuple[str, str]] = set()
 
+    # Docs indexed text-only while the model was missing re-embed on the
+    # first pass that could actually embed them (the model-downloaded-later
+    # case) -- the mtime/hash skip below would otherwise freeze them
+    # vector-less forever. Gated on the weights being on disk so a machine
+    # without the model never rebuilds unchanged docs pass after pass.
+    needs_embedding: set[tuple[str, str]] = (
+        db.docs_missing_embeddings()
+        if embedder is not None and _embedder_ready(embedder)
+        else set()
+    )
+
     candidates: list[tuple[str, Path, str]] = []  # (project, meeting_dir, kind)
     try:
         top_level = sorted(entry for entry in vault_root.iterdir() if entry.is_dir())
     except OSError:
         top_level = []
     for project_dir in top_level:
-        if project_dir.name.lower() in _RESERVED_PROJECT_DIRS:
+        # Dot-dirs are never projects: the index's own home (`.transcriber/`)
+        # plus whatever else lives hidden in a vault (`.git`, `.obsidian`,
+        # sync-tool metadata).
+        if project_dir.name.startswith(".") or project_dir.name.lower() in _RESERVED_PROJECT_DIRS:
             continue
         project = (
             UNSORTED_DIR_NAME if project_dir.name.lower() == UNSORTED_DIR_NAME else project_dir.name
@@ -240,8 +267,9 @@ def index_vault(
         except OSError:
             live.discard((rel_dir, kind))
             continue
+        reembed = (rel_dir, kind) in needs_embedding
         stored = db.doc_fingerprint(rel_dir, kind)
-        if stored is not None and stored[0] == mtime_ns:
+        if not reembed and stored is not None and stored[0] == mtime_ns:
             skipped += 1
             continue
         try:
@@ -250,7 +278,7 @@ def index_vault(
             warnings.append(f"unreadable {rel_dir}/{file_name}: {exc}")
             continue
         content_hash = hashlib.sha256(raw).hexdigest()
-        if stored is not None and stored[1] == content_hash:
+        if not reembed and stored is not None and stored[1] == content_hash:
             db.touch_mtime(rel_dir, kind, mtime_ns)
             skipped += 1
             continue

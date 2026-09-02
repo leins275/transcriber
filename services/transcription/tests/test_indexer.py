@@ -83,6 +83,18 @@ def test_first_run_indexes_all_three_kinds(vault: Path, db: IndexDb) -> None:
     assert len(db.fts_query("Friday", 10)) == 1
 
 
+def test_dot_dirs_at_the_vault_root_are_never_projects(vault: Path, db: IndexDb) -> None:
+    """`.transcriber/` (the index's own home) and friends must not index."""
+    hidden = vault / ".transcriber" / "260901 - looks like a meeting"
+    hidden.mkdir(parents=True)
+    (hidden / "summary.md").write_text("Should never be indexed.", encoding="utf-8")
+
+    stats = index_vault(vault, db, FakeEmbedder())
+
+    assert stats.indexed == 4  # the fixture's docs only
+    assert db.fts_query("never be indexed", 10) == []
+
+
 def test_second_run_over_an_unchanged_vault_skips_everything(vault: Path, db: IndexDb) -> None:
     index_vault(vault, db, FakeEmbedder())
     embedder = FakeEmbedder()
@@ -92,6 +104,25 @@ def test_second_run_over_an_unchanged_vault_skips_everything(vault: Path, db: In
     assert stats.indexed == 0
     assert stats.skipped == 4
     assert embedder.calls == []  # nothing re-embedded
+
+
+def test_docs_indexed_without_a_model_reembed_once_one_appears(vault: Path, db: IndexDb) -> None:
+    """The model-downloaded-later case: text-only rows must not stay frozen
+    behind the mtime/hash skip forever."""
+    first = index_vault(vault, db, None)  # no embedding model yet
+    assert first.indexed == 4
+
+    embedder = FakeEmbedder()
+    second = index_vault(vault, db, embedder)
+
+    assert second.indexed == 4  # every text-only doc re-embedded
+    assert second.skipped == 0
+    assert embedder.calls, "the re-run must actually embed"
+    assert db.docs_missing_embeddings() == set()
+
+    third = index_vault(vault, db, FakeEmbedder())
+    assert third.indexed == 0  # and the skip discipline is back
+    assert third.skipped == 4
 
 
 def test_a_touched_but_identical_file_updates_mtime_only(vault: Path, db: IndexDb) -> None:

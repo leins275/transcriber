@@ -12,8 +12,9 @@ use serde::Serialize;
 
 use crate::error::AppError;
 use crate::paths;
-use crate::service::{IndexStatus, SearchQuery};
+use crate::service::{IndexStatus, ModelDownloadStatus, SearchQuery};
 
+use super::model::ModelDownloadStateView;
 use super::AppState;
 
 /// Longest accepted query; the service caps at 500 too, this just fails
@@ -115,6 +116,91 @@ pub async fn reindex_vault_handler(state: &AppState) -> Result<(), AppError> {
         .await
         .map(|_job_id| ())
         .map_err(super::llm::map_service_error)
+}
+
+// -- embedding model download (vector search) -------------------------------
+
+/// The bge-m3 download's status view -- the LLM trio's shape minus the GPU
+/// field (the embedder is CPU-only by design).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EmbeddingModelDownloadStatusView {
+    pub state: ModelDownloadStateView,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: f64,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    /// From `/health`'s `embedding_model_present` (`false` when the service
+    /// is unreachable or predates the feature).
+    pub model_present: bool,
+}
+
+async fn embedding_model_present(state: &AppState) -> bool {
+    let service = state.service.read().await.clone();
+    match service.health().await {
+        Ok(health) => health.embedding_model_present.unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+fn build_embedding_view(
+    status: ModelDownloadStatus,
+    model_present: bool,
+) -> EmbeddingModelDownloadStatusView {
+    EmbeddingModelDownloadStatusView {
+        state: status.state.into(),
+        downloaded_bytes: status.downloaded_bytes,
+        total_bytes: status.total_bytes,
+        percent: status.percent,
+        error_kind: status.error_kind,
+        error_message: status.error_message,
+        model_present,
+    }
+}
+
+/// `embedding_model_download_status` handler body.
+pub async fn embedding_model_download_status_handler(
+    state: &AppState,
+) -> Result<EmbeddingModelDownloadStatusView, AppError> {
+    let service = state.service.read().await.clone();
+    let status = service
+        .embedding_model_download_status()
+        .await
+        .map_err(super::llm::map_service_error)?;
+    Ok(build_embedding_view(
+        status,
+        embedding_model_present(state).await,
+    ))
+}
+
+/// `start_embedding_model_download` handler body.
+pub async fn start_embedding_model_download_handler(
+    state: &AppState,
+) -> Result<EmbeddingModelDownloadStatusView, AppError> {
+    let service = state.service.read().await.clone();
+    let status = service
+        .start_embedding_model_download()
+        .await
+        .map_err(super::llm::map_service_error)?;
+    Ok(build_embedding_view(
+        status,
+        embedding_model_present(state).await,
+    ))
+}
+
+/// `cancel_embedding_model_download` handler body.
+pub async fn cancel_embedding_model_download_handler(
+    state: &AppState,
+) -> Result<EmbeddingModelDownloadStatusView, AppError> {
+    let service = state.service.read().await.clone();
+    let status = service
+        .cancel_embedding_model_download()
+        .await
+        .map_err(super::llm::map_service_error)?;
+    Ok(build_embedding_view(
+        status,
+        embedding_model_present(state).await,
+    ))
 }
 
 /// `search_vault` -- hybrid search over transcripts, summaries and notes.

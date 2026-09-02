@@ -646,6 +646,43 @@ mod tests {
     }
 
     #[test]
+    fn embedding_model_download_trio_proxies_the_fake_service() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::with_embedding_model_absent()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let before = crate::commands::search::embedding_model_download_status_handler(&state)
+                .await
+                .expect("status must succeed");
+            assert!(!before.model_present);
+
+            crate::commands::search::start_embedding_model_download_handler(&state)
+                .await
+                .expect("start must succeed");
+
+            // Poll to completion (the fake advances one chunk per status poll).
+            let mut present = false;
+            for _ in 0..10 {
+                let view = crate::commands::search::embedding_model_download_status_handler(&state)
+                    .await
+                    .expect("status must succeed");
+                if view.model_present {
+                    present = true;
+                    break;
+                }
+            }
+            assert!(
+                present,
+                "the fake transfer must complete and flip model_present"
+            );
+        });
+    }
+
+    #[test]
     fn llm_model_download_trio_proxies_the_fake_service() {
         run(async {
             let root = tempdir().expect("tempdir");

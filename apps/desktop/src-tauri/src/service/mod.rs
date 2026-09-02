@@ -162,6 +162,29 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/embedding-model/download` -- the search-embedding GGUF's
+    /// slot (bge-m3). Same wire shape as the LLM trio, no CUDA phase.
+    /// Default: unsupported (see `model_download_status`).
+    async fn embedding_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "embedding model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/embedding-model/download`. Default: unsupported.
+    async fn start_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "embedding model download is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/embedding-model/download`. Default: unsupported.
+    async fn cancel_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "embedding model download is not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/llm-models` -- the curated LLM catalog with per-model
     /// presence, active flag and download slot status. Default: unsupported
     /// (see `model_download_status`).
@@ -458,6 +481,10 @@ pub struct ServiceHealth {
     /// build of the LLM runtime is on disk. `None` on a GPU-less host (or
     /// an older F2): never offer GPU acceleration a machine cannot use.
     pub llm_gpu_build_present: Option<bool>,
+    /// F2's `embedding_model_present` field (hybrid search) -- whether the
+    /// bge-m3 GGUF is on disk. `None` when the field is absent (a build of
+    /// F2 older than the feature).
+    pub embedding_model_present: Option<bool>,
 }
 
 /// Wire-level model-download state (mirrors F2's `DownloadState`, T13,

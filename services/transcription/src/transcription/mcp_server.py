@@ -10,18 +10,18 @@ env, or the installed ``config.json``); no port, no token.
 stdout carries ONLY the MCP protocol (the same discipline as ``serve``'s
 ready line): logging is forced to stderr before anything else runs.
 
-Claude Desktop launch configs:
+Claude Desktop launch config (against the repo; the installed bake ships no
+console scripts). ``--extra llm-cpu`` gives search its query embedder;
+``TRANSCRIBER_APP_DIR`` points at the *install* dir (models + data live
+there) while ``TRANSCRIBER_CONFIG_PATH`` names the shared config.json --
+the app's ``meetings_root`` key doubles as the vault root::
 
-* against the repo (dev)::
-
-      {"command": "uv",
-       "args": ["run", "--project", "D:\\\\path\\\\to\\\\services\\\\transcription",
-                "transcriber-mcp"]}
-
-* against an installed app (the baked interpreter's Scripts dir)::
-
-      {"command": "<install>\\\\pyenv\\\\python\\\\Scripts\\\\transcriber-mcp.exe",
-       "env": {"TRANSCRIBER_APP_DIR": "%APPDATA%\\\\com.transcriber.desktop"}}
+    {"command": "uv",
+     "args": ["run", "--project", "D:\\\\path\\\\to\\\\services\\\\transcription",
+              "--extra", "llm-cpu", "transcriber-mcp"],
+     "env": {"TRANSCRIBER_APP_DIR": "%LOCALAPPDATA%\\\\Transcriber",
+             "TRANSCRIBER_CONFIG_PATH":
+                 "%APPDATA%\\\\com.transcriber.desktop\\\\config.json"}}
 
 Degradation over failure throughout: a missing index answers a friendly
 "index not built yet" message, a missing embedding GGUF drops to text-only
@@ -54,6 +54,12 @@ _NO_INDEX_MESSAGE = (
 # Vault-root subdirectories that are not projects (the vault crate's
 # reserved names plus legacy trees).
 _RESERVED_DIRS = frozenset({"reports", "action items", "facts", "exports", "chats"})
+
+
+def _is_reserved_dir(name: str) -> bool:
+    """Not a project: a reserved/legacy tree, or any dot-dir (the index's
+    own `.transcriber/` home, `.git`, sync-tool metadata, ...)."""
+    return name.startswith(".") or name.lower() in _RESERVED_DIRS
 
 
 class _Vault:
@@ -142,7 +148,7 @@ def build_server(config: Config) -> Any:
         root = vault.root()
         projects: list[dict[str, Any]] = []
         for entry in sorted(root.iterdir()):
-            if not entry.is_dir() or entry.name.lower() in _RESERVED_DIRS:
+            if not entry.is_dir() or _is_reserved_dir(entry.name):
                 continue
             count = sum(1 for child in entry.iterdir() if child.is_dir())
             projects.append({"project": entry.name, "meeting_count": count})
@@ -155,7 +161,7 @@ def build_server(config: Config) -> Any:
         root = vault.root()
         meetings: list[dict[str, Any]] = []
         for project_dir in sorted(root.iterdir()):
-            if not project_dir.is_dir() or project_dir.name.lower() in _RESERVED_DIRS:
+            if not project_dir.is_dir() or _is_reserved_dir(project_dir.name):
                 continue
             if project is not None and project_dir.name != project:
                 continue

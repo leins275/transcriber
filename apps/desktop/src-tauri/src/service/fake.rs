@@ -206,6 +206,9 @@ struct Inner {
     /// Which catalog id is active -- the slot the legacy
     /// `llm_model_download_*` trio and `/health.llm_model_present` report.
     llm_active: String,
+    /// The search-embedding GGUF's own simulated slot (bge-m3): present by
+    /// default, like the LLM slots, so dev sessions search with vectors.
+    embedding: FakeModelDownload,
     /// Every derived-job submission this fake accepted, for assertions.
     llm_submissions: Vec<LlmSubmitRequest>,
     /// Every transcription submission this fake accepted, for assertions --
@@ -292,6 +295,7 @@ impl FakeService {
                     .map(|(id, _, _, _)| (id.to_string(), FakeModelDownload::present()))
                     .collect(),
                 llm_active: FAKE_LLM_CATALOG[0].0.to_string(),
+                embedding: FakeModelDownload::present(),
                 llm_submissions: Vec::new(),
                 submissions: Vec::new(),
                 index_submissions: 0,
@@ -320,6 +324,17 @@ impl FakeService {
                 *slot = FakeModelDownload::absent();
             }
         }
+        fake
+    }
+
+    /// A healthy fake whose simulated *embedding* model is not yet present
+    /// -- the "enable vector search" first-use case.
+    pub fn with_embedding_model_absent() -> Self {
+        let fake = Self::new();
+        fake.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .embedding = FakeModelDownload::absent();
         fake
     }
 
@@ -434,6 +449,7 @@ impl TranscriptionService for FakeService {
             // The fake behaves like a machine whose GPU build is already
             // fetched -- dev sessions exercise the happy path by default.
             llm_gpu_build_present: Some(true),
+            embedding_model_present: Some(inner.embedding.present),
         })
     }
 
@@ -648,6 +664,23 @@ impl TranscriptionService for FakeService {
         let slot = inner.active_llm_slot();
         slot.cancel();
         Ok(slot.peek())
+    }
+
+    async fn embedding_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.embedding.advance_and_peek())
+    }
+
+    async fn start_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.embedding.start();
+        Ok(inner.embedding.peek())
+    }
+
+    async fn cancel_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.embedding.cancel();
+        Ok(inner.embedding.peek())
     }
 
     async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {

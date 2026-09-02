@@ -362,6 +362,10 @@ struct HealthResponse {
     /// Same convention; `None` also means "no NVIDIA GPU on this host".
     #[serde(default)]
     llm_gpu_build_present: Option<bool>,
+    /// `None` when the field is absent (a build of F2 older than hybrid
+    /// search), same convention as above.
+    #[serde(default)]
+    embedding_model_present: Option<bool>,
 }
 
 /// `GET`/`POST`/`DELETE /v1/model/download` response body (T13, FR-12).
@@ -618,6 +622,7 @@ impl TranscriptionService for HttpTranscriptionService {
             cuda_runtime_present: parsed.cuda_runtime_present,
             llm_model_present: parsed.llm_model_present,
             llm_gpu_build_present: parsed.llm_gpu_build_present,
+            embedding_model_present: parsed.embedding_model_present,
         })
     }
 
@@ -924,6 +929,54 @@ impl TranscriptionService for HttpTranscriptionService {
 
     async fn cancel_llm_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
         let request = self.authorize(self.client.delete(self.endpoint("/v1/llm-model/download")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn embedding_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint("/v1/embedding-model/download")),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn start_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .post(self.endpoint("/v1/embedding-model/download")),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
+    }
+
+    async fn cancel_embedding_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .delete(self.endpoint("/v1/embedding-model/download")),
+        );
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
         if !response.status().is_success() {
             return Err(service_error_from_response(response).await);

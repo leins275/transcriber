@@ -87,8 +87,8 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `llm_max_output_tokens` | `TRANSCRIBER_LLM_MAX_OUTPUT_TOKENS` | `4096` |
 | `llm_think_headroom_tokens` | `TRANSCRIBER_LLM_THINK_HEADROOM_TOKENS` | `2048` (extra output budget for the reasoning `<think>` block on free-text calls) |
 | `llm_keep_loaded` | `TRANSCRIBER_LLM_KEEP_LOADED` | `false` (release the multi-GB working set after each LLM job) |
-| `vault_root` | `TRANSCRIBER_VAULT_ROOT` | none -- the meetings vault the `index` job walks; whatever layer wins is also appended to `allowed_roots` |
-| `index_db_path` | `TRANSCRIBER_INDEX_DB_PATH` | `<app_dir>/data/index.sqlite3` (rebuildable derived data -- deleting it costs one re-index) |
+| `vault_root` | `TRANSCRIBER_VAULT_ROOT` | none -- the meetings vault the `index` job walks; falls back to the app schema's `meetings_root` key in the same config file (what a standalone `transcriber-mcp` launch relies on); whatever layer wins is also appended to `allowed_roots` |
+| `index_db_path` | `TRANSCRIBER_INDEX_DB_PATH` | `<vault_root>/.transcriber/index.sqlite3` when a vault root is set (the index travels with its vault), else `<app_dir>/data/index.sqlite3` (rebuildable derived data -- deleting it costs one re-index) |
 | `search_top_k` | `TRANSCRIBER_SEARCH_TOP_K` | `10` |
 | `embedding_model` | `TRANSCRIBER_EMBEDDING_MODEL` | `bge-m3` (the one curated search-embedding GGUF) |
 | `embedding_model_repo` / `embedding_model_revision` / `embedding_model_file` | `TRANSCRIBER_EMBEDDING_MODEL_REPO` / `..._REVISION` / `..._FILE` | the `bge-m3` pins; setting them explicitly is the hand-picked-GGUF escape hatch. The file lives in `llm_model_path`, fetched via `POST /v1/embedding-model/download` |
@@ -161,7 +161,11 @@ wheel audits it as satisfied. Force the swap once with
 `POST /v1/jobs {"job_type": "index"}` incrementally walks `vault_root` into
 the search index (`index_db_path`): transcripts (speaker renames applied),
 summaries and notes, chunked with breadcrumbs and embedded by the bge-m3
-GGUF (CPU-only, fetched via `POST /v1/embedding-model/download`). The
+GGUF (CPU-only, fetched via `POST /v1/embedding-model/download` — the
+desktop app's Settings exposes this as "Enable vector search"). Documents
+indexed while the model was missing are re-embedded automatically on the
+first pass after the GGUF arrives (the mtime/hash skip is bypassed for
+docs with unembedded chunks, gated on the weights being on disk). The
 desktop app fires this quietly after every finished job and note save; a
 queued index job absorbs repeat submissions. The index is derived data --
 deleting the file costs one re-index.
