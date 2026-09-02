@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.18.0 — 2026-09-02
+
+### Features
+
+- Per-vault search index + "Enable vector search" download in Settings
+
 ## 0.17.0 — 2026-08-31
 
 ### Features
