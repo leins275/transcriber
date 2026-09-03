@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sys
 import threading
@@ -487,6 +488,33 @@ def install_hub_compat() -> bool:
     compat._transcriber_hub_compat = True  # type: ignore[attr-defined]
     huggingface_hub.hf_hub_download = compat
     return True
+
+
+_TORCH_FULL_PICKLE_ENV = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"
+
+
+@contextmanager
+def full_checkpoint_loads() -> Iterator[None]:
+    """Let torch 2.6+ unpickle pyannote 3's checkpoints for the duration.
+
+    torch 2.6 made ``torch.load(weights_only=True)`` the default; pyannote
+    3's checkpoints pickle a handful of plain objects beyond tensors (a
+    ``TorchVersion``, its task specifications) and lightning loads them
+    through ``torch.load`` with no way to pass the flag through. The
+    checkpoints loaded here are the pinned snapshots this project commits
+    and ships (or the operator's own fetch of the same pins), i.e. exactly
+    what pyannote 3 on torch < 2.6 always unpickled in full -- so the
+    documented override is set around the load and restored afterwards.
+    """
+    previous = os.environ.get(_TORCH_FULL_PICKLE_ENV)
+    os.environ[_TORCH_FULL_PICKLE_ENV] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(_TORCH_FULL_PICKLE_ENV, None)
+        else:
+            os.environ[_TORCH_FULL_PICKLE_ENV] = previous
 
 
 @contextmanager

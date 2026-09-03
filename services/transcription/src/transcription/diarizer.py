@@ -23,6 +23,7 @@ from transcription.diarization import DiarizationOutput, SpeakerTurn
 from transcription.diarization_runtime import (
     activate_runtime,
     diarization_cache_dir,
+    full_checkpoint_loads,
     hub_offline,
     install_hub_compat,
     is_diarization_model_present,
@@ -147,7 +148,9 @@ class PyannoteDiarizer:
         # in place first.
         install_hub_compat()
         try:
-            from pyannote.audio import (  # type: ignore[import-not-found]  # noqa: PLC0415
+            # Absent in CI (`import-not-found`), present but untyped in a dev
+            # environment synced with the extra (`import-untyped`).
+            from pyannote.audio import (  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: PLC0415,E501
                 Pipeline,
             )
         except ImportError as exc:
@@ -200,7 +203,7 @@ class PyannoteDiarizer:
                 offline = is_diarization_model_present(self._app_dir)
             if self._hf_token and not offline:
                 kwargs["use_auth_token"] = self._hf_token
-            with hub_offline(offline):
+            with hub_offline(offline), full_checkpoint_loads():
                 pipeline = pipeline_cls.from_pretrained(source, **kwargs)
             if pipeline is None:
                 # `from_pretrained` answers None (not an exception) for a

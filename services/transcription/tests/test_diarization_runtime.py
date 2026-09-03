@@ -558,3 +558,19 @@ def test_the_real_hub_client_needs_the_shim() -> None:
         huggingface_hub.hf_hub_download, "__wrapped__", huggingface_hub.hf_hub_download
     )
     assert "use_auth_token" not in inspect.signature(original).parameters
+
+
+def test_full_checkpoint_loads_sets_torch_s_override_only_for_the_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    monkeypatch.delenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", raising=False)
+    with dr.full_checkpoint_loads():
+        assert os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
+    assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in os.environ
+
+    monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "0")
+    with dr.full_checkpoint_loads():
+        assert os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "1"
+    assert os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] == "0"

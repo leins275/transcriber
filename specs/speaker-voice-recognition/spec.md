@@ -43,7 +43,11 @@ returning voice.
   operator's machine failed on torchaudio 2.11 exactly there): ~3 GB
   fetched on demand. The recording is decoded to a waveform by
   faster-whisper's bundled FFmpeg before it reaches pyannote, since
-  torchaudio on Windows cannot open mp4/m4a. Machines without an
+  torchaudio on Windows cannot open mp4/m4a. pyannote 3's other
+  incompatibility -- `use_auth_token=` on `hf_hub_download`, which
+  huggingface_hub 1.x renamed -- is bridged by `install_hub_compat()`
+  before pyannote is imported, rather than by pinning the hub client the
+  whole service uses below 1.0. Machines without an
   NVIDIA GPU are not offered the feature, the same rule the STT CUDA
   runtime follows. `cu126` runs on every driver from the 525 series and on
   GPUs up to Ada (the operator's RTX 4070).
