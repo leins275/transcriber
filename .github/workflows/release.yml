@@ -87,8 +87,13 @@ jobs:
         include:
           - os: windows-latest
             slug: windows-x86_64
+            # The speaker models are baked on Windows only (the diarization
+            # runtime is a CUDA build); a missing HF_TOKEN secret must fail
+            # the release rather than ship an installer that asks for one.
+            installer_args: --require-diarization-models
           - os: macos-14 # Apple Silicon (arm64) runner
             slug: darwin-aarch64
+            installer_args: ""
     runs-on: ${{ matrix.os }}
     # The installer build bakes a relocatable CPython, installs the frozen
     # dependency tree, builds Rust in release mode and bundles. On a cold
@@ -135,11 +140,17 @@ jobs:
       # signing/notarization slots in here via:
       #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD /
       #   APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+      #
+      # HF_TOKEN is a Hugging Face *read* token whose account has accepted
+      # the terms of the two gated pyannote repos; the build spends it on the
+      # speaker-model snapshots it bakes into the installer, so no operator
+      # ever handles a token. It never reaches the artifact.
       - name: Build installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: uv run scripts/build_installer.py
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: uv run scripts/build_installer.py ${{ matrix.installer_args }}
 
       # Everything the publish job needs from this leg, verified and staged
       # under stable names. The installer's name comes from

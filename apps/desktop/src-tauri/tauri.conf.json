@@ -35,7 +35,8 @@
       "icons/icon.icns"
     ],
     "resources": {
-      "resources/pyenv/": "pyenv/"
+      "resources/pyenv/": "pyenv/",
+      "resources/models/": "models/"
     },
     "windows": {
       "webviewInstallMode": {

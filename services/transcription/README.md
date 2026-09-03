@@ -233,15 +233,20 @@ Two prerequisites, both optional by design:
   hub once (signed in as the token's owner), then supply a read token
   (`hf_token` in the config file, `TRANSCRIBER_HF_TOKEN`, else
   `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`). `POST /v1/diarization-model/download`
-  snapshots the three repos at pinned revisions into
-  `<app_dir>/models/diarization/` (the hub-cache layout, `PYANNOTE_CACHE`)
-  and pins each `refs/main` to its snapshot; from then on the pipeline
-  loads **offline** (the hub is never consulted and the token is not
-  needed at load time), so the pin holds. A gated refusal names the repo
-  whose terms to accept. Without the fetch (a dev environment), the
-  diarizer downloads on first use with the token, as before. Alternatively
-  point `diarization_model_path` at a local snapshot directory (containing
-  the pipeline's `config.yaml`) for fully offline loads.
+  -- or the CLI's `download-diarization-models [--out DIR]` -- snapshots
+  the three repos at pinned revisions into `<app_dir>/models/diarization/`
+  (the hub-cache layout, `PYANNOTE_CACHE`) and pins each `refs/main` to its
+  snapshot; from then on the pipeline loads **offline** (the hub is never
+  consulted and the token is not needed at load time), so the pin holds.
+  A gated refusal names the repo whose terms to accept. **The installer
+  ships these snapshots**: the release build runs that CLI with the
+  workflow's `HF_TOKEN` secret and bundles the result into
+  `<install dir>\models\diarization\`, so an installed app's operator never
+  handles a token (`docs/setup.md`). Without the fetch (a dev
+  environment), the diarizer downloads on first use with the token, as
+  before. Alternatively point `diarization_model_path` at a local snapshot
+  directory (containing the pipeline's `config.yaml`) for fully offline
+  loads.
 
 `GET /v1/diarization/status` reports which prerequisites are met
 (`runtime_present`, `model_present`, `token_present`, `gpu_present` -- the
@@ -361,3 +366,12 @@ provider for the first time; even so, it stays comfortably under the
 Portions of this package are adapted from [Vexa](https://github.com/Vexa-ai/vexa)
 (Apache License, Version 2.0). See `NOTICE` for the full list of adapted
 files and their origin paths.
+
+The speaker-identification models bundled with the Windows installer are
+redistributed under their own licenses: `pyannote/speaker-diarization-3.1`
+and `pyannote/segmentation-3.0` (MIT, © CNRS / Hervé Bredin et al.) and
+`pyannote/wespeaker-voxceleb-resnet34-LM` (CC BY 4.0, the WeSpeaker
+project's VoxCeleb ResNet34-LM model as packaged by pyannote). Cite
+*Bredin, "pyannote.audio 2.1 speaker diarization pipeline: principle,
+benchmark, and recipe" (Interspeech 2023)* and *Wang et al., "WeSpeaker: a
+research and production oriented speaker embedding toolkit" (ICASSP 2023)*.

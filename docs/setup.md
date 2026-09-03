@@ -233,30 +233,21 @@ one of them is edited by hand instead of through `--set`.
 ## Speaker identification (optional, first-run setup)
 
 Speaker identification (pyannote diarization + cross-meeting voice
-recognition) is switched off and not installed by default: the runtime is
-gigabytes of GPU-specific payload and the models are gated on Hugging
-Face. Settings → **Speakers** walks through it, top to bottom; every step
-is skipped once done:
+recognition) is switched off by default, and its runtime is not installed:
+it is gigabytes of GPU-specific payload. The pyannote **models** ship
+inside the installer (see "How the models get into the installer" below),
+so an operator never touches Hugging Face. Settings → **Speakers** walks
+through the rest, top to bottom; every step is skipped once done:
 
 1. **Enable speaker identification (~2.7 GB).** Fetches the pyannote +
    CUDA torch runtime into `<install dir>\runtime\diarization\`. Needs an
    NVIDIA GPU (the row says so and offers nothing otherwise). Resumable
    and cancellable like the other downloads.
-2. **Hugging Face token.** Sign in on huggingface.co, accept the terms of
-   `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`
-   (both gated, both free), create a *read* token under Settings → Access
-   Tokens, paste it and Save. It is stored as `hf_token` in
-   `config.json` (`docs/config-contract.md`) and never shown again; the
-   sidecar restarts to read it.
-3. **Download speaker models.** Snapshots the three pinned model repos
-   into `<install dir>\models\diarization\`. A refusal names the repo
-   whose terms are missing. From here on loads are offline; the token is
-   not needed again.
-4. **Identify speakers in new recordings.** The `diarize` switch: every
+2. **Identify speakers in new recordings.** The `diarize` switch: every
    new transcription runs the pass, cuts segments at changes of voice, and
    pre-names any voice already named in a sibling meeting of the same
    project.
-5. **Identify speakers in labelled meetings.** One-shot backfill: queues a
+3. **Identify speakers in labelled meetings.** One-shot backfill: queues a
    `diarize` job for every meeting you labelled by hand before this was
    set up (oldest first), attaching speaker labels and voice prints to
    their existing transcripts without touching your labels. That is what
@@ -265,11 +256,28 @@ is skipped once done:
    takes about a minute.
 
 Per meeting, the overflow menu's **Identify speakers** runs the same job on
-demand (disabled, pointing here, until steps 1–3 are done).
+demand (disabled, pointing here, until step 1 is done).
+
+**How the models get into the installer.** `pyannote/speaker-diarization-3.1`
+and `pyannote/segmentation-3.0` are gated on Hugging Face (free, MIT
+licensed; gating is a click-through). The release workflow holds a read
+token whose account has accepted both -- the `HF_TOKEN` repository secret
+-- and `scripts/build_installer.py`'s `diarization_models_bake` stage spends
+it at build time: `transcription-service download-diarization-models --out
+apps/desktop/src-tauri/resources/models/diarization`, which the bundler
+ships to `<install dir>\models\diarization\` (`tauri.conf.json`
+`bundle.resources`). The token never reaches the artifact. On Windows the
+release passes `--require-diarization-models`, so a missing or expired
+secret fails the build instead of shipping an installer that asks for a
+token; rotate the secret with `gh secret set HF_TOKEN`. A build without the
+secret (a fork, a local `make installer`) still works: the Speakers row then
+shows a token box with a step-by-step walkthrough, and "Download speaker
+models" fetches them on that machine.
 
 Dev loop: `uv sync --extra diarization` in `services/transcription/` gives
 the service CPU torch from PyPI instead (slow, but no fetch); the status
-row then reports the runtime as present and only steps 2–3 apply.
+row then reports the runtime as present. A dev build has no baked models,
+so paste a token there once (or run the CLI above with `HF_TOKEN` set).
 
 ## Known gaps
 

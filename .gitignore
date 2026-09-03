@@ -17,3 +17,7 @@ __pycache__/
 # ignore its contents but keep the .gitkeep tracked.
 apps/desktop/src-tauri/resources/pyenv/*
 !apps/desktop/src-tauri/resources/pyenv/.gitkeep
+# Same rule for the speaker-model snapshots the release build bakes into
+# resources/models/diarization/: ignore the contents, keep the placeholder.
+apps/desktop/src-tauri/resources/models/*
+!apps/desktop/src-tauri/resources/models/.gitkeep

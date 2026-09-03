@@ -60,6 +60,16 @@ returning voice.
   (`PYANNOTE_CACHE`) and pins `refs/main`; the diarizer then loads with
   the hub forced offline and without the token. The token is only ever
   used by the fetch.
+- **The models ship in the installer, the token does not** (operator
+  follow-up, same day: "bake my token"). Baking a personal token into a
+  distributed artifact would hand the operator's Hugging Face credentials
+  to anyone who downloads it; instead the release workflow spends the
+  `HF_TOKEN` repository secret at build time on the ~43 MB of snapshots
+  (`build_installer.py` `diarization_models_bake`, `--require-diarization-
+  models` on Windows so a missing secret fails the build) and the bundler
+  ships them to `<install dir>\models\diarization\`. The in-app token box
+  only appears on a build without them. Redistribution is within the
+  models' licenses (MIT; CC BY 4.0 with attribution in the service README).
 
 ## What shipped
 

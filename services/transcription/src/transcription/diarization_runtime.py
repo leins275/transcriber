@@ -297,6 +297,14 @@ class DiarizationModelDownload:
         self.total_bytes = len(repos)
         self.current_file = ""
         self.error: ServiceError | None = None
+        # What the CLI's download summary reports (`cli._run_download`
+        # reads these off every download it drives).
+        self.repo_id = ", ".join(repo.repo_id for repo in repos)
+        self.revision = "pinned"
+
+    @property
+    def cache_dir(self) -> Path:
+        return self._cache_dir
 
     def already_present(self) -> bool:
         marker = self._cache_dir / _MODELS_MARKER

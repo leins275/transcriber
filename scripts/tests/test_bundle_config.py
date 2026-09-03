@@ -58,6 +58,14 @@ def test_bundle_resources_reference_the_baked_pyenv_tree():
     assert resources, "bundle.resources must be declared"
     assert isinstance(resources, dict), "expect a source->target map for fine-grained control"
     assert resources.get("resources/pyenv/") == "pyenv/"
+    # The speaker-model snapshots the release build bakes ride the same
+    # mechanism into `<install dir>\models\` (build_installer.py's
+    # diarization_models_bake stage), beside the whisper model.
+    assert resources.get("resources/models/") == "models/"
+    models_dir = SRC_TAURI / "resources" / "models"
+    assert models_dir.is_dir() and any(models_dir.iterdir()), (
+        f"{models_dir} must exist as a non-empty placeholder for tauri-build"
+    )
 
     resource_dir = SRC_TAURI / "resources" / "pyenv"
     assert resource_dir.is_dir(), (

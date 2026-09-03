@@ -485,51 +485,59 @@ export function SettingsPage({
                 <p className={styles.warning}>{diarizationRuntimeDownload.error_message}</p>
               )}
 
-              <div className={styles.line}>
-                {diarization.token_present && CHECK_ICON}
-                Hugging Face token
-                <input
-                  type="password"
-                  className={styles.tokenInput}
-                  aria-label="Hugging Face token"
-                  placeholder={diarization.token_present ? "Saved · paste to replace" : "hf_…"}
-                  autoComplete="off"
-                  value={tokenDraft}
-                  onChange={(event) => setTokenDraft(event.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={tokenState === "saving" || tokenDraft.trim() === ""}
-                  onClick={saveToken}
-                >
-                  {tokenState === "saving" ? "Saving…" : "Save token"}
-                </button>
-                {tokenState === "saved" && <span className={styles.detail}>Saved</span>}
-              </div>
-              <ol className={styles.steps} aria-label="Token setup steps">
-                <li>
-                  Sign in (or create a free account) at{" "}
-                  <CopyLink url="https://huggingface.co/join" />
-                </li>
-                <li>
-                  Open <CopyLink url="https://huggingface.co/pyannote/speaker-diarization-3.1" />{" "}
-                  and click <b>Agree and access repository</b> (a short form; the model is free).
-                </li>
-                <li>
-                  Do the same at <CopyLink url="https://huggingface.co/pyannote/segmentation-3.0" />
-                  .
-                </li>
-                <li>
-                  Open <CopyLink url="https://huggingface.co/settings/tokens" />, choose{" "}
-                  <b>Create new token</b> with the <b>Read</b> type, and copy it.
-                </li>
-                <li>Paste it above and Save, then download the speaker models below.</li>
-              </ol>
-              <p className={styles.hint}>
-                The token stays in this machine&apos;s config file and is used only to fetch the
-                models; nothing else ever leaves this machine.
-              </p>
+              {/* The installer ships the models, so the token step only ever
+                  shows on a build without them (a dev environment, or an
+                  installer built without the HF_TOKEN secret). */}
+              {!diarization.model_present && (
+                <>
+                  <div className={styles.line}>
+                    {diarization.token_present && CHECK_ICON}
+                    Hugging Face token
+                    <input
+                      type="password"
+                      className={styles.tokenInput}
+                      aria-label="Hugging Face token"
+                      placeholder={diarization.token_present ? "Saved · paste to replace" : "hf_…"}
+                      autoComplete="off"
+                      value={tokenDraft}
+                      onChange={(event) => setTokenDraft(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={tokenState === "saving" || tokenDraft.trim() === ""}
+                      onClick={saveToken}
+                    >
+                      {tokenState === "saving" ? "Saving…" : "Save token"}
+                    </button>
+                    {tokenState === "saved" && <span className={styles.detail}>Saved</span>}
+                  </div>
+                  <ol className={styles.steps} aria-label="Token setup steps">
+                    <li>
+                      Sign in (or create a free account) at{" "}
+                      <CopyLink url="https://huggingface.co/join" />
+                    </li>
+                    <li>
+                      Open{" "}
+                      <CopyLink url="https://huggingface.co/pyannote/speaker-diarization-3.1" /> and
+                      click <b>Agree and access repository</b> (a short form; the model is free).
+                    </li>
+                    <li>
+                      Do the same at{" "}
+                      <CopyLink url="https://huggingface.co/pyannote/segmentation-3.0" />.
+                    </li>
+                    <li>
+                      Open <CopyLink url="https://huggingface.co/settings/tokens" />, choose{" "}
+                      <b>Create new token</b> with the <b>Read</b> type, and copy it.
+                    </li>
+                    <li>Paste it above and Save, then download the speaker models below.</li>
+                  </ol>
+                  <p className={styles.hint}>
+                    The token stays in this machine&apos;s config file and is used only to fetch the
+                    models; nothing else ever leaves this machine.
+                  </p>
+                </>
+              )}
 
               <div className={styles.line}>
                 {diarization.model_present && CHECK_ICON}

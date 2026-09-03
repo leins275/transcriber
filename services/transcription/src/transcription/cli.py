@@ -120,6 +120,20 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_common_flags(download_llm_parser)
     download_llm_parser.set_defaults(func=_cmd_download_llm_model)
 
+    download_diarization_parser = subparsers.add_parser(
+        "download-diarization-models",
+        help="download the pinned pyannote speaker models (needs hf_token) and exit",
+    )
+    _add_common_flags(download_diarization_parser)
+    download_diarization_parser.add_argument(
+        "--out",
+        dest="output_dir",
+        default=None,
+        help="override the destination (default: <app_dir>/models/diarization); "
+        "the release build points this at the installer's bundled resources",
+    )
+    download_diarization_parser.set_defaults(func=_cmd_download_diarization_models)
+
     return parser
 
 
@@ -180,6 +194,23 @@ def _cmd_download_llm_model(args: argparse.Namespace, config: Config) -> int:
         print(redact(exc.message), file=sys.stderr)
         return EXIT_CODES.get(exc.kind, EXIT_CODES[ErrorKind.INTERNAL])
     return _run_download(download, models_dir=config.llm_model_path)
+
+
+def _cmd_download_diarization_models(args: argparse.Namespace, config: Config) -> int:
+    """`download-diarization-models`: the pyannote snapshots, into the
+    app's model cache or `--out`. The token comes from the config file or
+    `HF_TOKEN`/`TRANSCRIBER_HF_TOKEN` -- never argv (FR-9). The release
+    build runs this with `--out` pointed at the bundle's resources, so an
+    installed app ships the models and its operator never handles a token.
+    """
+    from transcription.diarization_runtime import (  # noqa: PLC0415 - keeps the hub lazy
+        DiarizationModelDownload,
+        diarization_cache_dir,
+    )
+
+    cache_dir = Path(args.output_dir) if args.output_dir else diarization_cache_dir(config.app_dir)
+    download = DiarizationModelDownload(cache_dir=cache_dir, token=config.hf_token)
+    return _run_download(download, models_dir=str(cache_dir))
 
 
 def _run_download(download: Any, *, models_dir: str) -> int:

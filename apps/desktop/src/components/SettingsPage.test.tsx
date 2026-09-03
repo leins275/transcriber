@@ -527,3 +527,18 @@ describe("SettingsPage token walkthrough", () => {
     expect(await screen.findByText("Copied")).toBeInTheDocument();
   });
 });
+
+describe("SettingsPage with baked speaker models", () => {
+  it("never asks for a token once the models are on disk", () => {
+    renderPage({
+      diarization: diarizationStatus({ model_present: true, token_present: false }),
+    });
+
+    expect(screen.queryByLabelText(/hugging face token/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: /token setup steps/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /download speaker models/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /enable speaker identification/i })).toBeEnabled();
+  });
+});

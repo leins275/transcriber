@@ -406,3 +406,50 @@ def test_the_two_download_slots_answer_on_their_own_routes(config: Config, tmp_p
             time.sleep(0.02)
         assert status["state"] == "complete"
         assert client.get("/v1/diarization/status", headers=AUTH).json()["model_present"] is True
+
+
+# -- the CLI (what the release build runs to bake the models) -----------------
+
+
+def test_the_cli_bakes_the_snapshots_into_out_with_the_env_token(
+    tmp_app_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from transcription import cli
+
+    hub = FakeHub()
+    monkeypatch.setattr(dr, "_hub_snapshot", hub)
+    monkeypatch.setenv("TRANSCRIBER_APP_DIR", str(tmp_app_dir))
+    monkeypatch.setenv("HF_TOKEN", "hf_from_env")
+    out = tmp_path / "bundle" / "models" / "diarization"
+
+    code = cli.main(["download-diarization-models", "--out", str(out)])
+
+    assert code == 0
+    assert [call[2] for call in hub.calls] == ["hf_from_env"] * len(dr.DIARIZATION_MODEL_REPOS)
+    assert (out / ".ready").is_file()
+    summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert summary["state"] == "complete"
+    assert summary["models_dir"] == str(out)
+
+
+def test_the_cli_fails_with_the_model_load_code_without_a_token(
+    tmp_app_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from transcription import cli
+    from transcription.cli import EXIT_CODES
+
+    monkeypatch.setattr(dr, "_hub_snapshot", FakeHub())
+    monkeypatch.setenv("TRANSCRIBER_APP_DIR", str(tmp_app_dir))
+    for name in ("HF_TOKEN", "TRANSCRIBER_HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    code = cli.main(["download-diarization-models", "--out", str(tmp_path / "m")])
+
+    assert code == EXIT_CODES[ErrorKind.MODEL_LOAD]
+    assert "huggingface.co/settings/tokens" in capsys.readouterr().err

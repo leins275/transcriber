@@ -39,6 +39,7 @@ def test_stage_order_matches_the_documented_pipeline() -> None:
         "version_check",
         "lock_check",
         "pyenv_bake",
+        "diarization_models_bake",
         "tauri_build",
         "collect",
         "gate",
@@ -476,3 +477,102 @@ def test_stage_gate_raises_build_installer_error_when_oversized(tmp_path: Path) 
 
     with pytest.raises(build_installer.BuildInstallerError):
         build_installer.stage_gate(ctx)
+
+
+# --- speaker-models bake -------------------------------------------------
+
+
+def _no_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in build_installer.HF_TOKEN_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_models_bake_runs_the_service_cli_and_records_the_pins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(build_installer.sys, "platform", "win32")
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    out = tmp_path / "resources" / "models" / "diarization"
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, cwd=None):  # noqa: ANN001
+        calls.append([str(c) for c in cmd])
+        out.mkdir(parents=True)
+        (out / ".ready").write_text(json.dumps({"repos": {"pyannote/x": "abc"}}), encoding="utf-8")
+        (out / "blob").write_bytes(b"12345")
+        return ""
+
+    monkeypatch.setattr(build_installer, "_run", fake_run)
+    ctx = build_installer.BuildContext(models_out=out)
+
+    build_installer.stage_diarization_models_bake(ctx)
+
+    assert len(calls) == 1
+    assert calls[0][-4:] == ["transcription-service", "download-diarization-models", "--out", str(out)]
+    # The token travels through the environment, never argv.
+    assert not any("hf_test" in part for part in calls[0])
+    assert ctx.diarization_models == {
+        "baked": True,
+        "repos": {"pyannote/x": "abc"},
+        "total_bytes": 5 + len(json.dumps({"repos": {"pyannote/x": "abc"}})),
+    }
+
+
+def test_models_bake_without_a_token_skips_and_clears_a_stale_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(build_installer.sys, "platform", "win32")
+    _no_token(monkeypatch)
+    out = tmp_path / "models" / "diarization"
+    out.mkdir(parents=True)
+    (out / "stale").write_text("yesterday's snapshot", encoding="utf-8")
+    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: pytest.fail("no fetch"))
+    ctx = build_installer.BuildContext(models_out=out)
+
+    build_installer.stage_diarization_models_bake(ctx)
+
+    assert not out.exists()
+    assert ctx.diarization_models == {"baked": False, "reason": "no HF_TOKEN in the environment"}
+
+
+def test_models_bake_is_an_error_when_required_and_no_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(build_installer.sys, "platform", "win32")
+    _no_token(monkeypatch)
+    ctx = build_installer.BuildContext(models_out=tmp_path / "m", require_diarization_models=True)
+
+    with pytest.raises(build_installer.BuildInstallerError, match="HF_TOKEN"):
+        build_installer.stage_diarization_models_bake(ctx)
+
+
+def test_models_bake_is_windows_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(build_installer.sys, "platform", "darwin")
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: pytest.fail("no fetch"))
+    ctx = build_installer.BuildContext(models_out=tmp_path / "m", require_diarization_models=True)
+
+    build_installer.stage_diarization_models_bake(ctx)
+
+    assert ctx.diarization_models == {"baked": False, "reason": "Windows-only payload"}
+
+
+def test_models_bake_with_no_marker_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(build_installer.sys, "platform", "win32")
+    monkeypatch.setenv("HF_TOKEN", "hf_test")
+    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: "")
+    ctx = build_installer.BuildContext(models_out=tmp_path / "m")
+
+    with pytest.raises(build_installer.BuildInstallerError, match="ready marker"):
+        build_installer.stage_diarization_models_bake(ctx)
+
+
+def test_default_models_out_is_the_bundled_resources_models_dir() -> None:
+    assert build_installer.DEFAULT_MODELS_OUT == (
+        build_installer.APP_DIR / "src-tauri" / "resources" / "models" / "diarization"
+    )
+
+
+def test_the_dry_run_plan_names_the_models_bake(capsys: pytest.CaptureFixture[str]) -> None:
+    assert build_installer.main(["--dry-run", "--require-diarization-models"]) == 0
+    out = capsys.readouterr().out
+    assert "download-diarization-models" in out
+    assert "(required)" in out
