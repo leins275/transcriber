@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.21.0 — 2026-09-03
+
+### Features
+
+- Bake the pyannote speaker models into the installer
+
 ## 0.20.0 — 2026-09-03
 
 ### Features
