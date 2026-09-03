@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.22.2 — 2026-09-03
+
+### Bug fixes
+
+- Let pyannote 3 load models through huggingface_hub 1.x
+
 ## 0.22.1 — 2026-09-03
 
 ### Bug fixes
