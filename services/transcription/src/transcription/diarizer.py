@@ -33,6 +33,10 @@ _logger = logging.getLogger("transcription")
 
 DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 
+# What the stock pipeline's models were trained on; the recording is
+# resampled to it on decode.
+_PIPELINE_SAMPLE_RATE = 16000
+
 # Substrings of a raw exception message that indicate the model could not be
 # fetched/loaded (gated repo, missing token, no network, CUDA runtime), as
 # opposed to a genuine failure over the audio itself. Matched
@@ -218,6 +222,31 @@ class PyannoteDiarizer:
         )
         return pipeline
 
+    def _decode(self, audio_path: Path) -> Any:
+        """What the pipeline is handed: the recording decoded to a 16 kHz
+        mono waveform, not the file path.
+
+        pyannote's own reader is torchaudio, which on Windows has only the
+        `soundfile` backend (wav/flac/ogg) -- it cannot open the mp4/m4a/
+        mkv recordings the vault files. faster-whisper's decoder (PyAV, with
+        FFmpeg bundled in its wheel) is what the transcription itself used
+        on the same file, so the pass sees exactly the audio the words came
+        from. A decode failure is the recording's problem (`audio_decode`),
+        never the model's.
+        """
+        try:
+            import torch  # type: ignore[import-not-found,unused-ignore]  # noqa: PLC0415
+
+            from transcription.providers.audio import decode_samples  # noqa: PLC0415 - lazy
+
+            samples = decode_samples(audio_path, sample_rate=_PIPELINE_SAMPLE_RATE)
+        except Exception as exc:
+            raise ServiceError(
+                ErrorKind.AUDIO_DECODE, f"could not decode {audio_path.name}: {exc}"
+            ) from exc
+        waveform = torch.from_numpy(samples).reshape(1, -1)
+        return {"waveform": waveform, "sample_rate": _PIPELINE_SAMPLE_RATE, "uri": audio_path.stem}
+
     def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput:
         """Run diarization over the whole file; returns speaker turns plus,
         when the pipeline supports it, one voice embedding per speaker.
@@ -229,6 +258,8 @@ class PyannoteDiarizer:
         """
         cancel.raise_if_cancelled()
         pipeline = self._ensure_pipeline()
+        cancel.raise_if_cancelled()
+        audio = self._decode(audio_path)
         cancel.raise_if_cancelled()
 
         call_kwargs: dict[str, Any] = {}
@@ -243,9 +274,9 @@ class PyannoteDiarizer:
             # nothing. A hand-picked pipeline without the kwarg gets one
             # retry without it -- embeddings are a bonus, never a failure.
             try:
-                result = pipeline(str(audio_path), return_embeddings=True, **call_kwargs)
+                result = pipeline(audio, return_embeddings=True, **call_kwargs)
             except TypeError:
-                result = pipeline(str(audio_path), **call_kwargs)
+                result = pipeline(audio, **call_kwargs)
         except Exception as exc:
             kind = _classify_diarize_failure(exc)
             raise ServiceError(kind, f"diarization failed on {audio_path.name}: {exc}") from exc

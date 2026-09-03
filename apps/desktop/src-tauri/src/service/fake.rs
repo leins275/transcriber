@@ -732,7 +732,7 @@ impl TranscriptionService for FakeService {
             token_present: inner.hf_token_present,
             enabled: inner.diarize_enabled,
             gpu_present: true,
-            runtime_total_bytes: 2_700_000_000,
+            runtime_total_bytes: 3_000_000_000,
         })
     }
 

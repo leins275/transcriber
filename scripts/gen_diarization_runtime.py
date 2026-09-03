@@ -111,27 +111,30 @@ SDIST_ROOTS: dict[str, tuple[str, str]] = {
 # exact artifacts; the download verifies both.
 TORCH_CUDA_VARIANT = "cu126"
 CUDA_OVERRIDES: dict[str, Wheel] = {
+    # 2.8 is the last torch/torchaudio pair with the `torchaudio.info` /
+    # `AudioMetaData` / `list_audio_backends` API pyannote 3.x imports
+    # (removed in 2.9; pyproject's `diarization` extra pins the same bound).
     "torch": Wheel(
         name="torch",
-        version="2.13.0+cu126",
-        filename="torch-2.13.0+cu126-cp312-cp312-win_amd64.whl",
+        version="2.8.0+cu126",
+        filename="torch-2.8.0+cu126-cp312-cp312-win_amd64.whl",
         url=(
             "https://download.pytorch.org/whl/cu126/"
-            "torch-2.13.0%2Bcu126-cp312-cp312-win_amd64.whl"
+            "torch-2.8.0%2Bcu126-cp312-cp312-win_amd64.whl"
         ),
-        size=2594590371,
-        sha256="380081ea098bf2b9e727aa85205d94790d884d17c62df3bb00a4f6a1047010a2",
+        size=2915418348,
+        sha256="f6c79eac0018f9d131479ee1b7a68edb030619a316bfbc69275043aa4f338e4c",
     ),
     "torchaudio": Wheel(
         name="torchaudio",
-        version="2.11.0+cu126",
-        filename="torchaudio-2.11.0+cu126-cp312-cp312-win_amd64.whl",
+        version="2.8.0+cu126",
+        filename="torchaudio-2.8.0+cu126-cp312-cp312-win_amd64.whl",
         url=(
             "https://download.pytorch.org/whl/cu126/"
-            "torchaudio-2.11.0%2Bcu126-cp312-cp312-win_amd64.whl"
+            "torchaudio-2.8.0%2Bcu126-cp312-cp312-win_amd64.whl"
         ),
-        size=1519626,
-        sha256="ca5b7815c6952c79c65dce9a78eb96be8b73a8b291f82ca473812a910cdc9fbc",
+        size=4237058,
+        sha256="4098eadd03a8d283b229677d1e02114fcf6a8bc331941a08232499e43ae8a497",
     ),
 }
 

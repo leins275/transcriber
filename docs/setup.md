@@ -239,7 +239,7 @@ inside the installer (see "How the models get into the installer" below),
 so an operator never touches Hugging Face. Settings → **Speakers** walks
 through the rest, top to bottom; every step is skipped once done:
 
-1. **Enable speaker identification (~2.7 GB).** Fetches the pyannote +
+1. **Enable speaker identification (~3 GB).** Fetches the pyannote +
    CUDA torch runtime into `<install dir>\runtime\diarization\`. Needs an
    NVIDIA GPU (the row says so and offers nothing otherwise). Resumable
    and cancellable like the other downloads.

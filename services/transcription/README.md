@@ -222,7 +222,7 @@ Two prerequisites, both optional by design:
   diarization`, CPU torch from PyPI). The installed app never bakes it:
   `POST /v1/diarization-runtime/download` fetches the pinned wheel set --
   every package the extra adds on top of the baked environment, with
-  torch/torchaudio swapped for their `cu126` CUDA builds (~2.7 GB in all)
+  torch/torchaudio swapped for their `cu126` CUDA builds (~3 GB in all)
   -- into `<app_dir>/runtime/diarization/`, which the diarizer puts on
   `sys.path` before importing pyannote. The manifest
   (`diarization_runtime_packages.py`) is generated from `uv.lock` by

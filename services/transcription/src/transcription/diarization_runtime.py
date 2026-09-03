@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 import threading
 import time
@@ -93,9 +94,29 @@ def diarization_runtime_dir(app_dir: str | Path) -> Path:
     return Path(app_dir) / RUNTIME_DIRNAME / DIARIZATION_SUBDIR
 
 
-def is_diarization_runtime_present(app_dir: str | Path) -> bool:
-    """Whether a prior fetch's ``.ready`` marker exists."""
-    return (Path(app_dir) / RUNTIME_DIRNAME / _RUNTIME_MARKER_RELPATH).exists()
+def _manifest_versions(packages: tuple[CudaPackage, ...] = DIARIZATION_PACKAGES) -> dict[str, str]:
+    return {pkg.name: pkg.version for pkg in packages}
+
+
+def is_diarization_runtime_present(
+    app_dir: str | Path, packages: tuple[CudaPackage, ...] = DIARIZATION_PACKAGES
+) -> bool:
+    """Whether a prior fetch landed *this* manifest: the ``.ready`` marker
+    exists and records exactly the pinned package versions.
+
+    A build that re-pins the runtime (a torch bump, say) must not treat an
+    older tree as usable -- it would import a mix the pins were never
+    tested against -- so a stale marker reads as "absent", the Settings row
+    offers the fetch again, and the fetch replaces the tree.
+    """
+    marker = Path(app_dir) / RUNTIME_DIRNAME / _RUNTIME_MARKER_RELPATH
+    try:
+        if not marker.is_file():
+            return False
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("packages") == _manifest_versions(packages)
 
 
 def pyannote_importable() -> bool:
@@ -121,7 +142,7 @@ def activate_runtime(app_dir: str | Path) -> Path | None:
     the front position shadows nothing the service already imports.
     """
     runtime_dir = diarization_runtime_dir(app_dir)
-    if not (runtime_dir / ".ready").exists():
+    if not is_diarization_runtime_present(app_dir):
         return None
     entry = str(runtime_dir)
     if entry not in sys.path:
@@ -136,7 +157,19 @@ def activate_runtime(app_dir: str | Path) -> Path | None:
 def build_diarization_runtime_download(
     config: Config, *, transport: Transport | None = None
 ) -> CudaRuntimeDownload:
-    """The runtime fetch, on the same machinery as the STT CUDA runtime."""
+    """The runtime fetch, on the same machinery as the STT CUDA runtime.
+
+    A tree left by an older manifest (its marker names other versions) is
+    removed first: the download only ever *adds* files, and a torch of one
+    version over the DLLs of another is not a runtime anyone tested.
+    """
+    runtime_dir = diarization_runtime_dir(config.app_dir)
+    if runtime_dir.exists() and not is_diarization_runtime_present(config.app_dir):
+        logger.info(
+            "replacing a stale diarization runtime",
+            extra={"event": "diarization_runtime_replaced", "path": str(runtime_dir)},
+        )
+        shutil.rmtree(runtime_dir, ignore_errors=True)
     return CudaRuntimeDownload(
         app_dir=config.app_dir,
         allowed_roots=(Path(config.app_dir),),

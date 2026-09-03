@@ -47,6 +47,14 @@ cuda = [
 # failure is recorded in its `diarization` block).
 diarization = [
   "pyannote.audio>=3.1,<4",
+  # pyannote 3.x still imports `torchaudio.AudioMetaData` and calls
+  # `torchaudio.info`/`list_audio_backends`, all removed in torchaudio 2.9
+  # (whose `load` also needs torchcodec). torchaudio tracks torch's
+  # version, so both stay on the 2.8 series until pyannote 4 (torchcodec
+  # I/O) is adopted. The first-run runtime manifest mirrors these pins
+  # (scripts/gen_diarization_runtime.py asserts it).
+  "torch>=2.0,<2.9",
+  "torchaudio>=2.2,<2.9",
 ]
 # The built-in LLM runtime (summaries / action items / facts / reports), as
 # two mutually exclusive variants of the SAME pinned version -- the uv

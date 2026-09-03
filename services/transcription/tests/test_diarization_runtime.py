@@ -148,7 +148,7 @@ def test_whole_wheels_and_rooted_tarballs_extract_into_one_importable_tree(
     # The tarball's `src/` is the tree root; `setup.py` above it is skipped.
     assert (runtime / "antlr4" / "__init__.py").read_bytes() == b"# antlr"
     assert not (runtime / "setup.py").exists()
-    assert dr.is_diarization_runtime_present(app_dir)
+    assert dr.is_diarization_runtime_present(app_dir, packages)
 
 
 def test_activate_runtime_puts_a_fetched_tree_on_sys_path_once(
@@ -160,7 +160,7 @@ def test_activate_runtime_puts_a_fetched_tree_on_sys_path_once(
     assert dr.activate_runtime(app_dir) is None
     runtime = dr.diarization_runtime_dir(app_dir)
     runtime.mkdir(parents=True)
-    (runtime / ".ready").write_text("{}", encoding="utf-8")
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
     monkeypatch.setattr(sys, "path", list(sys.path))
 
     assert dr.activate_runtime(app_dir) == runtime
@@ -348,7 +348,7 @@ def test_status_reports_every_prerequisite(config: Config, monkeypatch: pytest.M
 
     runtime = dr.diarization_runtime_dir(config.app_dir)
     runtime.mkdir(parents=True)
-    (runtime / ".ready").write_text("{}", encoding="utf-8")
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
     assert dr.diarization_status(config)["runtime_present"] is True
 
 
@@ -453,3 +453,48 @@ def test_the_cli_fails_with_the_model_load_code_without_a_token(
 
     assert code == EXIT_CODES[ErrorKind.MODEL_LOAD]
     assert "huggingface.co/settings/tokens" in capsys.readouterr().err
+
+
+# -- runtime presence is tied to the manifest ----------------------------------
+
+
+def _marker_for(packages) -> str:  # noqa: ANN001
+    return json.dumps({"packages": {pkg.name: pkg.version for pkg in packages}})
+
+
+def test_a_runtime_from_another_manifest_reads_as_absent_and_is_replaced_on_fetch(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    runtime = dr.diarization_runtime_dir(app_dir)
+    runtime.mkdir(parents=True)
+    (runtime / "torch").mkdir()
+    (runtime / "torch" / "__init__.py").write_text("# old torch", encoding="utf-8")
+    (runtime / ".ready").write_text(
+        json.dumps({"packages": {"torch": "2.13.0+cu126"}}), encoding="utf-8"
+    )
+
+    assert not dr.is_diarization_runtime_present(app_dir)
+    assert dr.activate_runtime(app_dir) is None
+
+    config = Config(app_dir=app_dir, config_path=app_dir / "config.json")
+    download = dr.build_diarization_runtime_download(config, transport=FakeTransport({}))
+
+    # The stale tree is gone before a byte is fetched, so the new fetch
+    # never lands on top of the old torch.
+    assert not runtime.exists()
+    assert not download.already_present()
+
+
+def test_a_runtime_matching_the_manifest_is_present(tmp_path: Path) -> None:
+    app_dir = tmp_path / "app"
+    runtime = dr.diarization_runtime_dir(app_dir)
+    runtime.mkdir(parents=True)
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
+
+    assert dr.is_diarization_runtime_present(app_dir)
+    config = Config(app_dir=app_dir, config_path=app_dir / "config.json")
+    assert dr.build_diarization_runtime_download(
+        config, transport=FakeTransport({})
+    ).already_present()
+    assert runtime.exists()

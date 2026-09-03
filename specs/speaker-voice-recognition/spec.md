@@ -36,9 +36,14 @@ returning voice.
 ## Decisions (with the operator, 2026-09-03)
 
 - **Real voice recognition**, not a names-only roster.
-- **CUDA build only** (`torch 2.13.0+cu126` / `torchaudio 2.11.0+cu126`,
+- **CUDA build only** (`torch 2.8.0+cu126` / `torchaudio 2.8.0+cu126`,
   the same versions `uv.lock` pins from PyPI, so the rest of the extra's
-  closure stays valid): ~2.7 GB fetched on demand. Machines without an
+  closure stays valid; 2.8 is the last series with the `torchaudio.info` /
+  `AudioMetaData` API pyannote 3 imports -- the first real run on the
+  operator's machine failed on torchaudio 2.11 exactly there): ~3 GB
+  fetched on demand. The recording is decoded to a waveform by
+  faster-whisper's bundled FFmpeg before it reaches pyannote, since
+  torchaudio on Windows cannot open mp4/m4a. Machines without an
   NVIDIA GPU are not offered the feature, the same rule the STT CUDA
   runtime follows. `cu126` runs on every driver from the 525 series and on
   GPUs up to Ada (the operator's RTX 4070).
