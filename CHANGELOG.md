@@ -3,6 +3,13 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.22.3 — 2026-09-03
+
+### Bug fixes
+
+- **types**: Cover the torch import ignore in both environments
+- Unpickle pyannote 3's checkpoints on torch 2.6+
+
 ## 0.22.2 — 2026-09-03
 
 ### Bug fixes
