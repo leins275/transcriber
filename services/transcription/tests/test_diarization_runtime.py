@@ -498,3 +498,63 @@ def test_a_runtime_matching_the_manifest_is_present(tmp_path: Path) -> None:
         config, transport=FakeTransport({})
     ).already_present()
     assert runtime.exists()
+
+
+# -- pyannote 3 on huggingface_hub 1 -------------------------------------------
+
+
+def test_hub_compat_translates_use_auth_token_for_a_hub_that_dropped_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+
+    seen: list[dict[str, object]] = []
+
+    def modern(repo_id: str, filename: str, *, token: str | None = None, **kwargs: object) -> str:
+        seen.append({"repo_id": repo_id, "filename": filename, "token": token, **kwargs})
+        return "path"
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", modern)
+
+    assert dr.install_hub_compat() is True
+    assert dr.install_hub_compat() is True  # idempotent: wraps once
+    wrapped = huggingface_hub.hf_hub_download
+    assert wrapped is not modern
+
+    # What pyannote 3.x passes, on the name it imported.
+    assert wrapped("pyannote/x", "config.yaml", use_auth_token="hf_t", cache_dir="c") == "path"  # noqa: S106
+    assert wrapped("pyannote/y", "config.yaml", use_auth_token=None) == "path"
+    assert wrapped("pyannote/z", "config.yaml", token="hf_direct") == "path"  # noqa: S106
+    assert seen == [
+        {"repo_id": "pyannote/x", "filename": "config.yaml", "token": "hf_t", "cache_dir": "c"},
+        {"repo_id": "pyannote/y", "filename": "config.yaml", "token": None},
+        {"repo_id": "pyannote/z", "filename": "config.yaml", "token": "hf_direct"},
+    ]
+
+
+def test_hub_compat_is_a_no_op_on_a_hub_that_still_accepts_the_old_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import huggingface_hub
+
+    def legacy(repo_id: str, filename: str, *, use_auth_token: str | None = None) -> str:
+        return "legacy"
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", legacy)
+
+    assert dr.install_hub_compat() is False
+    assert huggingface_hub.hf_hub_download is legacy
+
+
+def test_the_real_hub_client_needs_the_shim() -> None:
+    """The service pins huggingface_hub 1.x, which no longer takes
+    `use_auth_token`; if this ever passes on its own the shim (and this
+    test) can go."""
+    import inspect
+
+    import huggingface_hub
+
+    original = getattr(
+        huggingface_hub.hf_hub_download, "__wrapped__", huggingface_hub.hf_hub_download
+    )
+    assert "use_auth_token" not in inspect.signature(original).parameters

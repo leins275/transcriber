@@ -24,6 +24,7 @@ from transcription.diarization_runtime import (
     activate_runtime,
     diarization_cache_dir,
     hub_offline,
+    install_hub_compat,
     is_diarization_model_present,
 )
 from transcription.errors import ErrorKind, ServiceError
@@ -141,6 +142,10 @@ class PyannoteDiarizer:
             # find pyannote at all.
             os.environ.setdefault("PYANNOTE_CACHE", str(diarization_cache_dir(self._app_dir)))
             activate_runtime(self._app_dir)
+        # pyannote 3.x binds `hf_hub_download` at import; the wrapper that
+        # translates its `use_auth_token=` for huggingface_hub 1.x must be
+        # in place first.
+        install_hub_compat()
         try:
             from pyannote.audio import (  # type: ignore[import-not-found]  # noqa: PLC0415
                 Pipeline,

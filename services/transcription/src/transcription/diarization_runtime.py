@@ -454,6 +454,41 @@ def build_diarization_model_download(
     )
 
 
+def install_hub_compat() -> bool:
+    """Let pyannote 3.x talk to huggingface_hub 1.x.
+
+    pyannote 3.x passes ``use_auth_token=`` to ``hf_hub_download`` (its
+    three call sites all do ``from huggingface_hub import hf_hub_download``
+    at import time); huggingface_hub 1.0 renamed the parameter to
+    ``token=`` and rejects the old one. The service ships hub 1.x for its
+    own model downloads, so the name pyannote binds is wrapped here to
+    translate the argument. Must run *before* pyannote is imported (it
+    binds the attribute then); idempotent; a no-op on a hub that still
+    accepts the old spelling. Returns whether a wrapper is in place.
+    """
+    import functools  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+
+    import huggingface_hub  # noqa: PLC0415 - lazy, like every hub call
+
+    original = huggingface_hub.hf_hub_download
+    if getattr(original, "_transcriber_hub_compat", False):
+        return True
+    if "use_auth_token" in inspect.signature(original).parameters:
+        return False
+
+    @functools.wraps(original)
+    def compat(*args: Any, **kwargs: Any) -> Any:
+        if "use_auth_token" in kwargs:
+            token = kwargs.pop("use_auth_token")
+            kwargs.setdefault("token", token)
+        return original(*args, **kwargs)
+
+    compat._transcriber_hub_compat = True  # type: ignore[attr-defined]
+    huggingface_hub.hf_hub_download = compat
+    return True
+
+
 @contextmanager
 def hub_offline(enabled: bool) -> Iterator[None]:
     """Force ``huggingface_hub`` into offline mode for the duration.
