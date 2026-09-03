@@ -60,16 +60,18 @@ returning voice.
   (`PYANNOTE_CACHE`) and pins `refs/main`; the diarizer then loads with
   the hub forced offline and without the token. The token is only ever
   used by the fetch.
-- **The models ship in the installer, the token does not** (operator
-  follow-up, same day: "bake my token"). Baking a personal token into a
-  distributed artifact would hand the operator's Hugging Face credentials
-  to anyone who downloads it; instead the release workflow spends the
-  `HF_TOKEN` repository secret at build time on the ~43 MB of snapshots
-  (`build_installer.py` `diarization_models_bake`, `--require-diarization-
-  models` on Windows so a missing secret fails the build) and the bundler
-  ships them to `<install dir>\models\diarization\`. The in-app token box
-  only appears on a build without them. Redistribution is within the
-  models' licenses (MIT; CC BY 4.0 with attribution in the service README).
+- **The models ship in the installer; no token exists anywhere** (operator
+  follow-up, same day: "bake my token", then "this token should not even
+  exist"). Baking a personal token into a distributed artifact would hand
+  the operator's Hugging Face credentials to anyone who downloads it, and
+  a CI secret still means a token to own and rotate; instead the ~32 MB of
+  trimmed snapshots (config, weights, license, card) are committed under
+  `apps/desktop/src-tauri/resources/models/diarization/` and bundled to
+  `<install dir>\models\diarization\`. `build_installer.py`'s
+  `diarization_models_check` stage fails a build whose committed tree
+  drifts from the service's pins. The in-app token box only appears on a
+  build without them. Redistribution is within the models' licenses (MIT;
+  CC BY 4.0 with attribution in the service README).
 
 ## What shipped
 

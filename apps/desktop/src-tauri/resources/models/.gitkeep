@@ -1,5 +1,0 @@
-# Placeholder so this directory exists on a clean checkout -- tauri-build's
-# bundleResources errors if the configured resource path is missing.
-# The release build (scripts/build_installer.py's diarization_models_bake
-# stage) fills diarization/ with the pinned pyannote speaker-model snapshots,
-# which the bundler ships to <install dir>\models\diarization\.

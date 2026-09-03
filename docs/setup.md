@@ -258,26 +258,30 @@ through the rest, top to bottom; every step is skipped once done:
 Per meeting, the overflow menu's **Identify speakers** runs the same job on
 demand (disabled, pointing here, until step 1 is done).
 
-**How the models get into the installer.** `pyannote/speaker-diarization-3.1`
-and `pyannote/segmentation-3.0` are gated on Hugging Face (free, MIT
-licensed; gating is a click-through). The release workflow holds a read
-token whose account has accepted both -- the `HF_TOKEN` repository secret
--- and `scripts/build_installer.py`'s `diarization_models_bake` stage spends
-it at build time: `transcription-service download-diarization-models --out
-apps/desktop/src-tauri/resources/models/diarization`, which the bundler
-ships to `<install dir>\models\diarization\` (`tauri.conf.json`
-`bundle.resources`). The token never reaches the artifact. On Windows the
-release passes `--require-diarization-models`, so a missing or expired
-secret fails the build instead of shipping an installer that asks for a
-token; rotate the secret with `gh secret set HF_TOKEN`. A build without the
-secret (a fork, a local `make installer`) still works: the Speakers row then
-shows a token box with a step-by-step walkthrough, and "Download speaker
-models" fetches them on that machine.
+**How the models get into the installer.** The three pinned pyannote
+snapshots (~32 MB; MIT and CC BY 4.0, attribution in the service README)
+are **committed** under `apps/desktop/src-tauri/resources/models/diarization/`
+in the hub-cache layout the service reads, and `tauri.conf.json`'s
+`bundle.resources` ships them to `<install dir>\models\diarization\`. No
+build, release or fork ever needs a Hugging Face token; the
+`diarization_models_check` stage of `scripts/build_installer.py` fails the
+build if the committed tree does not match the revisions pinned in
+`services/transcription/src/transcription/diarization_runtime.py`. To
+re-pin: change the revisions there, then refresh the tree once with a read
+token whose account accepted the two gated repos' terms --
+
+```
+HF_TOKEN=hf_... uv run --directory services/transcription transcription-service download-diarization-models --out apps/desktop/src-tauri/resources/models/diarization
+```
+
+-- and commit both. The token box in the Speakers row only ever appears on
+a build without the committed models (i.e. never on a release).
 
 Dev loop: `uv sync --extra diarization` in `services/transcription/` gives
 the service CPU torch from PyPI instead (slow, but no fetch); the status
-row then reports the runtime as present. A dev build has no baked models,
-so paste a token there once (or run the CLI above with `HF_TOKEN` set).
+row then reports the runtime as present. `tauri dev` does not bundle
+resources, so point the service at the committed tree
+(`TRANSCRIBER_APP_DIR`'s `models\diarization`) or paste a token once.
 
 ## Known gaps
 

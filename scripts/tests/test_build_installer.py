@@ -39,7 +39,7 @@ def test_stage_order_matches_the_documented_pipeline() -> None:
         "version_check",
         "lock_check",
         "pyenv_bake",
-        "diarization_models_bake",
+        "diarization_models_check",
         "tauri_build",
         "collect",
         "gate",
@@ -479,90 +479,114 @@ def test_stage_gate_raises_build_installer_error_when_oversized(tmp_path: Path) 
         build_installer.stage_gate(ctx)
 
 
-# --- speaker-models bake -------------------------------------------------
+# --- committed speaker models check -------------------------------------
 
 
-def _no_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in build_installer.HF_TOKEN_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
+PINS_SOURCE = (
+    "DIARIZATION_MODEL_REPOS = (\n"
+    "    ModelRepo(\n"
+    '        repo_id="pyannote/a",\n'
+    '        revision="' + "a" * 40 + '",\n'
+    "        gated=True,\n"
+    "    ),\n"
+    "    ModelRepo(\n"
+    '        repo_id="pyannote/b",\n'
+    '        revision="' + "b" * 40 + '",\n'
+    "        gated=False,\n"
+    "    ),\n"
+    ")\n"
+)
+PINS = {"pyannote/a": "a" * 40, "pyannote/b": "b" * 40}
 
 
-def test_models_bake_runs_the_service_cli_and_records_the_pins(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(build_installer.sys, "platform", "win32")
-    monkeypatch.setenv("HF_TOKEN", "hf_test")
-    out = tmp_path / "resources" / "models" / "diarization"
-    calls: list[list[str]] = []
+def _write_models(root: Path, repos: dict[str, str], *, marker_repos: dict[str, str] | None = None) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".ready").write_text(
+        json.dumps({"repos": marker_repos if marker_repos is not None else repos}), encoding="utf-8"
+    )
+    for repo, revision in repos.items():
+        folder = root / ("models--" + repo.replace("/", "--"))
+        (folder / "refs").mkdir(parents=True)
+        (folder / "refs" / "main").write_text(revision, encoding="utf-8")
+        snapshot = folder / "snapshots" / revision
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.yaml").write_text("pipeline: fake", encoding="utf-8")
+        (snapshot / "pytorch_model.bin").write_bytes(b"x" * 10)
+    return root
 
-    def fake_run(cmd, cwd=None):  # noqa: ANN001
-        calls.append([str(c) for c in cmd])
-        out.mkdir(parents=True)
-        (out / ".ready").write_text(json.dumps({"repos": {"pyannote/x": "abc"}}), encoding="utf-8")
-        (out / "blob").write_bytes(b"12345")
-        return ""
 
-    monkeypatch.setattr(build_installer, "_run", fake_run)
-    ctx = build_installer.BuildContext(models_out=out)
+def _pins_file(tmp_path: Path) -> Path:
+    source = tmp_path / "diarization_runtime.py"
+    source.write_text(PINS_SOURCE, encoding="utf-8")
+    return source
 
-    build_installer.stage_diarization_models_bake(ctx)
 
-    assert len(calls) == 1
-    assert calls[0][-4:] == ["transcription-service", "download-diarization-models", "--out", str(out)]
-    # The token travels through the environment, never argv.
-    assert not any("hf_test" in part for part in calls[0])
-    assert ctx.diarization_models == {
-        "baked": True,
-        "repos": {"pyannote/x": "abc"},
-        "total_bytes": 5 + len(json.dumps({"repos": {"pyannote/x": "abc"}})),
+def test_pinned_revisions_are_read_off_the_service_source() -> None:
+    assert build_installer.pinned_model_revisions(build_installer.DIARIZATION_RUNTIME_SOURCE) == {
+        "pyannote/speaker-diarization-3.1": "84fd25912480287da0247647c3d2b4853cb3ee5d",
+        "pyannote/segmentation-3.0": "e66f3d3b9eb0873085418a7b813d3b369bf160bb",
+        "pyannote/wespeaker-voxceleb-resnet34-LM": "837717ddb9ff5507820346191109dc79c958d614",
     }
 
 
-def test_models_bake_without_a_token_skips_and_clears_a_stale_tree(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(build_installer.sys, "platform", "win32")
-    _no_token(monkeypatch)
-    out = tmp_path / "models" / "diarization"
-    out.mkdir(parents=True)
-    (out / "stale").write_text("yesterday's snapshot", encoding="utf-8")
-    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: pytest.fail("no fetch"))
-    ctx = build_installer.BuildContext(models_out=out)
+def test_the_committed_models_match_the_service_pins() -> None:
+    """The real tree, the real pins: a re-pin without a refresh (or the
+    reverse) fails here before it can fail a release build."""
+    ctx = build_installer.BuildContext()
 
-    build_installer.stage_diarization_models_bake(ctx)
+    build_installer.stage_diarization_models_check(ctx)
 
-    assert not out.exists()
-    assert ctx.diarization_models == {"baked": False, "reason": "no HF_TOKEN in the environment"}
+    assert ctx.diarization_models is not None
+    assert ctx.diarization_models["baked"] is True
+    assert set(ctx.diarization_models["repos"]) == set(
+        build_installer.pinned_model_revisions(build_installer.DIARIZATION_RUNTIME_SOURCE)
+    )
+    assert ctx.diarization_models["total_bytes"] > 30_000_000
 
 
-def test_models_bake_is_an_error_when_required_and_no_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(build_installer.sys, "platform", "win32")
-    _no_token(monkeypatch)
-    ctx = build_installer.BuildContext(models_out=tmp_path / "m", require_diarization_models=True)
+def test_models_check_accepts_a_matching_tree_and_records_it(tmp_path: Path) -> None:
+    ctx = build_installer.BuildContext(
+        models_out=_write_models(tmp_path / "m", PINS), pins_source=_pins_file(tmp_path)
+    )
 
-    with pytest.raises(build_installer.BuildInstallerError, match="HF_TOKEN"):
-        build_installer.stage_diarization_models_bake(ctx)
+    build_installer.stage_diarization_models_check(ctx)
 
-
-def test_models_bake_is_windows_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(build_installer.sys, "platform", "darwin")
-    monkeypatch.setenv("HF_TOKEN", "hf_test")
-    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: pytest.fail("no fetch"))
-    ctx = build_installer.BuildContext(models_out=tmp_path / "m", require_diarization_models=True)
-
-    build_installer.stage_diarization_models_bake(ctx)
-
-    assert ctx.diarization_models == {"baked": False, "reason": "Windows-only payload"}
+    assert ctx.diarization_models == {"baked": True, "repos": PINS, "total_bytes": ctx.diarization_models["total_bytes"]}
+    assert ctx.diarization_models["total_bytes"] > 0
 
 
-def test_models_bake_with_no_marker_is_an_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(build_installer.sys, "platform", "win32")
-    monkeypatch.setenv("HF_TOKEN", "hf_test")
-    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: "")
-    ctx = build_installer.BuildContext(models_out=tmp_path / "m")
+def test_models_check_fails_when_the_tree_is_missing(tmp_path: Path) -> None:
+    ctx = build_installer.BuildContext(models_out=tmp_path / "absent", pins_source=_pins_file(tmp_path))
 
-    with pytest.raises(build_installer.BuildInstallerError, match="ready marker"):
-        build_installer.stage_diarization_models_bake(ctx)
+    with pytest.raises(build_installer.BuildInstallerError, match="download-diarization-models"):
+        build_installer.stage_diarization_models_check(ctx)
+
+
+def test_models_check_fails_on_a_re_pin_without_a_refresh(tmp_path: Path) -> None:
+    stale = {"pyannote/a": "c" * 40, "pyannote/b": "b" * 40}
+    ctx = build_installer.BuildContext(
+        models_out=_write_models(tmp_path / "m", stale), pins_source=_pins_file(tmp_path)
+    )
+
+    with pytest.raises(build_installer.BuildInstallerError, match="refresh the committed snapshots"):
+        build_installer.stage_diarization_models_check(ctx)
+
+
+def test_models_check_fails_on_an_incomplete_snapshot(tmp_path: Path) -> None:
+    root = _write_models(tmp_path / "m", PINS)
+    (root / "models--pyannote--b" / "snapshots" / ("b" * 40) / "config.yaml").unlink()
+    ctx = build_installer.BuildContext(models_out=root, pins_source=_pins_file(tmp_path))
+
+    with pytest.raises(build_installer.BuildInstallerError, match="no config.yaml"):
+        build_installer.stage_diarization_models_check(ctx)
+
+
+def test_models_check_never_runs_a_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(build_installer, "_run", lambda cmd, cwd=None: pytest.fail("no subprocess"))
+    ctx = build_installer.BuildContext(
+        models_out=_write_models(tmp_path / "m", PINS), pins_source=_pins_file(tmp_path)
+    )
+    build_installer.stage_diarization_models_check(ctx)
 
 
 def test_default_models_out_is_the_bundled_resources_models_dir() -> None:
@@ -571,8 +595,6 @@ def test_default_models_out_is_the_bundled_resources_models_dir() -> None:
     )
 
 
-def test_the_dry_run_plan_names_the_models_bake(capsys: pytest.CaptureFixture[str]) -> None:
-    assert build_installer.main(["--dry-run", "--require-diarization-models"]) == 0
-    out = capsys.readouterr().out
-    assert "download-diarization-models" in out
-    assert "(required)" in out
+def test_the_dry_run_plan_names_the_models_check(capsys: pytest.CaptureFixture[str]) -> None:
+    assert build_installer.main(["--dry-run"]) == 0
+    assert "committed speaker models" in capsys.readouterr().out

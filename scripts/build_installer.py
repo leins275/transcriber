@@ -48,7 +48,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
+import re
 import shutil
 import subprocess
 import sys
@@ -156,21 +156,23 @@ STAGES: list[Stage] = [
     Stage("pyenv_bake", 3, "stage_pyenv_bake"),
     # Added after the six above shipped; takes the next free exit code
     # rather than renumbering the ones callers already know.
-    Stage("diarization_models_bake", 7, "stage_diarization_models_bake"),
+    Stage("diarization_models_check", 7, "stage_diarization_models_check"),
     Stage("tauri_build", 4, "stage_tauri_build"),
     Stage("collect", 5, "stage_collect"),
     Stage("gate", 6, "stage_gate"),
 ]
 
-# The pinned pyannote speaker-model snapshots (~30 MB) are baked into the
-# installer so an operator never handles a Hugging Face token: the release
-# workflow holds one as the `HF_TOKEN` repository secret and this stage
-# spends it here, at build time, on the gated downloads. tauri.conf.json
-# maps `resources/models/` -> `models/`, so the tree lands at
-# `<install dir>\models\diarization\` -- exactly where the service's
-# `diarization_cache_dir` looks (`transcription.diarization_runtime`).
+# The pinned pyannote speaker-model snapshots (~32 MB, MIT / CC BY 4.0)
+# are *committed* to the repository, so no build ever needs a Hugging Face
+# token: tauri.conf.json maps `resources/models/` -> `models/`, and the
+# tree lands at `<install dir>\models\diarization\` -- exactly where the
+# service's `diarization_cache_dir` looks (`transcription.diarization_runtime`).
+# Refreshing them (a re-pin) is a one-off with a token:
+#   HF_TOKEN=... uv run --directory services/transcription \
+#     transcription-service download-diarization-models --out <this dir>
+# This stage only checks that what is committed matches the service's pins.
 DEFAULT_MODELS_OUT = APP_DIR / "src-tauri" / "resources" / "models" / "diarization"
-HF_TOKEN_ENV_VARS: tuple[str, ...] = ("TRANSCRIBER_HF_TOKEN", "HF_TOKEN")
+DIARIZATION_RUNTIME_SOURCE = SERVICE_DIR / "src" / "transcription" / "diarization_runtime.py"
 
 
 @dataclass
@@ -191,11 +193,10 @@ class BuildContext:
     # explicitly for a dev/CI build that still wants it baked in.
     extras: tuple[str, ...] = ()
     dry_run: bool = False
-    # Where the speaker-model snapshots are baked (see DEFAULT_MODELS_OUT),
-    # and whether a build without a token is an error (the release
-    # workflow) or merely a build without the models (a fork, a dev box).
+    # Where the committed speaker-model snapshots live (DEFAULT_MODELS_OUT)
+    # and which source file pins their revisions.
     models_out: Path = field(default_factory=lambda: DEFAULT_MODELS_OUT)
-    require_diarization_models: bool = False
+    pins_source: Path = field(default_factory=lambda: DIARIZATION_RUNTIME_SOURCE)
 
     # populated as stages run
     pyenv_manifest: dict | None = None
@@ -435,72 +436,59 @@ def _restore_gitkeep(pyenv_out: Path) -> None:
         gitkeep.write_text(GITKEEP_CONTENTS, encoding="utf-8", newline="\n")
 
 
-def _hf_token_from_env() -> str | None:
-    for name in HF_TOKEN_ENV_VARS:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    return None
+_PINNED_REPO = re.compile(
+    r'repo_id="(?P<repo>[^"]+)",\s*revision="(?P<revision>[0-9a-f]{40})"', re.MULTILINE
+)
 
 
-def stage_diarization_models_bake(ctx: BuildContext) -> None:
-    """Bake the pinned pyannote snapshots into the bundle's resources.
+def pinned_model_revisions(source: Path) -> dict[str, str]:
+    """`repo id -> revision` as the service pins them
+    (`DIARIZATION_MODEL_REPOS` in `diarization_runtime.py`). Read off the
+    source text rather than imported: this script runs outside the
+    service's environment, and the pins are literals by design."""
+    text = source.read_text(encoding="utf-8")
+    return {m.group("repo"): m.group("revision") for m in _PINNED_REPO.finditer(text)}
 
-    Windows-only (the diarization runtime is a CUDA build, so the feature is
-    never offered elsewhere). Runs the service's own
-    `download-diarization-models` CLI with `--out` at `ctx.models_out`; the
-    token reaches it through the environment (`HF_TOKEN`), never argv. A
-    stale tree is removed first so a failed or skipped bake can never ship
-    yesterday's snapshots under today's pins. Without a token the stage is
-    a no-op unless `require_diarization_models` is set -- the release
-    workflow sets it, so a missing secret fails the release instead of
-    quietly shipping an installer that asks the operator for a token.
+
+def stage_diarization_models_check(ctx: BuildContext) -> None:
+    """Verify the committed speaker-model snapshots before bundling them.
+
+    The tree under `ctx.models_out` is tracked in git and shipped as-is
+    (see DEFAULT_MODELS_OUT); this stage never downloads anything. It
+    fails the build when the tree is missing, when its `.ready` marker
+    does not name exactly the repos and revisions the service pins, or
+    when a pinned snapshot lacks its `config.yaml` -- i.e. whenever
+    someone re-pinned the service without refreshing the committed models
+    (or the other way round), which would ship an installer whose speaker
+    identification cannot load.
     """
-    if ctx.models_out.exists():
-        shutil.rmtree(ctx.models_out)
-
-    if sys.platform != "win32":
-        ctx.diarization_models = {"baked": False, "reason": "Windows-only payload"}
-        return
-
-    if _hf_token_from_env() is None:
-        if ctx.require_diarization_models:
-            raise BuildInstallerError(
-                "the speaker-models bake needs a Hugging Face read token in HF_TOKEN "
-                "(or TRANSCRIBER_HF_TOKEN); the release workflow sets it from the "
-                "HF_TOKEN repository secret"
-            )
-        print(
-            "build_installer: [diarization_models_bake] no HF_TOKEN in the environment; "
-            "building without the speaker models (operators will be asked for a token)",
-            file=sys.stderr,
-        )
-        ctx.diarization_models = {"baked": False, "reason": "no HF_TOKEN in the environment"}
-        return
-
-    _run(
-        [
-            "uv",
-            "run",
-            "--directory",
-            str(SERVICE_DIR),
-            "transcription-service",
-            "download-diarization-models",
-            "--out",
-            str(ctx.models_out),
-        ]
-    )
+    pins = pinned_model_revisions(ctx.pins_source)
+    if not pins:
+        raise BuildInstallerError(f"no pinned model repos found in {ctx.pins_source}")
     marker = ctx.models_out / ".ready"
     try:
-        repos = json.loads(marker.read_text(encoding="utf-8")).get("repos") or {}
-    except (OSError, json.JSONDecodeError):
-        repos = {}
-    if not repos:
+        recorded = json.loads(marker.read_text(encoding="utf-8")).get("repos") or {}
+    except (OSError, json.JSONDecodeError) as exc:
         raise BuildInstallerError(
-            f"speaker-models bake left no .ready marker under {ctx.models_out}"
+            f"the committed speaker models are missing or unreadable ({marker}): {exc}; "
+            "refresh them with `transcription-service download-diarization-models --out "
+            f"{ctx.models_out}` (needs HF_TOKEN once) and commit the result"
+        ) from exc
+    if recorded != pins:
+        raise BuildInstallerError(
+            f"the committed speaker models ({marker}) record {recorded}, but the service pins "
+            f"{pins}; refresh the committed snapshots and commit them alongside the re-pin"
         )
+    for repo, revision in pins.items():
+        folder = "models--" + repo.replace("/", "--")
+        snapshot = ctx.models_out / folder / "snapshots" / revision
+        if not (snapshot / "config.yaml").is_file():
+            raise BuildInstallerError(f"pinned snapshot incomplete: {snapshot} has no config.yaml")
+        ref = ctx.models_out / folder / "refs" / "main"
+        if not ref.is_file() or ref.read_text(encoding="utf-8").strip() != revision:
+            raise BuildInstallerError(f"{ref} must pin refs/main to {revision}")
     total_bytes = sum(p.stat().st_size for p in ctx.models_out.rglob("*") if p.is_file())
-    ctx.diarization_models = {"baked": True, "repos": repos, "total_bytes": total_bytes}
+    ctx.diarization_models = {"baked": True, "repos": pins, "total_bytes": total_bytes}
 
 
 def _tauri_build_args() -> list[str]:
@@ -588,9 +576,8 @@ def describe_plan(ctx: BuildContext) -> list[str]:
         f"uv run {SCRIPTS_DIR / 'verify_locks.py'} --check",
         f"uv run {SCRIPTS_DIR / 'build_pyenv.py'} --out {ctx.pyenv_out}"
         + (f" {extras_flags}" if extras_flags else ""),
-        f"uv run --directory {SERVICE_DIR} transcription-service download-diarization-models "
-        f"--out {ctx.models_out}"
-        + (" (required)" if ctx.require_diarization_models else " (skipped without HF_TOKEN)"),
+        f"check: committed speaker models under {ctx.models_out} match the pins in "
+        f"{ctx.pins_source}",
         f"npm --prefix {APP_DIR} ci",
         f"npm --prefix {APP_DIR} run tauri -- {' '.join(_tauri_build_args())} -- --locked",
         f"collect -> {ctx.dist_dir}/{sync_version.artifact_name('<version>')} (+ .sha256, build-manifest.json)",
@@ -616,15 +603,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--dist-dir", type=Path, default=DEFAULT_DIST_DIR)
     parser.add_argument("--pyenv-out", type=Path, default=None)
     parser.add_argument("--models-out", type=Path, default=None)
-    parser.add_argument(
-        "--require-diarization-models",
-        action="store_true",
-        help=(
-            "fail the build when the speaker models cannot be baked (no HF_TOKEN); "
-            "the release workflow passes this so a missing secret never ships an "
-            "installer that asks the operator for a token"
-        ),
-    )
     return parser.parse_args(argv)
 
 
@@ -638,7 +616,6 @@ def main(argv: list[str] | None = None) -> int:
         extras=extras,
         dry_run=args.dry_run,
         models_out=args.models_out if args.models_out is not None else DEFAULT_MODELS_OUT,
-        require_diarization_models=args.require_diarization_models,
     )
 
     if ctx.dry_run:

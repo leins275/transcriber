@@ -239,14 +239,14 @@ Two prerequisites, both optional by design:
   snapshot; from then on the pipeline loads **offline** (the hub is never
   consulted and the token is not needed at load time), so the pin holds.
   A gated refusal names the repo whose terms to accept. **The installer
-  ships these snapshots**: the release build runs that CLI with the
-  workflow's `HF_TOKEN` secret and bundles the result into
-  `<install dir>\models\diarization\`, so an installed app's operator never
-  handles a token (`docs/setup.md`). Without the fetch (a dev
-  environment), the diarizer downloads on first use with the token, as
-  before. Alternatively point `diarization_model_path` at a local snapshot
-  directory (containing the pipeline's `config.yaml`) for fully offline
-  loads.
+  ships these snapshots**: they are committed to the repository
+  (`apps/desktop/src-tauri/resources/models/diarization/`, produced by that
+  CLI once) and bundled into `<install dir>\models\diarization\`, so an
+  installed app's operator never handles a token and no build needs one
+  (`docs/setup.md`). Without them (a dev environment), the diarizer
+  downloads on first use with the token, as before. Alternatively point
+  `diarization_model_path` at a local snapshot directory (containing the
+  pipeline's `config.yaml`) for fully offline loads.
 
 `GET /v1/diarization/status` reports which prerequisites are met
 (`runtime_present`, `model_present`, `token_present`, `gpu_present` -- the

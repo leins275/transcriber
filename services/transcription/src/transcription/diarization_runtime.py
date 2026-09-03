@@ -232,6 +232,19 @@ def _pin_main_ref(cache_dir: Path, repo_id: str, revision: str) -> None:
 SnapshotFn = Callable[[str, str, Path, str | None], None]
 
 
+# What the pipeline actually loads from each repo (plus the license and
+# card, which travel with any redistribution): the benchmark tables, demo
+# images and hub CI files in the repos are not worth the bytes -- these
+# snapshots are also committed to the repository and shipped in the
+# installer, so every megabyte counts twice.
+SNAPSHOT_ALLOW_PATTERNS: tuple[str, ...] = (
+    "config.yaml",
+    "pytorch_model.bin",
+    "LICENSE",
+    "README.md",
+)
+
+
 def _hub_snapshot(repo_id: str, revision: str, cache_dir: Path, token: str | None) -> None:
     from huggingface_hub import snapshot_download  # noqa: PLC0415 - lazy, like every hub call
 
@@ -241,6 +254,7 @@ def _hub_snapshot(repo_id: str, revision: str, cache_dir: Path, token: str | Non
         cache_dir=str(cache_dir),
         token=token,
         library_name="pyannote",
+        allow_patterns=list(SNAPSHOT_ALLOW_PATTERNS),
     )
 
 

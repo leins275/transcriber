@@ -1,0 +1,101 @@
+{
+ "format_version": 1,
+ "files": {
+  ".gitattributes": {
+   "size": 1519,
+   "blob_id": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+  },
+  ".github/workflows/sync_to_hub.yaml": {
+   "size": 467,
+   "blob_id": "b0192054281691ad01d08d6976a03793e73262fa"
+  },
+  "README.md": {
+   "size": 10985,
+   "blob_id": "5a56a40d6b4c14491f009b82924b78ccef6863b4"
+  },
+  "config.yaml": {
+   "size": 469,
+   "blob_id": "5402e3ca79b6cfa5b0ec283eed920cafe45ee39b"
+  },
+  "handler.py": {
+   "size": 2167,
+   "blob_id": "102ad992809fb66b9152ce592fdcd3d8789224e8"
+  },
+  "reproducible_research/AISHELL.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 3359,
+   "blob_id": "f1e9ee796638c06b46a9aad94733052b0ef191a3"
+  },
+  "reproducible_research/AISHELL.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 624408,
+   "blob_id": "b458d62bc074a370ca3520c53e0838a450df6f47"
+  },
+  "reproducible_research/AMI-SDM.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 2699,
+   "blob_id": "54b1f52234b7bd9cd9cd348514c56f0928a8021a"
+  },
+  "reproducible_research/AMI-SDM.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 572959,
+   "blob_id": "5aa58fa77c4fb4dc26dec297217452daaaee7e55"
+  },
+  "reproducible_research/AMI.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 2699,
+   "blob_id": "4e31b2bbc84d32c5b5b0147507f107ee8669271f"
+  },
+  "reproducible_research/AMI.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 572817,
+   "blob_id": "1cb95aa9eebde022720bd0858fe6974c3b9d6828"
+  },
+  "reproducible_research/AVA-AVD.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 8235,
+   "blob_id": "dfe210445d26487de8a2aeeef831824366c87482"
+  },
+  "reproducible_research/AVA-AVD.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 365238,
+   "blob_id": "2d441d807ec442ee7fd0626fb9f18507ec2f2970"
+  },
+  "reproducible_research/AliMeeting.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 3479,
+   "blob_id": "b12a613164ff2ef3cf9ce1d822fd07d554b5c006"
+  },
+  "reproducible_research/AliMeeting.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 940136,
+   "blob_id": "32a3a8c4a10a0856fa92645bdbd9795b71db1d66"
+  },
+  "reproducible_research/DIHARD.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 37082,
+   "blob_id": "6886e0bc0069eafbf1fd1f030ffec3a3e036103f"
+  },
+  "reproducible_research/DIHARD.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 3600418,
+   "blob_id": "67d4f2607ac45878643d2b443ec69e633214f416"
+  },
+  "reproducible_research/MSDWILD.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 65701,
+   "blob_id": "bf9d96ee74568054c5733c8cb0af3010d8b6b69f"
+  },
+  "reproducible_research/MSDWILD.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 648416,
+   "blob_id": "a89445b92012106b83b0a4fa78fa7524c0621a5c"
+  },
+  "reproducible_research/REPERE.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 10724,
+   "blob_id": "e01c411cce4dfce2d2f1d22439b70a5ee9c27a5c"
+  },
+  "reproducible_research/REPERE.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 1441591,
+   "blob_id": "78bb100f741d8f09cf05a3bcb49ff26690b11b23"
+  },
+  "reproducible_research/VoxConverse.SpeakerDiarization.Benchmark.test.eval": {
+   "size": 31859,
+   "blob_id": "a5a81620d85a5c4be378b2fa40410028d1269d7d"
+  },
+  "reproducible_research/VoxConverse.SpeakerDiarization.Benchmark.test.rttm": {
+   "size": 1979557,
+   "blob_id": "c1f3f7ceb3d4344829836f3491892809408d2f4e"
+  },
+  "requirements.txt": {
+   "size": 21,
+   "blob_id": "1e61b2b23fcd0444f969679396689321d7d6fcc1"
+  }
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "format_version": 1,
+ "files": {
+  ".gitattributes": {
+   "size": 1519,
+   "blob_id": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+  },
+  "README.md": {
+   "size": 3319,
+   "blob_id": "6b8a7afcd16051587687a13e556a8b0ee587f5ad"
+  },
+  "config.yaml": {
+   "size": 221,
+   "blob_id": "f6508f3ba9be494115516d34cab74943714b9460"
+  },
+  "pytorch_model.bin": {
+   "size": 26645418,
+   "blob_id": "8ac248f7e8333ec1d22c55c5e2af4ac8d15596e3",
+   "lfs_sha256": "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56",
+   "lfs_size": 26645418,
+   "xet_hash": "dbae20d3c4f8fc381db5d514a7d4069c87d09feba054c2b248f7333b073e08cd"
+  }
+ }
+}
