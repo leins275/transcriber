@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.22.1 — 2026-09-03
+
+### Bug fixes
+
+- Pin the diarization runtime to torch 2.8 and decode recordings with FFmpeg
+
 ## 0.22.0 — 2026-09-03
 
 ### Bug fixes
