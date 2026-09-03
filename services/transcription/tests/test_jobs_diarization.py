@@ -18,7 +18,8 @@ from fakes import FakeDiarizer, FakeProvider
 
 from transcription import providers
 from transcription.config import Config
-from transcription.errors import ErrorKind
+from transcription.diarization import SpeakerTurn
+from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import TERMINAL_STATUSES, JobManager
 from transcription.ledger import Ledger
 
@@ -306,5 +307,185 @@ async def test_transcription_progress_is_scaled_below_one_while_diarization_rema
         # Every observation before terminal is either scaled transcription
         # progress (<= 0.9) or the final 1.0 written at success.
         assert all(fraction <= 0.9 or fraction == 1.0 for fraction in seen)
+    finally:
+        await manager.aclose()
+
+
+# -- the `diarize` job: speakers for an already-transcribed meeting ------------
+
+
+def _write_filed_meeting(root: Path, *, with_source: bool = True) -> Path:
+    """A meeting folder the way the vault leaves it after an undiarized
+    transcription: `source.<ext>`, a two-segment `transcript.json` and the
+    operator's hand-made `speakers.json`."""
+    meeting = root / "ACME" / "260901 - Planning"
+    meeting.mkdir(parents=True)
+    if with_source:
+        (meeting / "source.wav").write_bytes(b"fake-audio-bytes")
+    doc = {
+        "schema_version": 1,
+        "created_at": "2026-09-01T10:00:00+00:00",
+        "source": {
+            "path": str(meeting / "source.wav"),
+            "filename": "source.wav",
+            "duration_sec": 1.0,
+        },
+        "provider": {"name": "fake", "model": "fake-model", "device": "cpu", "compute_type": ""},
+        "language": "en",
+        "language_probability": 0.9,
+        "text": "hello world",
+        "segments": [
+            {"id": 0, "start": 0.0, "end": 0.5, "text": "hello "},
+            {"id": 1, "start": 0.5, "end": 1.0, "text": "world"},
+        ],
+        "stats": {"elapsed_sec": 0.1, "realtime_factor": 0.1, "cost_usd": None, "currency": None},
+    }
+    (meeting / "transcript.json").write_text(json.dumps(doc), encoding="utf-8")
+    (meeting / "speakers.json").write_text(
+        json.dumps({"schema_version": 1, "assignments": {"0": "Anna"}}, indent=2),
+        encoding="utf-8",
+    )
+    return meeting
+
+
+async def _run_diarize(manager: JobManager, meeting: Path) -> str:
+    await manager.start()
+    job_id = await manager.submit(
+        job_type="diarize", input_path=str(meeting), output_dir=str(meeting)
+    )
+    await _wait_until_terminal(manager, job_id)
+    return job_id
+
+
+async def test_a_diarize_job_labels_an_existing_transcript_and_keeps_its_ids(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    speakers_before = (meeting / "speakers.json").read_bytes()
+    diarizer = FakeDiarizer(
+        embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]},
+        turns=[
+            # A word-less transcript: the segment envelope votes. The first
+            # turn straddles both segments, so a splitting pass would have
+            # cut segment 1 -- this job must not.
+            SpeakerTurn(start=0.0, end=0.6, speaker="SPEAKER_00"),
+            SpeakerTurn(start=0.6, end=1.0, speaker="SPEAKER_01"),
+        ],
+    )
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        job_id = await _run_diarize(manager, meeting)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        assert job.job_type == "diarize"
+        assert [called.name for called in diarizer.calls] == ["source.wav"]
+
+        doc = _read_transcript(meeting)
+        assert [seg["id"] for seg in doc["segments"]] == [0, 1]
+        assert [seg["speaker"] for seg in doc["segments"]] == ["Speaker 1", "Speaker 2"]
+        assert doc["diarization"]["status"] == "succeeded"
+        assert doc["diarization"]["speaker_embeddings"] == {
+            "Speaker 1": [1.0, 0.0],
+            "Speaker 2": [0.0, 1.0],
+        }
+        # Everything else in the document survives the rewrite.
+        assert doc["text"] == "hello world"
+        assert doc["created_at"] == "2026-09-01T10:00:00+00:00"
+        # The operator's file is not the job's to touch.
+        assert (meeting / "speakers.json").read_bytes() == speakers_before
+        result = json.loads(job.result_json or "{}")
+        assert result["speaker_count"] == 2
+        assert result["embeddings"] == 2
+    finally:
+        await manager.aclose()
+
+
+async def test_a_diarize_job_needs_a_transcript_and_a_recording(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: FakeDiarizer())
+    try:
+        empty = tmp_app_dir / "ACME" / "260902 - Empty"
+        empty.mkdir(parents=True)
+        with pytest.raises(ServiceError) as refused:
+            await manager.submit(job_type="diarize", input_path=str(empty), output_dir=str(empty))
+        assert refused.value.kind is ErrorKind.INVALID_REQUEST
+        assert "transcribe first" in refused.value.message
+
+        meeting = _write_filed_meeting(tmp_app_dir, with_source=False)
+        job_id = await _run_diarize(manager, meeting)
+        job = manager.status(job_id)
+        assert job.status == "failed"
+        assert job.error_kind is ErrorKind.INVALID_REQUEST
+        assert "no recording" in (job.error_message or "")
+    finally:
+        await manager.aclose()
+
+
+async def test_a_diarize_job_fails_when_the_engine_cannot_load(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    transcript_before = (meeting / "transcript.json").read_bytes()
+    diarizer = FakeDiarizer(raise_kind=ErrorKind.MODEL_LOAD)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        job_id = await _run_diarize(manager, meeting)
+
+        job = manager.status(job_id)
+        # Unlike a transcription, whose transcript is still the deliverable,
+        # this job has nothing to deliver without the pass.
+        assert job.status == "failed"
+        assert job.error_kind is ErrorKind.MODEL_LOAD
+        assert (meeting / "transcript.json").read_bytes() == transcript_before
+    finally:
+        await manager.aclose()
+
+
+async def test_a_diarized_transcription_prefills_speakers_from_a_named_sibling(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """The pipeline wiring end to end: a sibling meeting whose voice the
+    operator named, then a new diarized transcription in the same project
+    opens with that name already assigned."""
+    providers.register("fake", FakeProvider)
+    project = tmp_app_dir / "ACME"
+    sibling = project / "260901 - Planning"
+    sibling.mkdir(parents=True)
+    (sibling / "transcript.json").write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"id": 0, "start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 1"}
+                ],
+                "diarization": {
+                    "status": "succeeded",
+                    "model": "m",
+                    "speaker_embeddings": {"Speaker 1": [1.0, 0.0]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (sibling / "speakers.json").write_text(
+        json.dumps({"schema_version": 1, "assignments": {"0": "Anna"}}), encoding="utf-8"
+    )
+    audio = project / "260902 - Standup" / "source.wav"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(b"fake-audio-bytes")
+    diarizer = FakeDiarizer(embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]})
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        job_id = await _run_one(manager, audio, audio.parent, diarize=True)
+
+        assert manager.status(job_id).status == "succeeded"
+        assignments = json.loads((audio.parent / "speakers.json").read_text(encoding="utf-8"))
+        # Segment 0 is Speaker 1 (the voice named Anna next door); segment 1
+        # is a new voice and stays unnamed.
+        assert assignments["assignments"] == {"0": "Anna"}
     finally:
         await manager.aclose()

@@ -23,7 +23,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, Request
 
@@ -382,7 +382,36 @@ class SetupDownload:
         return event
 
 
-DownloadFactory = Callable[[], "ModelDownload | SetupDownload"]
+class DownloadLike(Protocol):
+    """What `ModelDownloadManager` needs from a download: the attribute
+    surface `ModelDownload`, `SetupDownload`, `CudaRuntimeDownload` and the
+    diarization downloads all expose."""
+
+    # Read-only here (a `SetupDownload` computes them); plain attributes on
+    # the other downloads satisfy that too.
+    @property
+    def state(self) -> DownloadState: ...
+
+    @property
+    def downloaded_bytes(self) -> int: ...
+
+    @property
+    def total_bytes(self) -> int: ...
+
+    @property
+    def error(self) -> ServiceError | None: ...
+
+    def start(
+        self,
+        on_progress: Callable[[dict[str, object]], None],
+        *,
+        progress_interval_sec: float = ...,
+    ) -> None: ...
+
+    def cancel(self) -> None: ...
+
+
+DownloadFactory = Callable[[], DownloadLike]
 
 
 class ModelDownloadManager:
@@ -399,7 +428,7 @@ class ModelDownloadManager:
     def __init__(self, config: Config, factory: DownloadFactory | None = None) -> None:
         self._config = config
         self._factory: DownloadFactory = factory or (lambda: build_setup_download(config))
-        self._download: ModelDownload | SetupDownload | None = None
+        self._download: DownloadLike | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._background_error: ServiceError | None = None

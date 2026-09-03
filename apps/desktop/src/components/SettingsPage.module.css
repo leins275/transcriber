@@ -105,3 +105,59 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* The Speakers row: a password box for the Hugging Face token (never
+   echoed back once saved) and the "identify speakers in new recordings"
+   switch, both inline on their `.line`. */
+.tokenInput {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  max-width: 24rem;
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 4px 8px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.toggle input:disabled + *,
+.toggle:has(input:disabled) {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* The numbered walkthrough under the token box, with its copyable URLs. */
+.steps {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.steps li {
+  padding-left: 0.2em;
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  color: var(--text);
+}
+
+.copy {
+  font-size: 11px;
+  padding: 0 6px;
+  line-height: 1.6;
+}

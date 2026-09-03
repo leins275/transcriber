@@ -58,6 +58,17 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
 - `model.id` (`string | null`, default `null`) and `model.path`
   (`string | null`, default `null`) — passed through to the sidecar's
   environment (see below). The app itself never loads a model.
+- `diarize` (`bool`, absent by default) — speaker identification on new
+  transcriptions. This is the service's own top-level key
+  (`services/transcription/README.md`), typed in `config.rs` since the
+  Settings page's Speakers row writes it (`set_diarization_settings`).
+  Absent means "service default" (off); the app never writes `null`.
+- `hf_token` (`string`, absent by default) — the operator's Hugging Face
+  read token for the gated pyannote models, written by the same command.
+  Read by the service from this file only (never argv, never `/health`);
+  the app reports only `hf_token_present` to the UI. A blank string on
+  save clears the key. Both keys are read by the service at startup, so
+  the command restarts the sidecar after saving.
 - **Unknown keys are preserved.** Every level (`Settings`, `ServiceSettings`,
   `ModelSettings`) carries `#[serde(flatten)] extra: serde_json::Map<...>`,
   so any additional top-level key, or additional key nested under `service`
@@ -65,10 +76,12 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   app-side load → modify → save round-trip byte-for-byte in value. This is
   covered by `config.rs`'s `unknown_keys_survive_a_load_modify_save_round_trip`
   test. F2 reads *service-only* keys straight out of this same file through
-  that mechanism — e.g. a top-level `"diarize": true` (plus the other
-  `diarization_*` keys, see `services/transcription/README.md`) enables
-  speaker diarization without the app's `Settings` schema knowing the key
-  exists. The LLM feature's `llm_*` keys (`llm_model`, `llm_model_path`,
+  that mechanism — e.g. the `diarization_*` tuning keys
+  (`diarization_model_path`, `diarization_min_speakers`, ..., see
+  `services/transcription/README.md`) reach the service without the app's
+  `Settings` schema knowing they exist (`diarize` and `hf_token` themselves
+  graduated to typed fields above once the app grew a UI for them). The
+  LLM feature's `llm_*` keys (`llm_model`, `llm_model_path`,
   `llm_ctx`, `llm_gpu_layers`, ... — same README) travel the same way; a
   future hardware "preset" is just a named bundle of these flat keys.
   (`llm_model` used to be written by the app's `select_llm_model` command;

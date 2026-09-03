@@ -30,9 +30,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChatEvent, ChatRequest, IndexMeeting, IndexStatus, JobStatus, LedgerJob, LlmCatalogModel,
-    LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit,
-    SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ChatEvent, ChatRequest, DiarizationStatus, IndexMeeting, IndexStatus, JobStatus, LedgerJob,
+    LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus,
+    SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -127,6 +127,28 @@ impl HttpTranscriptionService {
         ServiceError::Unavailable {
             detail: format!("{}: {err}", self.base_url),
         }
+    }
+
+    /// One call against a download slot (`GET`/`POST`/`DELETE` on a
+    /// `/v1/<slot>/download` route): every slot answers the same
+    /// `ModelDownloadResponse` body.
+    async fn download_slot(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let response = self
+            .authorize(builder)
+            .send()
+            .await
+            .map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: ModelDownloadResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        parsed.into_status()
     }
 }
 
@@ -385,6 +407,21 @@ struct ModelDownloadResponse {
     #[serde(default)]
     cuda_warning: Option<String>,
 }
+
+/// `GET /v1/diarization/status` body (`schema.py::DiarizationStatus`).
+#[derive(Debug, Deserialize)]
+struct DiarizationStatusResponse {
+    runtime_present: bool,
+    model_present: bool,
+    token_present: bool,
+    enabled: bool,
+    gpu_present: bool,
+    #[serde(default)]
+    runtime_total_bytes: u64,
+}
+
+const DIARIZATION_RUNTIME_SLOT: &str = "/v1/diarization-runtime/download";
+const DIARIZATION_MODEL_SLOT: &str = "/v1/diarization-model/download";
 
 impl ModelDownloadResponse {
     fn into_status(self) -> Result<ModelDownloadStatus, ServiceError> {
@@ -986,6 +1023,62 @@ impl TranscriptionService for HttpTranscriptionService {
                 message: err.to_string(),
             })?;
         parsed.into_status()
+    }
+
+    async fn diarization_status(&self) -> Result<DiarizationStatus, ServiceError> {
+        let request = self.authorize(self.client.get(self.endpoint("/v1/diarization/status")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: DiarizationStatusResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(DiarizationStatus {
+            runtime_present: parsed.runtime_present,
+            model_present: parsed.model_present,
+            token_present: parsed.token_present,
+            enabled: parsed.enabled,
+            gpu_present: parsed.gpu_present,
+            runtime_total_bytes: parsed.runtime_total_bytes,
+        })
+    }
+
+    async fn diarization_runtime_download_status(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.get(self.endpoint(DIARIZATION_RUNTIME_SLOT)))
+            .await
+    }
+
+    async fn start_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.post(self.endpoint(DIARIZATION_RUNTIME_SLOT)))
+            .await
+    }
+
+    async fn cancel_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.delete(self.endpoint(DIARIZATION_RUNTIME_SLOT)))
+            .await
+    }
+
+    async fn diarization_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.get(self.endpoint(DIARIZATION_MODEL_SLOT)))
+            .await
+    }
+
+    async fn start_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.post(self.endpoint(DIARIZATION_MODEL_SLOT)))
+            .await
+    }
+
+    async fn cancel_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        self.download_slot(self.client.delete(self.endpoint(DIARIZATION_MODEL_SLOT)))
+            .await
     }
 
     async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {

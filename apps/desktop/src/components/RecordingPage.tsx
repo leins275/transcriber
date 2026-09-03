@@ -39,6 +39,11 @@ export type RecordingPageProps = {
   /** The LLM feature's on-demand jobs over this recording. */
   onSummarize: (entryId: string) => Promise<void>;
   onExportPdf: (entryId: string) => Promise<void>;
+  /** Speaker identification over this recording's existing transcript. */
+  onDiarize: (entryId: string) => Promise<void>;
+  /** Whether speaker identification is set up (runtime and models on
+   * disk); the menu item renders disabled otherwise, pointing at Settings. */
+  speakersReady: boolean;
   /** Derived-job types currently in flight for this entry — the matching
    * controls render busy instead of firing twice. */
   activeLlmJobs: JobType[];
@@ -104,6 +109,8 @@ export function RecordingPage({
   onTranscribe,
   onSummarize,
   onExportPdf,
+  onDiarize,
+  speakersReady,
   activeLlmJobs,
   summaryReloadToken,
 }: RecordingPageProps) {
@@ -242,6 +249,7 @@ export function RecordingPage({
 
   const summarizing = activeLlmJobs.includes("summarize");
   const exporting = activeLlmJobs.includes("export");
+  const diarizing = activeLlmJobs.includes("diarize");
 
   const closeMenuAnd = (action: () => void) => () => {
     setMenuOpen(false);
@@ -360,6 +368,25 @@ export function RecordingPage({
                           {choice.label}
                         </button>
                       ))}
+                      <hr className={styles.menuDivider} />
+                    </>
+                  )}
+                  {entry.has_transcript && entry.has_source && (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={styles.menuItem}
+                        disabled={diarizing || !speakersReady}
+                        title={
+                          speakersReady
+                            ? undefined
+                            : "Set up speaker identification in Settings first"
+                        }
+                        onClick={closeMenuAnd(() => void runLlm(onDiarize))}
+                      >
+                        {diarizing ? "Identifying speakers…" : "Identify speakers"}
+                      </button>
                       <hr className={styles.menuDivider} />
                     </>
                   )}

@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "./SettingsPage";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
 import type {
+  DiarizationDownloadStatus,
+  DiarizationStatusView,
   EmbeddingModelDownloadStatus,
   LlmCatalogModel,
   LlmModelsView,
@@ -20,6 +22,34 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     supported_extensions: [".mp4", ".wav"],
     config_error: null,
     default_meetings_root: null,
+    diarize: false,
+    hf_token_present: false,
+    ...overrides,
+  };
+}
+
+function diarizationStatus(overrides: Partial<DiarizationStatusView> = {}): DiarizationStatusView {
+  return {
+    runtime_present: false,
+    model_present: false,
+    token_present: false,
+    enabled: false,
+    gpu_present: true,
+    runtime_total_bytes: 2_690_000_000,
+    ...overrides,
+  };
+}
+
+function diarizationDownload(
+  overrides: Partial<DiarizationDownloadStatus> = {},
+): DiarizationDownloadStatus {
+  return {
+    state: "idle",
+    downloaded_bytes: 0,
+    total_bytes: 0,
+    percent: 0,
+    error_kind: null,
+    error_message: null,
     ...overrides,
   };
 }
@@ -106,6 +136,16 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onStartEmbeddingModelDownload: () => {},
     onCancelEmbeddingModelDownload: () => {},
     onReindex: () => Promise.resolve(),
+    diarization: null as DiarizationStatusView | null,
+    diarizationRuntimeDownload: null as DiarizationDownloadStatus | null,
+    diarizationModelDownload: null as DiarizationDownloadStatus | null,
+    onStartDiarizationRuntimeDownload: () => {},
+    onCancelDiarizationRuntimeDownload: () => {},
+    onStartDiarizationModelDownload: () => {},
+    onCancelDiarizationModelDownload: () => {},
+    onSaveHfToken: () => Promise.resolve(),
+    onSetDiarizeEnabled: () => Promise.resolve(),
+    onDiarizeLabelledMeetings: () => Promise.resolve(0),
     ...overrides,
   };
   return render(<SettingsPage {...props} />);
@@ -311,5 +351,179 @@ describe("SettingsPage", () => {
     });
 
     expect(screen.getByText(/connection reset/)).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage speakers row", () => {
+  it("offers the runtime fetch, sized, when speaker identification is not set up", async () => {
+    const user = userEvent.setup();
+    const onStartDiarizationRuntimeDownload = vi.fn();
+    renderPage({ diarization: diarizationStatus(), onStartDiarizationRuntimeDownload });
+
+    await user.click(
+      screen.getByRole("button", { name: /enable speaker identification \(~2\.7 GB\)/i }),
+    );
+    expect(onStartDiarizationRuntimeDownload).toHaveBeenCalledTimes(1);
+    // The later steps wait on their prerequisites.
+    expect(screen.getByRole("button", { name: /download speaker models/i })).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: /identify speakers in new recordings/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /identify speakers in labelled meetings/i }),
+    ).toBeDisabled();
+  });
+
+  it("does not offer the feature on a machine without an NVIDIA GPU", () => {
+    renderPage({ diarization: diarizationStatus({ gpu_present: false }) });
+
+    expect(screen.getByText(/needs an nvidia gpu/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /enable speaker identification/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows progress and Cancel while the runtime downloads", async () => {
+    const user = userEvent.setup();
+    const onCancelDiarizationRuntimeDownload = vi.fn();
+    renderPage({
+      diarization: diarizationStatus(),
+      diarizationRuntimeDownload: diarizationDownload({ state: "downloading", percent: 12 }),
+      onCancelDiarizationRuntimeDownload,
+    });
+
+    expect(screen.getByText(/Downloading · 12%/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(onCancelDiarizationRuntimeDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a pasted Hugging Face token and then enables the model fetch", async () => {
+    const user = userEvent.setup();
+    const onSaveHfToken = vi.fn().mockResolvedValue(undefined);
+    const onStartDiarizationModelDownload = vi.fn();
+    const { rerender } = renderPage({
+      diarization: diarizationStatus({ runtime_present: true }),
+      onSaveHfToken,
+      onStartDiarizationModelDownload,
+    });
+
+    expect(screen.getByRole("button", { name: /save token/i })).toBeDisabled();
+    await user.type(screen.getByLabelText(/hugging face token/i), "  hf_abc123 ");
+    await user.click(screen.getByRole("button", { name: /save token/i }));
+    expect(onSaveHfToken).toHaveBeenCalledWith("hf_abc123");
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+
+    // App re-reads the status once the service is back with the token.
+    rerender(
+      <SettingsPage
+        {...{
+          settings: buildSettings(),
+          serviceStatus: readyStatus,
+          modelStatus: modelStatus(),
+          llmModels: null,
+          appVersion: null,
+          onBack: () => {},
+          onChangeRoot: () => {},
+          onStartLlmModelDownload: () => {},
+          onCancelLlmModelDownload: () => {},
+          embeddingStatus: null,
+          onStartEmbeddingModelDownload: () => {},
+          onCancelEmbeddingModelDownload: () => {},
+          onReindex: () => Promise.resolve(),
+          diarization: diarizationStatus({ runtime_present: true, token_present: true }),
+          diarizationRuntimeDownload: null,
+          diarizationModelDownload: null,
+          onStartDiarizationRuntimeDownload: () => {},
+          onCancelDiarizationRuntimeDownload: () => {},
+          onStartDiarizationModelDownload,
+          onCancelDiarizationModelDownload: () => {},
+          onSaveHfToken,
+          onSetDiarizeEnabled: () => Promise.resolve(),
+          onDiarizeLabelledMeetings: () => Promise.resolve(0),
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /download speaker models/i }));
+    expect(onStartDiarizationModelDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a gated-model refusal verbatim", () => {
+    renderPage({
+      diarization: diarizationStatus({ runtime_present: true, token_present: true }),
+      diarizationModelDownload: diarizationDownload({
+        state: "error",
+        error_kind: "model_load",
+        error_message:
+          "pyannote/segmentation-3.0 is gated on Hugging Face: accept its terms at https://huggingface.co/pyannote/segmentation-3.0",
+      }),
+    });
+
+    expect(screen.getByText(/accept its terms at/)).toBeInTheDocument();
+  });
+
+  it("flips the switch and queues the backfill once everything is in place", async () => {
+    const user = userEvent.setup();
+    const onSetDiarizeEnabled = vi.fn().mockResolvedValue(undefined);
+    const onDiarizeLabelledMeetings = vi.fn().mockResolvedValue(3);
+    renderPage({
+      settings: buildSettings({ hf_token_present: true }),
+      diarization: diarizationStatus({
+        runtime_present: true,
+        model_present: true,
+        token_present: true,
+      }),
+      onSetDiarizeEnabled,
+      onDiarizeLabelledMeetings,
+    });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /identify speakers in new recordings/i }),
+    );
+    expect(onSetDiarizeEnabled).toHaveBeenCalledWith(true);
+
+    await user.click(
+      screen.getByRole("button", { name: /identify speakers in labelled meetings/i }),
+    );
+    expect(onDiarizeLabelledMeetings).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Queued 3 meetings/)).toBeInTheDocument();
+  });
+
+  it("says so when the backfill finds nothing to do", async () => {
+    const user = userEvent.setup();
+    renderPage({
+      diarization: diarizationStatus({
+        runtime_present: true,
+        model_present: true,
+        token_present: true,
+      }),
+      onDiarizeLabelledMeetings: () => Promise.resolve(0),
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /identify speakers in labelled meetings/i }),
+    );
+    expect(await screen.findByText(/nothing to do/i)).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPage token walkthrough", () => {
+  it("spells out the Hugging Face steps with copyable links, since the webview cannot open a browser", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    renderPage({ diarization: diarizationStatus({ runtime_present: true }) });
+
+    const steps = screen.getByRole("list", { name: /token setup steps/i });
+    expect(steps).toHaveTextContent(/agree and access repository/i);
+    expect(steps).toHaveTextContent(/create new token/i);
+    expect(
+      screen.getByText("https://huggingface.co/pyannote/segmentation-3.0"),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Copy https://huggingface.co/settings/tokens" }),
+    );
+    expect(writeText).toHaveBeenCalledWith("https://huggingface.co/settings/tokens");
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
   });
 });

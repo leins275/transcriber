@@ -19,10 +19,13 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # the rest are the derived-knowledge jobs added by the LLM feature:
 # `summarize` reads a meeting folder's transcript.json, and `export`
 # deterministically assembles one meeting's existing materials into a PDF
-# (no LLM call). `facts` and `action_items` jobs existed once; both were
-# retired in favour of the summary carrying the notable facts and the
-# action items, and submitting one now answers `invalid_request`.
-JobType = Literal["transcribe", "summarize", "export", "index"]
+# (no LLM call). `diarize` runs the speaker-diarization pass over an
+# already-transcribed meeting's recording and writes the speaker labels
+# and voice embeddings into its existing transcript.json (ids untouched).
+# `facts` and `action_items` jobs existed once; both were retired in favour
+# of the summary carrying the notable facts and the action items, and
+# submitting one now answers `invalid_request`.
+JobType = Literal["transcribe", "summarize", "export", "index", "diarize"]
 
 
 class Segment(BaseModel):
@@ -268,6 +271,24 @@ class ChatRequest(BaseModel):
         if self.messages[-1].role != "user":
             raise ValueError("the last chat message must be from the user")
         return self
+
+
+class DiarizationStatus(BaseModel):
+    """``GET /v1/diarization/status`` response body: which of the feature's
+    prerequisites are met, and whether it is switched on."""
+
+    # The pyannote/torch runtime is importable (fetched, or installed).
+    runtime_present: bool
+    # Every pinned model snapshot is in the app's cache.
+    model_present: bool
+    # `hf_token` is configured (never the token itself).
+    token_present: bool
+    # `diarize`: new transcriptions run the pass.
+    enabled: bool
+    # An NVIDIA GPU is present -- the CUDA runtime is the only build offered.
+    gpu_present: bool
+    # What the runtime fetch would transfer, for the button's label.
+    runtime_total_bytes: int
 
 
 class Health(BaseModel):

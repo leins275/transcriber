@@ -12,9 +12,9 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::{
-    ChatEvent, ChatRequest, IndexStatus, JobState, JobStatus, LlmCatalogModel, LlmModelsStatus,
-    LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery,
-    ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ChatEvent, ChatRequest, DiarizationStatus, IndexStatus, JobState, JobStatus, LlmCatalogModel,
+    LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit,
+    SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
@@ -209,6 +209,14 @@ struct Inner {
     /// The search-embedding GGUF's own simulated slot (bge-m3): present by
     /// default, like the LLM slots, so dev sessions search with vectors.
     embedding: FakeModelDownload,
+    /// Speaker identification's two simulated slots (the pyannote/torch
+    /// runtime and the pinned model snapshots), plus the switch and the
+    /// token flag `/v1/diarization/status` reports. All ready by default
+    /// so dev sessions can exercise the "Identify speakers" flow.
+    diarization_runtime: FakeModelDownload,
+    diarization_model: FakeModelDownload,
+    diarize_enabled: bool,
+    hf_token_present: bool,
     /// Every derived-job submission this fake accepted, for assertions.
     llm_submissions: Vec<LlmSubmitRequest>,
     /// Every transcription submission this fake accepted, for assertions --
@@ -296,11 +304,30 @@ impl FakeService {
                     .collect(),
                 llm_active: FAKE_LLM_CATALOG[0].0.to_string(),
                 embedding: FakeModelDownload::present(),
+                diarization_runtime: FakeModelDownload::present(),
+                diarization_model: FakeModelDownload::present(),
+                diarize_enabled: true,
+                hf_token_present: true,
                 llm_submissions: Vec::new(),
                 submissions: Vec::new(),
                 index_submissions: 0,
             }),
         }
+    }
+
+    /// A healthy fake on which speaker identification has not been set up
+    /// yet: no runtime, no models, no token, switched off -- the state a
+    /// fresh install's Settings row starts from.
+    pub fn with_diarization_absent() -> Self {
+        let fake = Self::new();
+        {
+            let mut inner = fake.inner.lock().expect("fake service mutex poisoned");
+            inner.diarization_runtime = FakeModelDownload::absent();
+            inner.diarization_model = FakeModelDownload::absent();
+            inner.diarize_enabled = false;
+            inner.hf_token_present = false;
+        }
+        fake
     }
 
     /// A healthy fake whose simulated model is *not yet* present (T13,
@@ -681,6 +708,72 @@ impl TranscriptionService for FakeService {
         let mut inner = self.inner.lock().expect("fake service mutex poisoned");
         inner.embedding.cancel();
         Ok(inner.embedding.peek())
+    }
+
+    async fn diarization_status(&self) -> Result<DiarizationStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        // Peeking advances a started transfer, the way a status poll on
+        // the slot itself would -- so a UI polling only this endpoint
+        // still sees the simulated fetch land.
+        let runtime_present = inner.diarization_runtime.advance_and_peek().state
+            == ModelDownloadState::Complete
+            || inner.diarization_runtime.present;
+        let model_present = inner.diarization_model.advance_and_peek().state
+            == ModelDownloadState::Complete
+            || inner.diarization_model.present;
+        Ok(DiarizationStatus {
+            runtime_present,
+            model_present,
+            token_present: inner.hf_token_present,
+            enabled: inner.diarize_enabled,
+            gpu_present: true,
+            runtime_total_bytes: 2_700_000_000,
+        })
+    }
+
+    async fn diarization_runtime_download_status(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.diarization_runtime.advance_and_peek())
+    }
+
+    async fn start_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.diarization_runtime.start();
+        Ok(inner.diarization_runtime.peek())
+    }
+
+    async fn cancel_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.diarization_runtime.cancel();
+        Ok(inner.diarization_runtime.peek())
+    }
+
+    async fn diarization_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        Ok(inner.diarization_model.advance_and_peek())
+    }
+
+    async fn start_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.diarization_model.start();
+        Ok(inner.diarization_model.peek())
+    }
+
+    async fn cancel_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        inner.diarization_model.cancel();
+        Ok(inner.diarization_model.peek())
     }
 
     async fn llm_models(&self) -> Result<LlmModelsStatus, ServiceError> {

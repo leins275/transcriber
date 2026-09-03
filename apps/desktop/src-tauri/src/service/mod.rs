@@ -185,6 +185,66 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/diarization/status` -- speaker identification's
+    /// prerequisites and switch. Default: unsupported (the house rule).
+    async fn diarization_status(&self) -> Result<DiarizationStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `GET /v1/diarization-runtime/download` -- the pyannote/torch
+    /// runtime's slot (a ~2.7 GB first-run fetch). Same wire shape as the
+    /// other slots. Default: unsupported.
+    async fn diarization_runtime_download_status(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/diarization-runtime/download`. Default: unsupported.
+    async fn start_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/diarization-runtime/download`. Default: unsupported.
+    async fn cancel_diarization_runtime_download(
+        &self,
+    ) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `GET /v1/diarization-model/download` -- the pinned pyannote model
+    /// snapshots' slot (needs the operator's Hugging Face token on the
+    /// service side). Default: unsupported.
+    async fn diarization_model_download_status(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `POST /v1/diarization-model/download`. Default: unsupported.
+    async fn start_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/diarization-model/download`. Default: unsupported.
+    async fn cancel_diarization_model_download(&self) -> Result<ModelDownloadStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "speaker identification is not supported by this service".to_string(),
+        })
+    }
+
     /// `GET /v1/llm-models` -- the curated LLM catalog with per-model
     /// presence, active flag and download slot status. Default: unsupported
     /// (see `model_download_status`).
@@ -232,6 +292,13 @@ pub enum LlmJobKind {
     /// Deterministic per-recording export into the meeting folder itself
     /// (`export.md` + the share-named PDF, overwritten on re-run).
     Export,
+    /// Speaker identification over an already-transcribed meeting: the
+    /// diarization pass runs over its recording and writes the speaker
+    /// labels and voice embeddings into its existing `transcript.json`
+    /// (segment ids untouched, `speakers.json` untouched). No LLM runs;
+    /// it shares this enum because it is submitted exactly like the
+    /// other per-meeting derived jobs (`input_path` = meeting dir).
+    Diarize,
 }
 
 impl LlmJobKind {
@@ -240,8 +307,29 @@ impl LlmJobKind {
         match self {
             LlmJobKind::Summarize => "summarize",
             LlmJobKind::Export => "export",
+            LlmJobKind::Diarize => "diarize",
         }
     }
+}
+
+/// `GET /v1/diarization/status` -- which of speaker identification's
+/// prerequisites are met on this machine, and whether it is switched on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiarizationStatus {
+    /// The pyannote/torch runtime is importable (fetched into the app
+    /// folder, or installed in a dev environment).
+    pub runtime_present: bool,
+    /// Every pinned model snapshot is in the app's cache.
+    pub model_present: bool,
+    /// A Hugging Face token is configured (never the token itself).
+    pub token_present: bool,
+    /// `diarize`: new transcriptions run the pass.
+    pub enabled: bool,
+    /// An NVIDIA GPU is present -- the CUDA runtime is the only build
+    /// offered, so without one the feature is not offered at all.
+    pub gpu_present: bool,
+    /// What the runtime fetch would transfer (for the button's label).
+    pub runtime_total_bytes: u64,
 }
 
 /// `POST /v1/jobs` request body for a derived job: F2 takes the meeting

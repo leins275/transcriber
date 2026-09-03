@@ -213,3 +213,24 @@ def test_an_unparseable_transcript_warns_and_continues(vault: Path, db: IndexDb)
 
     assert stats.indexed == 4
     assert any("Broken" in warning for warning in stats.warnings)
+
+
+def test_renaming_a_speaker_re_indexes_the_transcript_on_the_next_pass(
+    vault: Path, db: IndexDb
+) -> None:
+    meeting = vault / "ACME" / "260831 - Weekly sync"
+    (meeting / "speakers.json").write_text(
+        json.dumps({"schema_version": 1, "assignments": {"0": "Даниил"}}), encoding="utf-8"
+    )
+    index_vault(vault, db, FakeEmbedder())
+    assert len(db.fts_query("Даниил", 10)) == 1
+
+    # transcript.json is untouched; only the operator's sidecar changed.
+    (meeting / "speakers.json").write_text(
+        json.dumps({"schema_version": 1, "assignments": {"0": "Anna"}}), encoding="utf-8"
+    )
+    stats = index_vault(vault, db, FakeEmbedder())
+
+    assert stats.indexed >= 1
+    assert db.fts_query("Даниил", 10) == []
+    assert len(db.fts_query("Anna", 10)) == 1

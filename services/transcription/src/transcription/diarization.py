@@ -11,8 +11,9 @@ Raw diarization labels (``SPEAKER_00``, ``SPEAKER_01``, ...) are normalized
 to human-facing ``"Speaker 1"``, ``"Speaker 2"``, ... in order of first
 speech, matching how the desktop UI presents unnamed speakers for renaming.
 
-Pure functions over segment-like mappings; no imports from the rest of the
-package (same contract as `filters.py` and `segmentation.py`).
+Pure functions over segment-like mappings; the only in-package import is
+`segmentation.py`'s child-segment builder (itself pure), so the contract
+`filters.py` and `segmentation.py` follow holds here too.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from transcription.segmentation import children_from_word_runs
+
 # A segment (or word) that overlaps no turn at all is still attributed to
 # the nearest turn when its midpoint lies within this many seconds of it --
 # diarization trims silence harder than whisper does, so a short utterance
@@ -28,6 +31,14 @@ from typing import Any
 NEAREST_TURN_TOLERANCE_SEC = 2.0
 
 SPEAKER_LABEL_PREFIX = "Speaker "
+
+# A run of words attributed to another voice inside a segment counts as a
+# real change of speaker only when it is at least this long by *either*
+# measure; anything shorter is diarization jitter at a turn's edge (the
+# boundaries are ~100-200 ms imprecise) and stays with the surrounding
+# voice.
+SPLIT_MIN_WORDS = 2
+SPLIT_MIN_SEC = 0.4
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -119,6 +130,82 @@ def assign_speakers(
         labelled = dict(segment)
         labelled["speaker"] = _segment_speaker(segment, turns)
         out.append(labelled)
+    return out
+
+
+def _word_speaker(word: Mapping[str, Any], turns: Sequence[SpeakerTurn]) -> str | None:
+    start = float(word["start"])
+    end = float(word["end"])
+    votes: dict[str, float] = {}
+    _vote_interval(start, end, turns, votes)
+    if votes:
+        return max(votes.items(), key=lambda item: item[1])[0]
+    return _nearest_speaker((start + end) / 2.0, turns)
+
+
+def _is_jitter(run: Sequence[Mapping[str, Any]]) -> bool:
+    duration = float(run[-1]["end"]) - float(run[0]["start"])
+    return len(run) < SPLIT_MIN_WORDS and duration < SPLIT_MIN_SEC
+
+
+def _split_at_turns(segment: dict[str, Any], turns: Sequence[SpeakerTurn]) -> list[dict[str, Any]]:
+    words: list[Mapping[str, Any]] = list(segment.get("words") or [])
+    if len(words) < 2:
+        return [segment]
+
+    # Runs of consecutive words held by one voice. A word no turn claims
+    # stays with the voice currently speaking rather than opening a gap.
+    runs: list[tuple[str | None, list[Mapping[str, Any]]]] = []
+    for word in words:
+        speaker = _word_speaker(word, turns)
+        if speaker is None and runs:
+            speaker = runs[-1][0]
+        if runs and runs[-1][0] == speaker:
+            runs[-1][1].append(word)
+        else:
+            runs.append((speaker, [word]))
+    if len(runs) <= 1:
+        return [segment]
+
+    # Fold jitter-sized runs into the voice around them, then re-join runs
+    # of the same voice that the folding made adjacent.
+    merged: list[tuple[str | None, list[Mapping[str, Any]]]] = [runs[0]]
+    for speaker, run in runs[1:]:
+        if _is_jitter(run):
+            merged[-1][1].extend(run)
+        elif merged[-1][0] == speaker:
+            merged[-1][1].extend(run)
+        else:
+            merged.append((speaker, run))
+    if len(merged) > 1 and _is_jitter(merged[0][1]):
+        first = merged.pop(0)
+        merged[0] = (merged[0][0], list(first[1]) + merged[0][1])
+    if len(merged) <= 1:
+        return [segment]
+    return children_from_word_runs(segment, [run for _speaker, run in merged])
+
+
+def split_segments_at_turns(
+    segments: Sequence[Mapping[str, Any]], turns: Sequence[SpeakerTurn]
+) -> list[dict[str, Any]]:
+    """Cut every segment whose words fall into different speakers' turns,
+    at the word where the voice changes, and renumber ids.
+
+    Whisper's segments (even after `segmentation.resegment`) follow the
+    text, not the voices: one sentence-sized segment can hold the end of
+    one speaker's remark and the start of the next speaker's answer. With
+    the turns known, such a segment becomes two, so each carries one
+    speaker -- the transcript itself then reflects the change of voice,
+    not just a majority-vote label over a mixed segment. Segments without
+    word timestamps pass through unchanged. Only ever applied to a
+    transcript being *created*: ids change, and an existing meeting's
+    `speakers.json` is keyed by them.
+    """
+    out: list[dict[str, Any]] = []
+    for segment in segments:
+        out.extend(_split_at_turns(dict(segment), turns))
+    for new_id, seg in enumerate(out):
+        seg["id"] = new_id
     return out
 
 

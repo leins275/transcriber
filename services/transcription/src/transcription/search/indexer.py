@@ -21,6 +21,7 @@ from typing import Any
 
 from transcription.artifacts import (
     NOTE_FILE_NAME,
+    SPEAKERS_FILE_NAME,
     SUMMARY_FILE_NAME,
     TRANSCRIPT_FILE_NAME,
     UNSORTED_DIR_NAME,
@@ -267,6 +268,18 @@ def index_vault(
         except OSError:
             live.discard((rel_dir, kind))
             continue
+        # A transcript's indexed text carries the operator's speaker names
+        # (`speakers.json`), so that sidecar is part of the fingerprint: a
+        # rename must re-index the meeting even though transcript.json is
+        # untouched. Absent sidecar == empty sidecar.
+        speakers_raw = b""
+        if kind == "transcript":
+            sidecar = meeting_dir / SPEAKERS_FILE_NAME
+            try:
+                mtime_ns = max(mtime_ns, sidecar.stat().st_mtime_ns)
+                speakers_raw = sidecar.read_bytes()
+            except OSError:
+                pass
         reembed = (rel_dir, kind) in needs_embedding
         stored = db.doc_fingerprint(rel_dir, kind)
         if not reembed and stored is not None and stored[0] == mtime_ns:
@@ -277,7 +290,11 @@ def index_vault(
         except OSError as exc:
             warnings.append(f"unreadable {rel_dir}/{file_name}: {exc}")
             continue
-        content_hash = hashlib.sha256(raw).hexdigest()
+        digest = hashlib.sha256(raw)
+        if speakers_raw:
+            digest.update(b"\x00speakers.json\x00")
+            digest.update(speakers_raw)
+        content_hash = digest.hexdigest()
         if not reembed and stored is not None and stored[1] == content_hash:
             db.touch_mtime(rel_dir, kind, mtime_ns)
             skipped += 1

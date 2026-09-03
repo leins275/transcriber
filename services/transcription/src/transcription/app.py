@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from transcription import __version__
 from transcription.api import model_routes
 from transcription.api.model_routes import (
+    DownloadLike,
     LlmModelsManager,
     ModelDownloadManager,
     build_llm_models_router,
@@ -38,12 +39,17 @@ from transcription.api.model_routes import (
 from transcription.api.search_routes import build_search_router
 from transcription.config import Config
 from transcription.cuda_runtime import is_cuda_runtime_present
+from transcription.diarization_runtime import (
+    build_diarization_model_download,
+    build_diarization_runtime_download,
+    diarization_status,
+)
 from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import JobManager, JobNotFoundError
 from transcription.ledger import Ledger
 from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
-from transcription.schema import JobCreate, JobStatus
+from transcription.schema import DiarizationStatus, JobCreate, JobStatus
 from transcription.search.service import SearchService
 
 _logger = logging.getLogger("transcription")
@@ -76,6 +82,8 @@ def create_app(
     llm_model_download_factory: Callable[[], ModelDownload] | None = None,
     llm_models_factory_for: Callable[[CatalogEntry | None], ModelDownload] | None = None,
     embedding_model_download_factory: Callable[[], ModelDownload] | None = None,
+    diarization_runtime_download_factory: Callable[[], DownloadLike] | None = None,
+    diarization_model_download_factory: Callable[[], DownloadLike] | None = None,
     job_manager_factory: Callable[[Config, Ledger], JobManager] | None = None,
     search_service_factory: Callable[[Config, JobManager], SearchService] | None = None,
 ) -> FastAPI:
@@ -122,6 +130,22 @@ def create_app(
             or (lambda: model_routes.build_embedding_model_download(config))
         ),
     )
+    # Speaker identification's two slots: the pyannote/torch runtime
+    # (`runtime/diarization`) and the pinned model snapshots
+    # (`models/diarization`). Same wire shape as every other slot.
+    diarization_runtime_download_manager = ModelDownloadManager(
+        config,
+        factory=(
+            diarization_runtime_download_factory
+            or (lambda: build_diarization_runtime_download(config))
+        ),
+    )
+    diarization_model_download_manager = ModelDownloadManager(
+        config,
+        factory=(
+            diarization_model_download_factory or (lambda: build_diarization_model_download(config))
+        ),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -141,6 +165,8 @@ def create_app(
     app.state.llm_model_download_manager = llm_model_download_manager
     app.state.llm_models_manager = llm_models_manager
     app.state.embedding_model_download_manager = embedding_model_download_manager
+    app.state.diarization_runtime_download_manager = diarization_runtime_download_manager
+    app.state.diarization_model_download_manager = diarization_model_download_manager
     # Hybrid search over the vault index. The default shares the job
     # manager's cached IndexDb and embedder -- every search runs through
     # `run_serial`, on the same thread the index job writes from.
@@ -321,6 +347,10 @@ def create_app(
         await job_manager.cancel(job_id)
         return {"status": "cancelled"}
 
+    @app.get("/v1/diarization/status", response_model=DiarizationStatus, dependencies=v1_deps)
+    async def get_diarization_status() -> DiarizationStatus:
+        return DiarizationStatus(**diarization_status(config))
+
     app.include_router(build_model_router(require_token))
     app.include_router(
         build_model_router(
@@ -335,6 +365,20 @@ def create_app(
             require_token,
             prefix="/v1/embedding-model/download",
             state_attr="embedding_model_download_manager",
+        )
+    )
+    app.include_router(
+        build_model_router(
+            require_token,
+            prefix="/v1/diarization-runtime/download",
+            state_attr="diarization_runtime_download_manager",
+        )
+    )
+    app.include_router(
+        build_model_router(
+            require_token,
+            prefix="/v1/diarization-model/download",
+            state_attr="diarization_model_download_manager",
         )
     )
     app.include_router(build_search_router(require_token))

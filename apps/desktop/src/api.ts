@@ -22,6 +22,8 @@ import type {
   ChatStoredMessage,
   ChatSummaryView,
   ChatWireMessage,
+  DiarizationDownloadStatus,
+  DiarizationStatusView,
   EmbeddingModelDownloadStatus,
   IndexStatusView,
   JobSnapshot,
@@ -134,6 +136,36 @@ export const api = {
     call<EmbeddingModelDownloadStatus>("start_embedding_model_download"),
   cancelEmbeddingModelDownload: (): Promise<EmbeddingModelDownloadStatus> =>
     call<EmbeddingModelDownloadStatus>("cancel_embedding_model_download"),
+  // Speaker identification (additive): the prerequisite status, the two
+  // download slots (the pyannote/torch runtime and the pinned models), the
+  // settings (switch + Hugging Face token), and the jobs. Meetings are
+  // named by their vault-entry id, never by a path.
+  diarizationStatus: (): Promise<DiarizationStatusView> =>
+    call<DiarizationStatusView>("diarization_status"),
+  diarizationRuntimeDownloadStatus: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("diarization_runtime_download_status"),
+  startDiarizationRuntimeDownload: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("start_diarization_runtime_download"),
+  cancelDiarizationRuntimeDownload: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("cancel_diarization_runtime_download"),
+  diarizationModelDownloadStatus: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("diarization_model_download_status"),
+  startDiarizationModelDownload: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("start_diarization_model_download"),
+  cancelDiarizationModelDownload: (): Promise<DiarizationDownloadStatus> =>
+    call<DiarizationDownloadStatus>("cancel_diarization_model_download"),
+  /** Persists the switch and, when `hfToken` is a string, the token (an
+   * empty string clears it; `null` leaves the stored one alone). The
+   * sidecar restarts in the background to pick both up. */
+  setDiarizationSettings: (enabled: boolean, hfToken: string | null): Promise<SettingsView> =>
+    call<SettingsView>("set_diarization_settings", { enabled, hfToken }),
+  /** Identify the speakers in one already-transcribed meeting: the labels
+   * and voice embeddings land in its existing transcript. */
+  diarizeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("diarize_vault_entry", { entryId }),
+  /** Queues one such job per hand-labelled meeting that never had a
+   * diarization pass; resolves to how many were queued. */
+  diarizeLabelledMeetings: (): Promise<number> => call<number>("diarize_labelled_meetings"),
   /** Appends a block to a meeting's note.md (the "Add to meeting notes"
    * action under a chat answer). */
   appendToNote: (entryId: string, markdown: string): Promise<void> =>

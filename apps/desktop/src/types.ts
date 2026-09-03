@@ -17,14 +17,50 @@ export type SettingsView = {
   // A sane starting point for the vault folder picker (windows-installer-
   // build E2, FR-10). Additive to the frozen contract above.
   default_meetings_root: string | null;
+  /** Speaker identification on new transcriptions (the service's `diarize`
+   * key, resolved to its default when unset). Additive. */
+  diarize: boolean;
+  /** Whether a Hugging Face token is stored; the token itself never
+   * reaches the UI. Additive. */
+  hf_token_present: boolean;
+};
+
+/** `GET /v1/diarization/status` through the Rust shell: which of speaker
+ * identification's prerequisites are met on this machine. */
+export type DiarizationStatusView = {
+  /** The pyannote/torch runtime is importable (fetched or installed). */
+  runtime_present: boolean;
+  /** Every pinned model snapshot is in the app's cache. */
+  model_present: boolean;
+  /** A Hugging Face token is configured. */
+  token_present: boolean;
+  /** `diarize`: new transcriptions run the pass. */
+  enabled: boolean;
+  /** An NVIDIA GPU is present -- without one the feature is not offered. */
+  gpu_present: boolean;
+  /** What the runtime fetch would transfer, for the button's label. */
+  runtime_total_bytes: number;
+};
+
+/** One of speaker identification's two download slots (the runtime, the
+ * models): the plain download fields; presence lives on the status. */
+export type DiarizationDownloadStatus = {
+  state: "idle" | "downloading" | "verifying" | "complete" | "cancelled" | "error";
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  error_kind: string | null;
+  error_message: string | null;
 };
 
 export type JobState =
   "pending" | "ingesting" | "queued" | "running" | "done" | "failed" | "rejected";
 
 /** Which pipeline a job runs. `transcribe` is the original; the rest are
- * the LLM feature's derived jobs (additive to the frozen contract). */
-export type JobType = "transcribe" | "summarize" | "export";
+ * the derived jobs over an already-transcribed meeting (additive to the
+ * frozen contract): the LLM feature's summary and export, and `diarize`,
+ * speaker identification written into the existing transcript. */
+export type JobType = "transcribe" | "summarize" | "export" | "diarize";
 
 export type JobSnapshot = {
   id: string;

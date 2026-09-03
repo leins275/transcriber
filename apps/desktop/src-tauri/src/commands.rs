@@ -66,6 +66,9 @@ pub mod chat;
 /// Saved chat conversations (`<PROJECT>/chats/<id>.json`): list, read,
 /// save, rename, delete.
 pub mod chats;
+/// Speaker identification: the runtime/model fetches, the `diarize`
+/// switch, and the per-meeting and vault-wide "Identify speakers" jobs.
+pub mod speakers;
 
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
@@ -94,6 +97,12 @@ pub struct SettingsResponse {
     /// frontend build simply ignores it. `None` when `%USERPROFILE%` is
     /// unset (never expected on a real Windows session).
     pub default_meetings_root: Option<String>,
+    /// Speaker identification on new transcriptions (`config.rs`'s
+    /// `diarize`, resolved to the service default when unset). Additive.
+    pub diarize: bool,
+    /// Whether a Hugging Face token is stored (`hf_token`); the token
+    /// itself never crosses the IPC boundary. Additive.
+    pub hf_token_present: bool,
 }
 
 /// `%USERPROFILE%\Meetings` (E2/FR-10) -- outside the application folder by
@@ -115,6 +124,8 @@ fn build_settings_response(settings: &Settings, config_error: Option<String>) ->
         meetings_root: view.meetings_root,
         meetings_root_exists: view.meetings_root_exists,
         service_base_url: view.service_base_url,
+        diarize: view.diarize,
+        hf_token_present: view.hf_token_present,
         supported_extensions: paths::supported_extensions()
             .iter()
             .map(|ext| ext.to_string())
@@ -700,6 +711,27 @@ pub async fn set_meetings_root_handler(
     Ok(build_settings_response(&updated, None))
 }
 
+/// `set_diarization_settings` -- persists the speaker-identification
+/// switch and (optionally) the Hugging Face token, then answers the
+/// resulting settings view. The service reads both keys from the shared
+/// `config.json` at startup only, so the `#[tauri::command]` wrapper
+/// restarts the sidecar in the background, exactly like `set_meetings_root`
+/// does after a root change.
+pub async fn set_diarization_settings_handler(
+    state: &AppState,
+    enabled: bool,
+    hf_token: Option<String>,
+) -> Result<SettingsResponse, AppError> {
+    let updated = {
+        let mut settings = state.settings.write().await;
+        config::set_diarization(&state.config_dir, &mut settings, enabled, hf_token)?;
+        settings.clone()
+    };
+    // A successful save writes a fresh, valid `config.json` (E3).
+    *state.config_error.write().await = None;
+    Ok(build_settings_response(&updated, None))
+}
+
 /// The background half of `set_meetings_root` (E17): plans, resolves and
 /// installs the `TranscriptionService` for `settings`/`root`, the same
 /// sequence `set_meetings_root_handler` used to run inline before
@@ -991,6 +1023,30 @@ pub async fn set_meetings_root(
     // awaiting it here -- mirrors `lib.rs::setup_app_state`'s startup task,
     // which spawns via the `AppHandle` and re-reads `state.settings` after
     // the fact rather than trusting a snapshot taken before any awaiting.
+    tauri::async_runtime::spawn(async move {
+        let state = tauri::Manager::state::<AppState>(&app);
+        let settings = state.settings.read().await.clone();
+        let root = settings
+            .meetings_root
+            .clone()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| state.config_dir.clone());
+        resolve_and_apply_meetings_root_service(&state, &settings, root).await;
+    });
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn set_diarization_settings(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+    hf_token: Option<String>,
+) -> Result<SettingsResponse, AppError> {
+    let response = set_diarization_settings_handler(&state, enabled, hf_token).await?;
+    // The sidecar reads `diarize`/`hf_token` from config.json at startup
+    // only: restart it in the background (never awaited here -- E17's
+    // reasoning for `set_meetings_root` applies unchanged).
     tauri::async_runtime::spawn(async move {
         let state = tauri::Manager::state::<AppState>(&app);
         let settings = state.settings.read().await.clone();

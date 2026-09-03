@@ -27,7 +27,7 @@ from typing import Any
 
 from transcription import artifacts, exporting, llm_catalog, paths, transcript
 from transcription.config import Config
-from transcription.diarization import label_segments
+from transcription.diarization import label_segments, split_segments_at_turns
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.ledger import Ledger
@@ -45,7 +45,7 @@ from transcription.llm.summarize import summarize_chunks
 from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
-from transcription.schema import DiarizationInfo, Segment
+from transcription.schema import DiarizationInfo, Segment, TranscriptDoc
 from transcription.search.index_db import IndexDb
 from transcription.search.indexer import index_vault
 from transcription.speaker_matching import auto_assign_speakers
@@ -56,7 +56,10 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently (the index job's embedder is CPU-only on top of that).
-KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index"})
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index", "diarize"})
+
+# The per-meeting derived jobs that read an existing transcript.json.
+_TRANSCRIPT_READING_JOB_TYPES = frozenset({"summarize", "export", "diarize"})
 
 _logger = logging.getLogger("transcription")
 
@@ -374,7 +377,7 @@ class JobManager:
             # The per-meeting derived jobs read the transcript; reject a
             # meeting that has none before any ledger row exists.
             if (
-                job_type in ("summarize", "export")
+                job_type in _TRANSCRIPT_READING_JOB_TYPES
                 and not (resolved_source / "transcript.json").is_file()
             ):
                 raise ServiceError(
@@ -401,6 +404,10 @@ class JobManager:
             # Deterministic assembly: no model runs at all.
             provider_name = "none"
             model_name = "none"
+        elif job_type == "diarize":
+            # The diarization engine alone: no whisper, no LLM.
+            provider_name = "pyannote"
+            model_name = self._config.diarization_model
         else:
             # The built-in llama.cpp engine is the only shipping one, so an
             # unnamed LLM job always lands there; there is no config-file
@@ -582,6 +589,41 @@ class JobManager:
         except Exception:  # noqa: BLE001 - the ledger write itself must never crash the loop
             _logger.error("failed to record job %s as failed after a worker crash", job.job_id)
 
+    @staticmethod
+    def _label_with_turns(
+        segments: list[dict[str, Any]],
+        diarizer: DiarizerProtocol,
+        output: Any,
+        *,
+        split: bool,
+    ) -> tuple[list[dict[str, Any]], DiarizationInfo]:
+        """Attach one diarization pass's turns and embeddings to `segments`.
+
+        ``split`` cuts segments at changes of voice first (renumbering ids)
+        -- right for a transcript being created, never for one that already
+        exists, whose `speakers.json` is keyed by the ids as they are.
+        """
+        if split:
+            segments = split_segments_at_turns(segments, output.turns)
+        labelled, speaker_count, label_mapping = label_segments(segments, output.turns)
+        # Embeddings arrive keyed by the diarizer's raw cluster labels;
+        # the document stores them under the normalized display labels
+        # ("Speaker 1"...) so they join against `speakers.json` renames.
+        speaker_embeddings: dict[str, list[float]] | None = None
+        if output.embeddings:
+            speaker_embeddings = {
+                label_mapping[raw]: vector
+                for raw, vector in output.embeddings.items()
+                if raw in label_mapping
+            } or None
+        return labelled, DiarizationInfo(
+            status="succeeded",
+            model=diarizer.model,
+            device=diarizer.device,
+            speaker_count=speaker_count,
+            speaker_embeddings=speaker_embeddings,
+        )
+
     async def _diarize_segments(
         self,
         job: JobState,
@@ -602,24 +644,7 @@ class JobManager:
                 self._executor,
                 functools.partial(diarizer.diarize, Path(job.source_path), cancel=job.cancel_token),
             )
-            labelled, speaker_count, label_mapping = label_segments(segments, output.turns)
-            # Embeddings arrive keyed by the diarizer's raw cluster labels;
-            # the document stores them under the normalized display labels
-            # ("Speaker 1"...) so they join against `speakers.json` renames.
-            speaker_embeddings: dict[str, list[float]] | None = None
-            if output.embeddings:
-                speaker_embeddings = {
-                    label_mapping[raw]: vector
-                    for raw, vector in output.embeddings.items()
-                    if raw in label_mapping
-                } or None
-            return labelled, DiarizationInfo(
-                status="succeeded",
-                model=diarizer.model,
-                device=diarizer.device,
-                speaker_count=speaker_count,
-                speaker_embeddings=speaker_embeddings,
-            )
+            return self._label_with_turns(segments, diarizer, output, split=True)
         except ServiceError as exc:
             if exc.kind is ErrorKind.CANCELLED:
                 raise
@@ -829,6 +854,13 @@ class JobManager:
                 job.status = "running"
                 self._ledger.mark_running(job.job_id)
                 body = functools.partial(self._export_sync, job)
+            elif job.job_type == "diarize":
+                # The engine is resolved inside the body, on the worker
+                # thread: constructing it is cheap, and its lazy torch
+                # import (seconds) must never sit on the event loop.
+                job.status = "running"
+                self._ledger.mark_running(job.job_id)
+                body = functools.partial(self._diarize_existing_sync, job)
             else:
                 # Unreachable in practice -- the pydantic `JobType` literal
                 # and `KNOWN_JOB_TYPES` both gate the type long before the
@@ -887,6 +919,72 @@ class JobManager:
                     self._embedder.unload()
                 except Exception:  # noqa: BLE001 - unload must never take the worker down
                     _logger.warning("failed to unload the embedder after job %s", job.job_id)
+
+    def _diarize_existing_sync(self, job: JobState) -> dict[str, Any]:
+        """The `diarize` job: run the speaker pass over an already-filed
+        meeting's recording and write the labels into its transcript.
+
+        The backfill behind cross-meeting speaker recognition: a meeting
+        transcribed with diarization off (or before the runtime existed)
+        gains `segment.speaker` labels and the `diarization` block with its
+        voice embeddings, without being re-transcribed. Segment ids are
+        never changed -- the operator's `speakers.json` is keyed by them,
+        and it is left exactly as it is (it already outranks the labels
+        everywhere they are read). Unlike the transcribe path, a failing
+        pass fails this job: identification is its whole point.
+        """
+        meeting_dir = Path(job.source_path)
+        data = exporting.load_transcript(meeting_dir)
+        if data is None:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"transcript.json is missing or unreadable in {meeting_dir.name}",
+            )
+        source = artifacts.find_source_recording(meeting_dir)
+        if source is None:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"{meeting_dir.name} has no recording to identify speakers in",
+            )
+        segments_raw = data.get("segments")
+        segments = (
+            [dict(seg) for seg in segments_raw if isinstance(seg, dict)]
+            if isinstance(segments_raw, list)
+            else []
+        )
+        if not segments:
+            raise ServiceError(ErrorKind.UNSUPPORTED_INPUT, "the transcript is empty")
+
+        job.progress = 0.05
+        diarizer = self._get_diarizer()
+        output = diarizer.diarize(source, cancel=job.cancel_token)
+        job.progress = 0.9
+        labelled, info = self._label_with_turns(segments, diarizer, output, split=False)
+
+        doc = TranscriptDoc.model_validate(
+            {**data, "segments": labelled, "diarization": info.model_dump(mode="json")}
+        )
+        transcript.write_atomic(doc, meeting_dir)
+
+        auto_named = 0
+        if info.speaker_embeddings:
+            try:
+                auto_named = auto_assign_speakers(
+                    meeting_dir,
+                    info.speaker_embeddings,
+                    labelled,
+                    threshold=self._config.speaker_match_threshold,
+                )
+            except Exception as exc:  # noqa: BLE001 - never job-fatal
+                job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
+
+        return {
+            "transcript_path": str(meeting_dir / artifacts.TRANSCRIPT_FILE_NAME),
+            "speaker_count": info.speaker_count,
+            "segments": len(labelled),
+            "embeddings": len(info.speaker_embeddings or {}),
+            "auto_named_segments": auto_named,
+        }
 
     def _load_transcript_lines(self, meeting_dir: Path) -> tuple[list[str], dict[str, Any]]:
         """The meeting's transcript as `[m:ss] Speaker: text` lines, with the

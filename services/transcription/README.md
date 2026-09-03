@@ -107,6 +107,7 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 |---|---|---|
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` (with the action items as a section) |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
+| `diarize` | `<meeting>/source.<ext>` + `<meeting>/transcript.json` (no LLM call; the pyannote engine) | `<meeting>/transcript.json` rewritten in place with speaker labels and the `diarization` block, ids untouched -- see "Speaker diarization" below |
 
 `facts` and `action_items` jobs existed once; both were retired (the
 summary carries the notable facts and the action items), and submitting one
@@ -206,17 +207,59 @@ voting against the diarized turns, so a segment brushing a neighbouring
 turn's edge still lands on the voice that actually spoke it; a segment no
 turn can claim keeps no `speaker` at all rather than a fabricated guess.
 
+A segment whose words fall into two speakers' turns is **cut at the change
+of voice** before labelling (`diarization.split_segments_at_turns`), so a
+sentence-sized segment holding the end of one remark and the start of the
+next speaker's answer becomes two segments with one speaker each; runs
+shorter than two words *and* 0.4 s are treated as turn-boundary jitter and
+stay with the surrounding voice. Only a transcript being created is split
+(ids change); the `diarize` job over an existing transcript never is.
+
 Two prerequisites, both optional by design:
 
-- **The `diarization` extra** (`uv sync --extra diarization`) installs
-  `pyannote.audio` and the torch stack under it. Nothing imports these
-  until the first diarized job runs.
-- **A Hugging Face token** (`TRANSCRIBER_HF_TOKEN`, else
-  `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`): the default
-  `pyannote/speaker-diarization-3.1` model is gated -- accept its terms on
-  the hub once, then supply a token. Alternatively point
-  `diarization_model_path` at a local snapshot directory (containing the
-  pipeline's `config.yaml`) for fully offline loads.
+- **The runtime** -- `pyannote.audio` and the torch stack under it. A dev
+  environment gets it from the `diarization` extra (`uv sync --extra
+  diarization`, CPU torch from PyPI). The installed app never bakes it:
+  `POST /v1/diarization-runtime/download` fetches the pinned wheel set --
+  every package the extra adds on top of the baked environment, with
+  torch/torchaudio swapped for their `cu126` CUDA builds (~2.7 GB in all)
+  -- into `<app_dir>/runtime/diarization/`, which the diarizer puts on
+  `sys.path` before importing pyannote. The manifest
+  (`diarization_runtime_packages.py`) is generated from `uv.lock` by
+  `scripts/gen_diarization_runtime.py`; `make lint` fails when it drifts.
+  Nothing imports any of it until the first diarized job runs.
+- **The models and a Hugging Face token**: `pyannote/speaker-diarization-3.1`
+  and `pyannote/segmentation-3.0` are gated -- accept their terms on the
+  hub once (signed in as the token's owner), then supply a read token
+  (`hf_token` in the config file, `TRANSCRIBER_HF_TOKEN`, else
+  `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`). `POST /v1/diarization-model/download`
+  snapshots the three repos at pinned revisions into
+  `<app_dir>/models/diarization/` (the hub-cache layout, `PYANNOTE_CACHE`)
+  and pins each `refs/main` to its snapshot; from then on the pipeline
+  loads **offline** (the hub is never consulted and the token is not
+  needed at load time), so the pin holds. A gated refusal names the repo
+  whose terms to accept. Without the fetch (a dev environment), the
+  diarizer downloads on first use with the token, as before. Alternatively
+  point `diarization_model_path` at a local snapshot directory (containing
+  the pipeline's `config.yaml`) for fully offline loads.
+
+`GET /v1/diarization/status` reports which prerequisites are met
+(`runtime_present`, `model_present`, `token_present`, `gpu_present` -- the
+CUDA runtime is the only build offered) and whether `diarize` is on.
+
+### `diarize`: speakers for an already-transcribed meeting
+
+`POST /v1/jobs {"job_type": "diarize", "input_path": <meeting dir>,
+"output_dir": <meeting dir>}` runs the diarization pass over the meeting's
+`source.<ext>` and writes the speaker labels and the `diarization` block
+(embeddings included) into its **existing** `transcript.json`, keeping
+every segment id -- the operator's `speakers.json` is keyed by them and is
+never touched (it already outranks the labels wherever they are read). This
+is the backfill behind cross-meeting recognition: a meeting labelled by
+hand while it had no diarization becomes voice memory for every later
+recording in its project. Unlike the transcribe path, a failing pass fails
+this job (identification is its whole point); a meeting without a
+recording or a transcript is refused up front.
 
 Diarization **degrades, never fails the job**: if the pass cannot run
 (extra not installed, model not fetchable, runtime error), the transcript

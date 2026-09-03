@@ -230,6 +230,47 @@ uv run scripts/sync_version.py --check
 `--check` (what `make lint` runs) fails, naming the drifting manifest, if any
 one of them is edited by hand instead of through `--set`.
 
+## Speaker identification (optional, first-run setup)
+
+Speaker identification (pyannote diarization + cross-meeting voice
+recognition) is switched off and not installed by default: the runtime is
+gigabytes of GPU-specific payload and the models are gated on Hugging
+Face. Settings → **Speakers** walks through it, top to bottom; every step
+is skipped once done:
+
+1. **Enable speaker identification (~2.7 GB).** Fetches the pyannote +
+   CUDA torch runtime into `<install dir>\runtime\diarization\`. Needs an
+   NVIDIA GPU (the row says so and offers nothing otherwise). Resumable
+   and cancellable like the other downloads.
+2. **Hugging Face token.** Sign in on huggingface.co, accept the terms of
+   `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`
+   (both gated, both free), create a *read* token under Settings → Access
+   Tokens, paste it and Save. It is stored as `hf_token` in
+   `config.json` (`docs/config-contract.md`) and never shown again; the
+   sidecar restarts to read it.
+3. **Download speaker models.** Snapshots the three pinned model repos
+   into `<install dir>\models\diarization\`. A refusal names the repo
+   whose terms are missing. From here on loads are offline; the token is
+   not needed again.
+4. **Identify speakers in new recordings.** The `diarize` switch: every
+   new transcription runs the pass, cuts segments at changes of voice, and
+   pre-names any voice already named in a sibling meeting of the same
+   project.
+5. **Identify speakers in labelled meetings.** One-shot backfill: queues a
+   `diarize` job for every meeting you labelled by hand before this was
+   set up (oldest first), attaching speaker labels and voice prints to
+   their existing transcripts without touching your labels. That is what
+   turns the labels you already made into recognizable voices for future
+   uploads. Each job shows in the job list; on a 12 GB GPU an hour of audio
+   takes about a minute.
+
+Per meeting, the overflow menu's **Identify speakers** runs the same job on
+demand (disabled, pointing here, until steps 1–3 are done).
+
+Dev loop: `uv sync --extra diarization` in `services/transcription/` gives
+the service CPU torch from PyPI instead (slow, but no fetch); the status
+row then reports the runtime as present and only steps 2–3 apply.
+
 ## Known gaps
 
 - `installer/`, `scripts/`, and packaging (`tauri.conf.json`'s bundle block

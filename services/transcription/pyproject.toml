@@ -128,6 +128,9 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
+# Generated from uv.lock by scripts/gen_diarization_runtime.py: pinned
+# wheel URLs run past the line limit, and the generator is the formatter.
+extend-exclude = ["src/transcription/diarization_runtime_packages.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]

@@ -34,6 +34,8 @@ import { useUpdate } from "./state/useUpdate";
 import { useVault } from "./state/useVault";
 import type {
   AppError,
+  DiarizationDownloadStatus,
+  DiarizationStatusView,
   EmbeddingModelDownloadStatus,
   JobType,
   LlmModelsView,
@@ -300,6 +302,111 @@ function App() {
       .catch((error: AppError) => setLastError(error));
   }, []);
 
+  // Speaker identification: the prerequisite status plus its two download
+  // slots (the pyannote/torch runtime, the pinned models). Same gating as
+  // the other model rows -- fetched when the service is ready (which is
+  // also how a sidecar restart after a settings change refreshes it), the
+  // slots polled while a transfer is in flight, the status re-read the
+  // moment a transfer stops so the row advances to its next step.
+  const [diarization, setDiarization] = useState<DiarizationStatusView | null>(null);
+  const [diarizationRuntimeDownload, setDiarizationRuntimeDownload] =
+    useState<DiarizationDownloadStatus | null>(null);
+  const [diarizationModelDownload, setDiarizationModelDownload] =
+    useState<DiarizationDownloadStatus | null>(null);
+  const refreshDiarization = useCallback(() => {
+    api
+      .diarizationStatus()
+      .then((status) => setDiarization(status ?? null))
+      .catch(() => {
+        // Older service / unreachable: stays `null`, the row renders inert.
+      });
+  }, []);
+  useEffect(() => {
+    if (serviceStatus.state !== "ready") return;
+    refreshDiarization();
+    api
+      .diarizationRuntimeDownloadStatus()
+      .then((status) => setDiarizationRuntimeDownload(status ?? null))
+      .catch(() => {});
+    api
+      .diarizationModelDownloadStatus()
+      .then((status) => setDiarizationModelDownload(status ?? null))
+      .catch(() => {});
+  }, [serviceStatus.state, refreshDiarization]);
+  const runtimeTransferring =
+    diarizationRuntimeDownload?.state === "downloading" ||
+    diarizationRuntimeDownload?.state === "verifying";
+  useEffect(() => {
+    if (!runtimeTransferring) return;
+    const handle = setInterval(() => {
+      api
+        .diarizationRuntimeDownloadStatus()
+        .then(setDiarizationRuntimeDownload)
+        .catch(() => {});
+    }, 1500);
+    return () => {
+      clearInterval(handle);
+      refreshDiarization();
+    };
+  }, [runtimeTransferring, refreshDiarization]);
+  const modelTransferring =
+    diarizationModelDownload?.state === "downloading" ||
+    diarizationModelDownload?.state === "verifying";
+  useEffect(() => {
+    if (!modelTransferring) return;
+    const handle = setInterval(() => {
+      api
+        .diarizationModelDownloadStatus()
+        .then(setDiarizationModelDownload)
+        .catch(() => {});
+    }, 1500);
+    return () => {
+      clearInterval(handle);
+      refreshDiarization();
+    };
+  }, [modelTransferring, refreshDiarization]);
+
+  const handleStartDiarizationRuntimeDownload = useCallback(() => {
+    api
+      .startDiarizationRuntimeDownload()
+      .then(setDiarizationRuntimeDownload)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+  const handleCancelDiarizationRuntimeDownload = useCallback(() => {
+    api
+      .cancelDiarizationRuntimeDownload()
+      .then(setDiarizationRuntimeDownload)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+  const handleStartDiarizationModelDownload = useCallback(() => {
+    api
+      .startDiarizationModelDownload()
+      .then(setDiarizationModelDownload)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+  const handleCancelDiarizationModelDownload = useCallback(() => {
+    api
+      .cancelDiarizationModelDownload()
+      .then(setDiarizationModelDownload)
+      .catch((error: AppError) => setLastError(error));
+  }, []);
+  // Both settings writes restart the sidecar; the settings view they
+  // answer is applied at once, the status follows when the service is
+  // back (the `serviceStatus.state` effect above).
+  const handleSaveHfToken = useCallback(
+    async (token: string) => {
+      const updated = await api.setDiarizationSettings(settings?.diarize ?? false, token);
+      setSettings(updated);
+    },
+    [settings?.diarize],
+  );
+  const handleSetDiarizeEnabled = useCallback(async (enabled: boolean) => {
+    const updated = await api.setDiarizationSettings(enabled, null);
+    setSettings(updated);
+  }, []);
+  const handleDiarizeLabelledMeetings = useCallback(() => api.diarizeLabelledMeetings(), []);
+  const speakersReady = !!diarization?.runtime_present && !!diarization?.model_present;
+
   const modelDownloadCommands = useRef({
     start: () => api.startModelDownload(),
     cancel: () => api.cancelModelDownload(),
@@ -475,6 +582,13 @@ function App() {
     [upsertJob],
   );
 
+  const handleDiarize = useCallback(
+    async (entryId: string) => {
+      upsertJob(await api.diarizeVaultEntry(entryId));
+    },
+    [upsertJob],
+  );
+
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
   // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
@@ -605,6 +719,16 @@ function App() {
               onStartEmbeddingModelDownload={handleStartEmbeddingModelDownload}
               onCancelEmbeddingModelDownload={handleCancelEmbeddingModelDownload}
               onReindex={() => api.reindexVault()}
+              diarization={diarization}
+              diarizationRuntimeDownload={diarizationRuntimeDownload}
+              diarizationModelDownload={diarizationModelDownload}
+              onStartDiarizationRuntimeDownload={handleStartDiarizationRuntimeDownload}
+              onCancelDiarizationRuntimeDownload={handleCancelDiarizationRuntimeDownload}
+              onStartDiarizationModelDownload={handleStartDiarizationModelDownload}
+              onCancelDiarizationModelDownload={handleCancelDiarizationModelDownload}
+              onSaveHfToken={handleSaveHfToken}
+              onSetDiarizeEnabled={handleSetDiarizeEnabled}
+              onDiarizeLabelledMeetings={handleDiarizeLabelledMeetings}
             />
           ) : inSetup ? (
             <FirstRun
@@ -633,6 +757,8 @@ function App() {
                   onTranscribe={handleTranscribe}
                   onSummarize={handleSummarize}
                   onExportPdf={handleExportPdf}
+                  onDiarize={handleDiarize}
+                  speakersReady={speakersReady}
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
                 />

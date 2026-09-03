@@ -28,6 +28,7 @@ const RUNNING_TEXT: Record<JobType, string> = {
   transcribe: "Transcribing",
   summarize: "Summarizing",
   export: "Exporting PDF",
+  diarize: "Identifying speakers",
 };
 
 /** A failed derived job loses no source material — unlike transcription's
@@ -37,6 +38,7 @@ const FAILED_TEXT: Record<JobType, string> = {
   transcribe: STATE_TEXT.failed,
   summarize: "Summary failed.",
   export: "Export failed.",
+  diarize: "Speaker identification failed.",
 };
 
 /** The project name from the `Project - YYMMDD - Title` convention, for a

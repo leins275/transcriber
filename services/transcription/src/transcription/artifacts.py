@@ -44,6 +44,25 @@ SPEAKERS_FILE_NAME = "speakers.json"
 # (mirrored from crates/vault/src/paths.rs `UNSORTED_DIR_NAME`).
 UNSORTED_DIR_NAME = "unsorted"
 
+# The recording's stem inside a meeting folder (mirrored from
+# crates/vault/src/paths.rs `SOURCE_STEM`): the vault files every dropped
+# recording as `source.<ext>`, keeping only its extension.
+SOURCE_STEM = "source"
+
+
+def find_source_recording(meeting_dir: Path) -> Path | None:
+    """The ``source.<ext>`` file inside a meeting folder, if there is one --
+    the same rule the app's `source_file_in` applies. An empty meeting (the
+    operator deleted the recording, kept the transcript) answers ``None``."""
+    try:
+        entries = sorted(meeting_dir.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.is_file() and entry.stem == SOURCE_STEM and entry.suffix:
+            return entry
+    return None
+
 
 # Illegal-in-Windows-filename characters, matching vault's `ILLEGAL_CHARS`.
 _ILLEGAL = re.compile(r"[<>:\"/\\|?*\x00-\x1f]")

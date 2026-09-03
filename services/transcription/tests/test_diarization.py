@@ -14,6 +14,7 @@ from transcription.diarization import (
     assign_speakers,
     label_segments,
     normalize_labels,
+    split_segments_at_turns,
 )
 
 
@@ -160,3 +161,112 @@ def test_overlapping_turns_split_by_who_holds_more_of_the_segment() -> None:
     labelled = assign_speakers(segments, turns)
 
     assert labelled[0]["speaker"] == "B"
+
+
+# -- split_segments_at_turns ---------------------------------------------------
+
+
+def _words(spec: list[tuple[str, float, float]]) -> list[dict[str, object]]:
+    return [{"word": word, "start": start, "end": end} for word, start, end in spec]
+
+
+def test_a_segment_spanning_two_voices_is_cut_at_the_change_of_speaker() -> None:
+    turns = [
+        SpeakerTurn(start=0.0, end=1.0, speaker="A"),
+        SpeakerTurn(start=1.0, end=2.0, speaker="B"),
+    ]
+    segment = {
+        "id": 0,
+        "start": 0.0,
+        "end": 2.0,
+        "text": " fine thanks and you",
+        "avg_logprob": -0.1,
+        "words": _words(
+            [(" fine", 0.0, 0.4), (" thanks", 0.4, 0.9), (" and", 1.1, 1.5), (" you", 1.5, 1.9)]
+        ),
+    }
+
+    out = split_segments_at_turns([segment], turns)
+
+    assert [(seg["id"], seg["text"]) for seg in out] == [(0, " fine thanks"), (1, " and you")]
+    assert out[0]["end"] == 0.9 and out[1]["start"] == 1.1
+    assert all(seg["avg_logprob"] == -0.1 for seg in out)
+    labelled = assign_speakers(out, turns)
+    assert [seg["speaker"] for seg in labelled] == ["A", "B"]
+
+
+def test_a_single_short_word_at_a_turn_edge_is_jitter_not_a_split() -> None:
+    turns = [
+        SpeakerTurn(start=0.0, end=0.95, speaker="A"),
+        SpeakerTurn(start=0.95, end=2.0, speaker="B"),
+    ]
+    segment = {
+        "id": 0,
+        "start": 0.0,
+        "end": 1.1,
+        "text": " so we ship it",
+        "words": _words(
+            [(" so", 0.0, 0.3), (" we", 0.3, 0.6), (" ship", 0.6, 0.9), (" it", 0.95, 1.1)]
+        ),
+    }
+
+    out = split_segments_at_turns([segment], turns)
+
+    assert len(out) == 1
+    assert out[0]["text"] == " so we ship it"
+
+
+def test_a_long_single_word_interjection_does_split() -> None:
+    turns = [
+        SpeakerTurn(start=0.0, end=1.0, speaker="A"),
+        SpeakerTurn(start=1.0, end=2.0, speaker="B"),
+    ]
+    segment = {
+        "id": 0,
+        "start": 0.0,
+        "end": 2.0,
+        "text": " agreed absolutely",
+        "words": _words([(" agreed", 0.0, 0.9), (" absolutely", 1.1, 1.9)]),
+    }
+
+    out = split_segments_at_turns([segment], turns)
+
+    assert [seg["text"] for seg in out] == [" agreed", " absolutely"]
+
+
+def test_ids_are_renumbered_across_the_whole_transcript() -> None:
+    turns = [
+        SpeakerTurn(start=0.0, end=1.0, speaker="A"),
+        SpeakerTurn(start=1.0, end=2.0, speaker="B"),
+    ]
+    mixed = {
+        "id": 0,
+        "start": 0.0,
+        "end": 2.0,
+        "text": " yes no",
+        "words": _words([(" yes", 0.0, 0.9), (" no", 1.1, 1.9)]),
+    }
+    plain = {"id": 1, "start": 2.0, "end": 3.0, "text": " later"}
+
+    out = split_segments_at_turns([mixed, plain], turns)
+
+    assert [seg["id"] for seg in out] == [0, 1, 2]
+    assert out[2] == {"id": 2, "start": 2.0, "end": 3.0, "text": " later"}
+
+
+def test_segments_without_words_or_with_one_voice_pass_through_untouched() -> None:
+    turns = [SpeakerTurn(start=0.0, end=5.0, speaker="A")]
+    segments = [
+        {"id": 0, "start": 0.0, "end": 1.0, "text": " no words"},
+        {
+            "id": 1,
+            "start": 1.0,
+            "end": 2.0,
+            "text": " one voice",
+            "words": _words([(" one", 1.0, 1.4), (" voice", 1.5, 2.0)]),
+        },
+    ]
+
+    out = split_segments_at_turns(segments, turns)
+
+    assert out == segments

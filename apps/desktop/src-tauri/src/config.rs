@@ -95,6 +95,19 @@ pub struct Settings {
     pub service: ServiceSettings,
     #[serde(default)]
     pub model: ModelSettings,
+    /// Speaker identification on new transcriptions -- the service's own
+    /// top-level `diarize` key (`services/transcription/README.md`), typed
+    /// here because the Settings page now writes it. `None` (absent) leaves
+    /// the service on its default (off); never serialized as `null`, which
+    /// the service would refuse to parse as a bool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diarize: Option<bool>,
+    /// The operator's Hugging Face read token for the gated pyannote
+    /// models -- the service's top-level `hf_token` key, read from this
+    /// file only (never argv, never `/health`). Never echoed back to the
+    /// UI: `SettingsView` reports only whether one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hf_token: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, serde_json::Value>,
 }
@@ -110,6 +123,8 @@ impl Default for Settings {
             meetings_root: None,
             service: ServiceSettings::default(),
             model: ModelSettings::default(),
+            diarize: None,
+            hf_token: None,
             extra: Map::new(),
         }
     }
@@ -123,6 +138,11 @@ pub struct SettingsView {
     pub meetings_root: Option<String>,
     pub meetings_root_exists: bool,
     pub service_base_url: Option<String>,
+    /// `diarize`, resolved to the service's default when unset.
+    pub diarize: bool,
+    /// Whether an `hf_token` is stored -- the token itself never leaves
+    /// the config file.
+    pub hf_token_present: bool,
 }
 
 /// The path `config.json` lives at, inside `dir`.
@@ -186,7 +206,35 @@ pub fn settings_view(settings: &Settings) -> SettingsView {
         meetings_root: settings.meetings_root.clone(),
         meetings_root_exists,
         service_base_url: settings.service.base_url.clone(),
+        diarize: settings.diarize.unwrap_or(false),
+        hf_token_present: settings
+            .hf_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty()),
     }
+}
+
+/// Persists the speaker-identification settings: the `diarize` switch,
+/// and -- when `hf_token` is given -- the Hugging Face token, where an
+/// empty/blank string clears it and `None` leaves the stored one alone
+/// (the UI never holds the token, so "unchanged" must be expressible).
+/// Atomic save, like every other write here.
+pub fn set_diarization(
+    dir: &Path,
+    settings: &mut Settings,
+    enabled: bool,
+    hf_token: Option<String>,
+) -> Result<(), AppError> {
+    settings.diarize = Some(enabled);
+    if let Some(token) = hf_token {
+        let trimmed = token.trim();
+        settings.hf_token = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+    }
+    save(dir, settings)
 }
 
 /// Whether `candidate` is `app_dir` itself or lies anywhere underneath it,

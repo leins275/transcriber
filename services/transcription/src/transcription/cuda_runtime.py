@@ -23,12 +23,14 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tarfile
 import threading
 import time
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from transcription.errors import ErrorKind, ServiceError
 from transcription.model_download import DownloadState, HttpTransport, Transport
@@ -52,7 +54,17 @@ class CudaPackage:
     original behaviour (the ``nvidia/`` DLL tree, merged directly into
     ``runtime/``); the LLM feature's CUDA build of llama.cpp extracts its
     own package tree into a ``runtime/<subdir>/`` of its own instead
-    (`transcription.llm.runtime_fetch`).
+    (`transcription.llm.runtime_fetch`), and the diarization runtime
+    extracts whole wheels (``extract_prefix=""``) into
+    ``runtime/diarization/`` (`transcription.diarization_runtime`).
+
+    ``archive_root`` is the directory *inside* the archive that stands for
+    the extracted tree's root: members outside it are skipped and the
+    prefix is removed from the rest. Empty for a wheel (its root already is
+    the importable tree); a source tarball -- the only shape PyPI offers
+    for a couple of pure-Python packages -- names its
+    ``<name>-<version>/src/``-style directory here. ``.tar.gz`` archives
+    are read with `tarfile`, everything else as a zip.
     """
 
     name: str
@@ -63,6 +75,7 @@ class CudaPackage:
     sha256: str
     extract_prefix: str = "nvidia/"
     dest_subdir: str = ""
+    archive_root: str = ""
 
 
 # Pinned to the exact versions/digests services/transcription/uv.lock
@@ -126,24 +139,74 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _extract_wheel_trees(downloads: Sequence[tuple[Path, CudaPackage]], runtime_dir: Path) -> None:
-    """Extract each wheel's configured tree into its configured destination.
+def _member_target(member_name: str, pkg: CudaPackage, dest_dir: Path) -> Path | None:
+    """Where one archive member lands, or ``None`` when it is not wanted.
+
+    Applies ``archive_root`` (skip outside, strip inside) and then
+    ``extract_prefix``; refuses path traversal outright, and drops a wheel's
+    ``<name>.data/`` trees (console scripts, headers) -- nothing importable
+    lives there, and ``scripts/`` would only ever shadow the venv's own.
+    """
+    normalized = member_name.replace("\\", "/").lstrip("/")
+    if pkg.archive_root:
+        if not normalized.startswith(pkg.archive_root):
+            return None
+        normalized = normalized[len(pkg.archive_root) :]
+    if not normalized.startswith(pkg.extract_prefix):
+        return None
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    if parts[0].endswith(".data"):
+        return None
+    return dest_dir.joinpath(*parts)
+
+
+def _write_member(source: IO[bytes], target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as out:
+        shutil.copyfileobj(source, out)
+
+
+def _extract_archive_trees(
+    downloads: Sequence[tuple[Path, CudaPackage]], runtime_dir: Path
+) -> None:
+    """Extract each archive's configured tree into its configured destination.
 
     The default spec keeps the original behaviour: only the ``nvidia/`` tree
     (the DLLs CTranslate2 loads), merged across wheels directly into
     ``runtime/`` -- the same ``nvidia/<component>/bin/*.dll`` layout
     `build_pyenv.py` produces under a baked ``--extra cuda``
     ``site-packages/``, so `runtime_dlls.py`'s lookup needs no
-    format-specific branch, only one extra directory to scan.
+    format-specific branch, only one extra directory to scan. Members are
+    written one at a time (never ``extractall``) so ``archive_root`` can be
+    stripped and every target path is checked first.
     """
-    for wheel_path, pkg in downloads:
+    for archive_path, pkg in downloads:
         dest_dir = runtime_dir / pkg.dest_subdir if pkg.dest_subdir else runtime_dir
-        with zipfile.ZipFile(wheel_path) as zf:
-            for member in zf.namelist():
-                normalized = member.replace("\\", "/")
-                if not normalized.startswith(pkg.extract_prefix) or normalized.endswith("/"):
-                    continue
-                zf.extract(member, dest_dir)
+        if archive_path.name.endswith((".tar.gz", ".tgz")):
+            with tarfile.open(archive_path, "r:gz") as tf:
+                for member in tf:
+                    if not member.isfile():
+                        continue
+                    target = _member_target(member.name, pkg, dest_dir)
+                    if target is None:
+                        continue
+                    source = tf.extractfile(member)
+                    if source is None:
+                        continue
+                    with source:
+                        _write_member(source, target)
+        else:
+            with zipfile.ZipFile(archive_path) as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    target = _member_target(info.filename, pkg, dest_dir)
+                    if target is None:
+                        continue
+                    with zf.open(info) as source:
+                        _write_member(source, target)
 
 
 class CudaRuntimeDownload:
@@ -325,10 +388,10 @@ class CudaRuntimeDownload:
         emit(force=True)
 
         try:
-            _extract_wheel_trees(downloaded_wheel_paths, self._runtime_dir)
+            _extract_archive_trees(downloaded_wheel_paths, self._runtime_dir)
         except Exception as exc:
             self.state = DownloadState.ERROR
-            self.error = ServiceError(ErrorKind.INTERNAL, f"failed to extract CUDA runtime: {exc}")
+            self.error = ServiceError(ErrorKind.INTERNAL, f"failed to extract runtime: {exc}")
             emit(force=True)
             raise self.error from exc
 

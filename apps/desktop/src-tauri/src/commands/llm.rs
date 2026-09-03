@@ -52,7 +52,7 @@ pub(super) fn map_service_error(err: ServiceError) -> AppError {
 }
 
 /// A meeting that has no transcript has nothing for an LLM job to read.
-fn require_transcript(meeting_dir: &Path) -> Result<(), AppError> {
+pub(super) fn require_transcript(meeting_dir: &Path) -> Result<(), AppError> {
     if meeting_dir.join(vault::TRANSCRIPT_FILE_NAME).is_file() {
         Ok(())
     } else {

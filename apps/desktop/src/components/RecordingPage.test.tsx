@@ -62,6 +62,8 @@ function renderPage(props: Partial<React.ComponentProps<typeof RecordingPage>> =
     onTranscribe: () => Promise.resolve(),
     onSummarize: () => Promise.resolve(),
     onExportPdf: () => Promise.resolve(),
+    onDiarize: () => Promise.resolve(),
+    speakersReady: true,
     activeLlmJobs: [],
     summaryReloadToken: 0,
   };
@@ -414,5 +416,45 @@ describe("RecordingPage", () => {
     await screen.findByText("note body");
 
     expect(screen.getByRole("button", { name: "Copy" })).toBeEnabled();
+  });
+});
+
+describe("RecordingPage speaker identification", () => {
+  it("identifies speakers from the overflow menu once the feature is set up", async () => {
+    const onDiarize = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ id: "v-9" }), onDiarize });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    await user.click(screen.getByRole("menuitem", { name: "Identify speakers" }));
+
+    expect(onDiarize).toHaveBeenCalledWith("v-9");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("keeps the item disabled, pointing at Settings, until the feature is set up", async () => {
+    const user = userEvent.setup();
+    renderPage({ speakersReady: false });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    const item = screen.getByRole("menuitem", { name: "Identify speakers" });
+    expect(item).toBeDisabled();
+    expect(item).toHaveAttribute("title", expect.stringMatching(/settings/i));
+  });
+
+  it("renders busy while a diarize job for this meeting is in flight", async () => {
+    const user = userEvent.setup();
+    renderPage({ activeLlmJobs: ["diarize"] });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(screen.getByRole("menuitem", { name: /identifying speakers/i })).toBeDisabled();
+  });
+
+  it("offers no speaker identification for a meeting without its recording", async () => {
+    const user = userEvent.setup();
+    renderPage({ entry: buildEntry({ has_source: false }) });
+
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(screen.queryByRole("menuitem", { name: /identify speakers/i })).not.toBeInTheDocument();
   });
 });

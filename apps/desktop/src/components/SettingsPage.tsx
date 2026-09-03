@@ -3,6 +3,8 @@ import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
 import type {
+  DiarizationDownloadStatus,
+  DiarizationStatusView,
   EmbeddingModelDownloadStatus,
   LlmCatalogModel,
   LlmModelsView,
@@ -31,7 +33,64 @@ export type SettingsPageProps = {
   onCancelEmbeddingModelDownload: () => void;
   /** Queues an incremental search-index pass over the whole vault. */
   onReindex: () => Promise<void>;
+  /** Speaker identification's prerequisites -- `null` while unknown (an
+   * older or unreachable service), which renders the row inert. */
+  diarization: DiarizationStatusView | null;
+  /** The two download slots, `null` while unknown. */
+  diarizationRuntimeDownload: DiarizationDownloadStatus | null;
+  diarizationModelDownload: DiarizationDownloadStatus | null;
+  onStartDiarizationRuntimeDownload: () => void;
+  onCancelDiarizationRuntimeDownload: () => void;
+  onStartDiarizationModelDownload: () => void;
+  onCancelDiarizationModelDownload: () => void;
+  /** Stores the Hugging Face token (the service restarts to read it). */
+  onSaveHfToken: (token: string) => Promise<void>;
+  /** Flips `diarize` for new recordings (the service restarts to read it). */
+  onSetDiarizeEnabled: (enabled: boolean) => Promise<void>;
+  /** Queues speaker identification over every hand-labelled meeting that
+   * never had a pass; resolves to how many were queued. */
+  onDiarizeLabelledMeetings: () => Promise<number>;
 };
+
+function isDownloading(status: DiarizationDownloadStatus | null): boolean {
+  return status?.state === "downloading" || status?.state === "verifying";
+}
+
+/** A URL the operator has to visit in a browser. The webview is granted no
+ * opener/shell permission by design (`capabilities/default.json`), so the
+ * link is shown verbatim with a Copy button rather than as an anchor that
+ * would silently do nothing. */
+function CopyLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable: the URL is still on screen to select.
+    }
+  };
+  return (
+    <span className={styles.link}>
+      <span className="mono">{url}</span>
+      <button
+        type="button"
+        className={`btn btn-ghost ${styles.copy}`}
+        aria-label={`Copy ${url}`}
+        onClick={() => void copy()}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </span>
+  );
+}
+
+function errorMessageOf(caught: unknown): string {
+  return typeof caught === "object" && caught !== null && "message" in caught
+    ? String((caught as { message: unknown }).message)
+    : String(caught);
+}
 
 function extensionList(extensions: string[]): string {
   return extensions.map((ext) => ext.replace(/^\./, "")).join(" · ");
@@ -153,12 +212,68 @@ export function SettingsPage({
   onStartEmbeddingModelDownload,
   onCancelEmbeddingModelDownload,
   onReindex,
+  diarization,
+  diarizationRuntimeDownload,
+  diarizationModelDownload,
+  onStartDiarizationRuntimeDownload,
+  onCancelDiarizationRuntimeDownload,
+  onStartDiarizationModelDownload,
+  onCancelDiarizationModelDownload,
+  onSaveHfToken,
+  onSetDiarizeEnabled,
+  onDiarizeLabelledMeetings,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
   const [reindexState, setReindexState] = useState<"idle" | "queueing" | "queued" | "failed">(
     "idle",
   );
   const [reindexError, setReindexError] = useState<string | null>(null);
+
+  // Speaker identification: the token draft (the stored token never comes
+  // back, so the box is always empty until typed into), and the outcome of
+  // the last save / switch / backfill request, each surfaced inline.
+  const [tokenDraft, setTokenDraft] = useState("");
+  const [tokenState, setTokenState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [speakersError, setSpeakersError] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [backfillState, setBackfillState] = useState<
+    { kind: "idle" } | { kind: "queueing" } | { kind: "queued"; count: number }
+  >({ kind: "idle" });
+  const speakersReady = !!diarization?.runtime_present && !!diarization?.model_present;
+  const serviceReady = serviceStatus.state === "ready";
+
+  const saveToken = () => {
+    setTokenState("saving");
+    setSpeakersError(null);
+    onSaveHfToken(tokenDraft.trim())
+      .then(() => {
+        setTokenState("saved");
+        setTokenDraft("");
+      })
+      .catch((caught: unknown) => {
+        setTokenState("failed");
+        setSpeakersError(errorMessageOf(caught));
+      });
+  };
+
+  const toggleDiarize = (enabled: boolean) => {
+    setSwitching(true);
+    setSpeakersError(null);
+    onSetDiarizeEnabled(enabled)
+      .catch((caught: unknown) => setSpeakersError(errorMessageOf(caught)))
+      .finally(() => setSwitching(false));
+  };
+
+  const backfill = () => {
+    setBackfillState({ kind: "queueing" });
+    setSpeakersError(null);
+    onDiarizeLabelledMeetings()
+      .then((count) => setBackfillState({ kind: "queued", count }))
+      .catch((caught: unknown) => {
+        setBackfillState({ kind: "idle" });
+        setSpeakersError(errorMessageOf(caught));
+      });
+  };
 
   const reindex = () => {
     setReindexState("queueing");
@@ -324,6 +439,169 @@ export function SettingsPage({
             The index updates itself after every transcription and note save; this catches up a
             vault that changed outside the app. Incremental — unchanged meetings are skipped.
           </p>
+        </div>
+      </div>
+
+      <div className={styles.row}>
+        <div className={styles.kicker}>Speakers</div>
+        <div className={styles.value}>
+          {diarization === null ? (
+            <div className={styles.line}>Speaker identification</div>
+          ) : !diarization.gpu_present ? (
+            <>
+              <div className={styles.line}>Speaker identification</div>
+              <p className={styles.hint}>Needs an NVIDIA GPU; not available on this machine.</p>
+            </>
+          ) : (
+            <>
+              <div className={styles.line}>
+                {diarization.runtime_present && CHECK_ICON}
+                Speaker runtime (pyannote + CUDA torch)
+                {isDownloading(diarizationRuntimeDownload) ? (
+                  <>
+                    {`Downloading · ${Math.round(diarizationRuntimeDownload?.percent ?? 0)}%`}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={onCancelDiarizationRuntimeDownload}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  !diarization.runtime_present && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={!serviceReady}
+                      onClick={onStartDiarizationRuntimeDownload}
+                    >
+                      Enable speaker identification ({sizeLabel(diarization.runtime_total_bytes)})
+                    </button>
+                  )
+                )}
+              </div>
+              {diarizationRuntimeDownload?.error_message && (
+                <p className={styles.warning}>{diarizationRuntimeDownload.error_message}</p>
+              )}
+
+              <div className={styles.line}>
+                {diarization.token_present && CHECK_ICON}
+                Hugging Face token
+                <input
+                  type="password"
+                  className={styles.tokenInput}
+                  aria-label="Hugging Face token"
+                  placeholder={diarization.token_present ? "Saved · paste to replace" : "hf_…"}
+                  autoComplete="off"
+                  value={tokenDraft}
+                  onChange={(event) => setTokenDraft(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={tokenState === "saving" || tokenDraft.trim() === ""}
+                  onClick={saveToken}
+                >
+                  {tokenState === "saving" ? "Saving…" : "Save token"}
+                </button>
+                {tokenState === "saved" && <span className={styles.detail}>Saved</span>}
+              </div>
+              <ol className={styles.steps} aria-label="Token setup steps">
+                <li>
+                  Sign in (or create a free account) at{" "}
+                  <CopyLink url="https://huggingface.co/join" />
+                </li>
+                <li>
+                  Open <CopyLink url="https://huggingface.co/pyannote/speaker-diarization-3.1" />{" "}
+                  and click <b>Agree and access repository</b> (a short form; the model is free).
+                </li>
+                <li>
+                  Do the same at <CopyLink url="https://huggingface.co/pyannote/segmentation-3.0" />
+                  .
+                </li>
+                <li>
+                  Open <CopyLink url="https://huggingface.co/settings/tokens" />, choose{" "}
+                  <b>Create new token</b> with the <b>Read</b> type, and copy it.
+                </li>
+                <li>Paste it above and Save, then download the speaker models below.</li>
+              </ol>
+              <p className={styles.hint}>
+                The token stays in this machine&apos;s config file and is used only to fetch the
+                models; nothing else ever leaves this machine.
+              </p>
+
+              <div className={styles.line}>
+                {diarization.model_present && CHECK_ICON}
+                Speaker models (pyannote 3.1)
+                {isDownloading(diarizationModelDownload) ? (
+                  <>
+                    {`Downloading · ${Math.round(diarizationModelDownload?.percent ?? 0)}%`}
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={onCancelDiarizationModelDownload}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  !diarization.model_present && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={!serviceReady || !diarization.token_present}
+                      onClick={onStartDiarizationModelDownload}
+                    >
+                      Download speaker models
+                    </button>
+                  )
+                )}
+              </div>
+              {diarizationModelDownload?.error_message && (
+                <p className={styles.warning}>{diarizationModelDownload.error_message}</p>
+              )}
+
+              <div className={styles.line}>
+                <label className={styles.toggle}>
+                  <input
+                    type="checkbox"
+                    checked={settings.diarize}
+                    disabled={switching || !speakersReady}
+                    onChange={(event) => toggleDiarize(event.target.checked)}
+                  />
+                  Identify speakers in new recordings
+                </label>
+              </div>
+
+              <div className={styles.line}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={!serviceReady || !speakersReady || backfillState.kind === "queueing"}
+                  onClick={backfill}
+                >
+                  {backfillState.kind === "queueing"
+                    ? "Queueing…"
+                    : "Identify speakers in labelled meetings"}
+                </button>
+                {backfillState.kind === "queued" && (
+                  <span className={styles.detail}>
+                    {backfillState.count === 0
+                      ? "Nothing to do — every labelled meeting already has its speakers identified."
+                      : `Queued ${backfillState.count} meeting${backfillState.count === 1 ? "" : "s"} — they run one after another.`}
+                  </span>
+                )}
+              </div>
+              {speakersError && <p className={styles.warning}>{speakersError}</p>}
+              <p className={styles.hint}>
+                Voices you have named by hand become recognizable: this attaches speaker labels and
+                voice prints to every meeting you labelled before identification was set up, and new
+                recordings in the same project then open with those names already filled in. Your
+                labels are never changed.
+              </p>
+            </>
+          )}
         </div>
       </div>
 

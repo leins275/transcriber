@@ -21,6 +21,7 @@ const VERBS: Record<JobType, string> = {
   transcribe: "Transcribing",
   summarize: "Summarizing",
   export: "Exporting PDF",
+  diarize: "Identifying speakers in",
 };
 
 /** The name worth narrating for a job. A transcribe job carries the dropped

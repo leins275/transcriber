@@ -15,10 +15,17 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from pathlib import Path
 from typing import Any, Protocol
 
 from transcription.diarization import DiarizationOutput, SpeakerTurn
+from transcription.diarization_runtime import (
+    activate_runtime,
+    diarization_cache_dir,
+    hub_offline,
+    is_diarization_model_present,
+)
 from transcription.errors import ErrorKind, ServiceError
 from transcription.providers.base import CancelToken
 
@@ -109,6 +116,13 @@ class PyannoteDiarizer:
         self._hf_token: str | None = getattr(config, "hf_token", None) or None
         self._min_speakers: int | None = getattr(config, "diarization_min_speakers", None)
         self._max_speakers: int | None = getattr(config, "diarization_max_speakers", None)
+        # The app folder anchors both first-run payloads: the fetched
+        # runtime (`runtime/diarization`, put on sys.path at import time)
+        # and the model cache (`models/diarization`, the hub-cache layout
+        # pyannote reads). Absent (a bare test config), both fall back to
+        # pyannote's own defaults.
+        app_dir = getattr(config, "app_dir", None)
+        self._app_dir: Path | None = Path(app_dir) if app_dir else None
         # `auto` resolves against torch's own CUDA probe at load time, not
         # here -- resolving it now would force the torch import this class
         # exists to defer.
@@ -116,6 +130,13 @@ class PyannoteDiarizer:
 
     def _import_pyannote(self) -> Any:
         """The import seam tests monkeypatch; returns the `Pipeline` class."""
+        if self._app_dir is not None:
+            # pyannote reads `PYANNOTE_CACHE` when it is imported, so the
+            # cache directory must be decided before the import below; and
+            # a fetched runtime must be on `sys.path` for the import to
+            # find pyannote at all.
+            os.environ.setdefault("PYANNOTE_CACHE", str(diarization_cache_dir(self._app_dir)))
+            activate_runtime(self._app_dir)
         try:
             from pyannote.audio import (  # type: ignore[import-not-found]  # noqa: PLC0415
                 Pipeline,
@@ -159,9 +180,19 @@ class PyannoteDiarizer:
         source = self._load_source()
         try:
             kwargs: dict[str, Any] = {}
-            if self._hf_token:
+            # Once the pinned snapshots are in the app's cache, the load is
+            # strictly offline: the token stays out of it and the hub is
+            # never consulted, so the pin holds. Without them (a dev
+            # environment that never ran the model fetch), the token lets
+            # pyannote download on first use, as it always did.
+            offline = False
+            if self._app_dir is not None and not self._model_path:
+                kwargs["cache_dir"] = str(diarization_cache_dir(self._app_dir))
+                offline = is_diarization_model_present(self._app_dir)
+            if self._hf_token and not offline:
                 kwargs["use_auth_token"] = self._hf_token
-            pipeline = pipeline_cls.from_pretrained(source, **kwargs)
+            with hub_offline(offline):
+                pipeline = pipeline_cls.from_pretrained(source, **kwargs)
             if pipeline is None:
                 # `from_pretrained` answers None (not an exception) for a
                 # gated repo whose terms have not been accepted.

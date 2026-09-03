@@ -469,7 +469,7 @@ struct SpeakersFile {
 /// also not an error here: labels are an annotation on top of a transcript
 /// that is perfectly readable without them, so a corrupted sidecar degrades
 /// to "unlabelled" rather than making the transcript unopenable.
-fn read_speaker_labels(meeting_dir: &Path) -> SpeakerLabels {
+pub(super) fn read_speaker_labels(meeting_dir: &Path) -> SpeakerLabels {
     let path = meeting_dir.join(SPEAKERS_FILE_NAME);
     let Ok(metadata) = std::fs::metadata(&path) else {
         return SpeakerLabels {
@@ -864,7 +864,7 @@ fn validate_language(language: Option<String>) -> Result<Option<String>, AppErro
 /// The `source.<ext>` file inside a meeting folder, if there is one — the
 /// same existence rule `vault::list` uses to decide `has_source`, resolved
 /// to the actual path this time rather than a boolean.
-fn source_file_in(meeting_dir: &Path) -> Option<PathBuf> {
+pub(super) fn source_file_in(meeting_dir: &Path) -> Option<PathBuf> {
     let children = std::fs::read_dir(meeting_dir).ok()?;
     children.flatten().find_map(|entry| {
         if !entry.file_type().ok()?.is_file() {

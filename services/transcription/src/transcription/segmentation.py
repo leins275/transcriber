@@ -69,7 +69,16 @@ def _split_segment(segment: dict[str, Any], gap_sec: float) -> list[dict[str, An
         # exact text and timestamps survive (word times can be slightly
         # narrower than the segment's own start/end).
         return [segment]
+    return children_from_word_runs(segment, pieces)
 
+
+def children_from_word_runs(
+    segment: Mapping[str, Any], pieces: Sequence[Sequence[Mapping[str, Any]]]
+) -> list[dict[str, Any]]:
+    """One child segment per run of words, each inheriting the parent's
+    confidence fields and id (callers renumber). Shared with the
+    diarization pass, which cuts at changes of speaker the same way this
+    module cuts at sentence ends."""
     children: list[dict[str, Any]] = []
     for piece in pieces:
         child: dict[str, Any] = {key: segment.get(key) for key in _INHERITED_KEYS}
