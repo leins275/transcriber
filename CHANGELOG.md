@@ -3,6 +3,16 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.22.0 — 2026-09-03
+
+### Bug fixes
+
+- **ci**: Keep prettier off the committed speaker-model snapshots
+
+### Features
+
+- Commit the pyannote speaker models; no Hugging Face token anywhere
+
 ## 0.21.0 — 2026-09-03
 
 ### Features
