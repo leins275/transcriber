@@ -164,7 +164,7 @@ class PyannoteDiarizer:
     def _resolve_torch_device(self) -> Any:
         """A `torch.device` honouring an explicit config device; `auto` probes
         CUDA the same way the whisper provider does."""
-        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
+        import torch  # type: ignore[import-not-found,unused-ignore]  # noqa: PLC0415
 
         device = self.device
         if device == "auto":
