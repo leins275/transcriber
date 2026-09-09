@@ -1,0 +1,4 @@
+{"batch": true, "phase": "factory", "source": "local/TRN - 260909 - spec.md", "batch_base_ref": null,
+ "features": ["260909-search-index-in-vault", "260909-speaker-tagged-embeddings", "260909-job-progress-accuracy", "260909-selection-menu-viewport-clamp", "260909-per-turn-speaker-reassign", "260909-project-speaker-roster"],
+ "tier": "ultra", "strict_skills": {"planning": ["testing-toolkit:testing-best-practices"], "development": ["testing-toolkit:testing-best-practices", "frontend-toolkit:internal-ui"]},
+ "asked": false, "deferred_qa": [], "matched_profiles": ["desktop", "web", "cli"]}

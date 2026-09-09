@@ -1,0 +1,3 @@
+{"phase": "blueprint", "approved": false, "base_ref": null,
+ "tier": "ultra", "strict_skills": {"planning": ["testing-toolkit:testing-best-practices"], "development": ["testing-toolkit:testing-best-practices", "frontend-toolkit:internal-ui"]},
+ "asked": false, "deferred_qa": []}
