@@ -91,7 +91,9 @@ describe("SpeakerTag with a project roster", () => {
 
     await user.click(screen.getByRole("button", { name: "Maxim" }));
 
-    expect(screen.getByRole("combobox", { name: "Rename Maxim" })).toHaveValue("Maxim");
+    expect(screen.getByRole("combobox", { name: "Edit speaker for this turn" })).toHaveValue(
+      "Maxim",
+    );
   });
 
   it("renames the speaker throughout when another roster name is picked", async () => {
@@ -101,10 +103,14 @@ describe("SpeakerTag with a project roster", () => {
     const onAssign = vi.fn();
     const onRename = vi.fn();
     const user = userEvent.setup();
-    renderTag({ speaker: "Maxim", roster: ["Anna", "Maxim"], onAssign, onRename });
+    renderTag({ speaker: "Maxim", roster: ["Anna", "Maxim"], turnsHeld: 3, onAssign, onRename });
 
     await user.click(screen.getByRole("button", { name: "Maxim" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Rename Maxim" }), "Anna");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Edit speaker for this turn" }),
+      "Anna",
+    );
+    await user.click(screen.getByRole("button", { name: "All 3 turns of Maxim" }));
 
     expect(onRename).toHaveBeenCalledWith("Maxim", "Anna");
     expect(onAssign).not.toHaveBeenCalled();
@@ -118,7 +124,7 @@ describe("SpeakerTag with a project roster", () => {
 
     await user.click(screen.getByRole("button", { name: "Olga" }));
 
-    const picker = screen.getByRole("combobox", { name: "Rename Olga" });
+    const picker = screen.getByRole("combobox", { name: "Edit speaker for this turn" });
     expect(picker).toHaveValue("Olga");
     expect(offeredNames(picker)).toEqual(["Anna", "Maxim", "Olga"]);
   });
@@ -130,7 +136,7 @@ describe("SpeakerTag with a project roster", () => {
     renderTag({ speaker: "Maxim", roster: ["Anna", "Maxim"], onAssign, onRename });
 
     await user.click(screen.getByRole("button", { name: "Maxim" }));
-    screen.getByRole("combobox", { name: "Rename Maxim" }).focus();
+    screen.getByRole("combobox", { name: "Edit speaker for this turn" }).focus();
     await user.keyboard("{Escape}");
 
     expect(onRename).not.toHaveBeenCalled();

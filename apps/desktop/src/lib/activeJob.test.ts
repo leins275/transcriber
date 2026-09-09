@@ -35,7 +35,11 @@ describe("activeJobView", () => {
 
   it("narrates a running transcription with the project, title and percent", () => {
     const view = activeJobView([buildJob({ progress: 0.42 })]);
-    expect(view).toEqual({ label: "Transcribing “ELS - Incident review”", percent: 42 });
+    expect(view).toEqual({
+      label: "Transcribing “ELS - Incident review”",
+      percent: 42,
+      phase: null,
+    });
   });
 
   it("omits the percent while progress is unreported", () => {
@@ -61,7 +65,11 @@ describe("activeJobView", () => {
     const view = activeJobView([
       buildJob({ state: "queued", job_type: "export", file_name: "260825 - Weekly sync" }),
     ]);
-    expect(view).toEqual({ label: "Exporting PDF “Weekly sync”", percent: null });
+    expect(view).toEqual({
+      label: "Exporting PDF “Weekly sync”",
+      percent: null,
+      phase: null,
+    });
   });
 
   it("says Filing during ingest, before transcription starts", () => {

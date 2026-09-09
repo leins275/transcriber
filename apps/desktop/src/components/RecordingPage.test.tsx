@@ -225,7 +225,7 @@ describe("RecordingPage", () => {
     await screen.findByText(/может еще/);
 
     await user.click(screen.getByRole("button", { name: "Maxim" }));
-    const input = screen.getByLabelText(/rename maxim/i);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
     await user.clear(input);
     await user.type(input, "Дмитрий{Enter}");
 

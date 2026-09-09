@@ -151,9 +151,9 @@ describe("SpeakerTag", () => {
     const wideChoice = screen.getByRole("button", { name: "All 3 turns of Speaker 2" });
 
     await user.tab();
+    expect(wideChoice).toHaveFocus();
     await user.keyboard("{Enter}");
 
-    expect(wideChoice).toHaveFocus();
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith("Speaker 2", "Anna");
   });
