@@ -99,9 +99,14 @@ class SearchService:
         project: str | None,
         top_k: int | None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[tuple[SearchResult, str]]:
         """The fused ranking with each hit's best chunk text (the full text,
-        breadcrumb included -- retrieval wants substance, `search` snips)."""
+        breadcrumb included -- retrieval wants substance, `search` snips).
+
+        ``speakers`` (casefolded index keys, OR semantics) hard-scopes every
+        channel to the chunks those people speak in, so a hit's snippet is
+        always a chunk one of them took part in."""
         query = query.strip()
         if not query:
             raise ServiceError(ErrorKind.INVALID_REQUEST, "search query must not be empty")
@@ -114,13 +119,19 @@ class SearchService:
 
         vector = self._query_vector(query)
         if vector is not None:
-            pairs = db.vec_query(vector, k=limit, dates=dates)
+            pairs = db.vec_query(vector, k=limit, dates=dates, speakers=speakers)
             channels["vector"] = [doc_id for doc_id, _chunk_id in pairs]
             best_chunk_by_doc.update({doc_id: chunk_id for doc_id, chunk_id in pairs})
         if match:
-            channels["bm25"] = db.fts_query(match, limit * 3, project=project, dates=dates)
-            channels["trigram"] = db.title_trigram_query(query, limit, project=project, dates=dates)
-        channels["exact_title"] = db.exact_title_docs(query, project=project, dates=dates)
+            channels["bm25"] = db.fts_query(
+                match, limit * 3, project=project, dates=dates, speakers=speakers
+            )
+            channels["trigram"] = db.title_trigram_query(
+                query, limit, project=project, dates=dates, speakers=speakers
+            )
+        channels["exact_title"] = db.exact_title_docs(
+            query, project=project, dates=dates, speakers=speakers
+        )
 
         fused = rrf_fuse(channels)
         doc_rows = db.get_docs([doc_id for doc_id, _score in fused])
@@ -139,9 +150,13 @@ class SearchService:
             if chunk_id is not None:
                 chunk = db.get_chunk(chunk_id)
             if chunk is None and match:
-                chunk = db.best_chunk_for(doc_id, match)
+                chunk = db.best_chunk_for(doc_id, match, speakers)
             if chunk is None:
-                chunk = db.best_chunk_for(doc_id, "")
+                chunk = db.best_chunk_for(doc_id, "", speakers)
+            if chunk is None and speakers:
+                # Under a speaker filter there is no unscoped fallback: a
+                # doc none of whose chunks are that speaker's is not a hit.
+                continue
             text, start_sec = chunk if chunk is not None else ("", None)
             ranked.append(
                 (
@@ -170,13 +185,17 @@ class SearchService:
         project: str | None = None,
         top_k: int | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[SearchResult]:
         """SYNCHRONOUS -- run on the serial executor (query embedding is
         inference and must never overlap whisper/LLM work). ``dates`` (ISO)
-        hard-filters every channel to those meeting days."""
+        hard-filters every channel to those meeting days, ``speakers``
+        (casefolded names, OR semantics) to those people's chunks."""
         return [
             result
-            for result, _text in self._ranked(query, project=project, top_k=top_k, dates=dates)
+            for result, _text in self._ranked(
+                query, project=project, top_k=top_k, dates=dates, speakers=speakers
+            )
         ]
 
     def retrieve(
@@ -186,7 +205,8 @@ class SearchService:
         project: str | None = None,
         top_k: int | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[tuple[SearchResult, str]]:
         """The chat's retrieval: ``(result, full chunk text)`` pairs in
         fused order. Same synchronous/serial-executor rule as `search`."""
-        return self._ranked(query, project=project, top_k=top_k, dates=dates)
+        return self._ranked(query, project=project, top_k=top_k, dates=dates, speakers=speakers)

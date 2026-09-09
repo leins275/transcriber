@@ -172,28 +172,62 @@ desktop app fires this quietly after every finished job and note save; a
 queued index job absorbs repeat submissions. The index is derived data --
 deleting the file costs one re-index.
 
-`POST /v1/search` `{"query", "project"?, "top_k"?, "date"?}` fuses four
-channels with weighted Reciprocal Rank Fusion: sqlite-vec cosine kNN, FTS5
-BM25 over chunk text, exact-title containment, and trigram fuzz over
-titles/speaker names. `date` (the vault's `YYMMDD` or ISO `YYYY-MM-DD`)
-hard-filters every channel to that meeting day via the `meeting_date` tag;
-an unparseable value degrades to no filter. It runs on the same serial
-worker as everything else, and degrades to text-only when the embedding
-model (or the sqlite-vec extension) is unavailable.
+**Speakers travel with every transcript chunk.** Each chunk records the
+distinct people whose lines it holds (the operator's `speakers.json` name
+wins over the diarization label, exactly as in the chunk text), and its
+breadcrumb -- the chunk's first line, which is embedded with it -- names
+them: `[ACME / 260831 - Weekly sync / 0:00–4:12 / Иван Петров, Anna]`.
+Chunks with no named lines keep the plain
+`[project / meeting / window]` form, and summary/note breadcrumbs
+(`[project / meeting / note]`) are unchanged. Search snippets are
+unaffected -- they drop the breadcrumb line as before.
 
-The chat (`POST /v1/chat`) applies the same day filter automatically: a
-question naming dates -- `260902`, `2026-09-02`, `02.09.2026`, or the
-words "сегодня"/"today"/"вчера"/"yesterday" (`search/dates.py`) --
-retrieves those meeting days and nothing else, so "summarize today's
-meetings" can never cite last month's.
+`POST /v1/search` `{"query", "project"?, "top_k"?, "date"?, "speaker"?}`
+fuses four channels with weighted Reciprocal Rank Fusion: sqlite-vec
+cosine kNN, FTS5 BM25 over chunk text, exact-title containment, and
+trigram fuzz over titles/speaker names. `date` (the vault's `YYMMDD` or
+ISO `YYYY-MM-DD`) hard-filters every channel to that meeting day via the
+`meeting_date` tag; an unparseable value degrades to no filter. `speaker`
+(a display name, matched case-insensitively; max 200 chars, blank means no
+filter) hard-filters every channel to chunks that person took part in, so
+a hit's snippet always comes from a chunk they spoke in; a name the index
+has never heard yields an empty result list, not an error. The two filters
+compose. It runs on the same serial worker as everything else, and
+degrades to text-only when the embedding model (or the sqlite-vec
+extension) is unavailable.
+
+The chat (`POST /v1/chat`) applies both filters automatically, from the
+question alone. Dates: `260902`, `2026-09-02`, `02.09.2026`, or the words
+"сегодня"/"today"/"вчера"/"yesterday" (`search/dates.py`) -- retrieving
+those meeting days and nothing else, so "summarize today's meetings" can
+never cite last month's. Speakers (`search/speakers.py`): a question
+naming somebody the index knows *in the request's project* retrieves only
+that person's chunks -- "что говорил Иван про дедлайн" cites the meetings
+Иван spoke in and no others. The match is deliberately conservative,
+because the scope is hard: whole words, either the full name or the first
+name carrying a Russian case ending of up to two letters ("Ольга" matches
+"Ольге", "Иван" matches "Иваном" but not "Иванович"). Generic diarization
+labels (`Speaker 1`, `SPEAKER_02`) never match, and a name the project's
+index does not know is just a word -- retrieval stays unscoped. Two known
+people named in one question are OR-ed.
+
+**Upgrading rebuilds the index once.** Per-chunk speaker tags are index
+schema v2; the module never migrates in place, so the first read-write
+open of a v1 file deletes it and starts empty, and the app's startup
+catch-up re-indexes the vault (minutes for tens of meetings -- the
+index-status chip shows the progress). No operator action. Until that pass
+runs, a read-only opener -- `transcriber-mcp` -- reports the index as
+stale and its search tools answer the usual "index has not been built yet
+-- open the app once" message rather than serving half-broken results.
 
 **`transcriber-mcp`** is a standalone stdio MCP server over the same vault
 and index -- point Claude Desktop at it and ask questions about your
 meetings **without the app running** (see `mcp_server.py`'s docstring for
-both launch configs). Tools: `hybrid_search`, `list_projects`,
-`list_meetings`, `read_transcript` (time-window slicing, speaker renames
-applied), `read_summary`, `read_note`. Read-only: it never writes the
-vault or the index.
+both launch configs). Tools: `hybrid_search` (same optional `speaker`
+argument as `/v1/search`), `list_projects`, `list_meetings`,
+`read_transcript` (time-window slicing, speaker renames applied),
+`read_summary`, `read_note`. Read-only: it never writes the vault or the
+index -- including the schema-v2 rebuild above, which only the app can do.
 
 ## Speaker diarization (pyannote)
 

@@ -17,6 +17,10 @@ sqlite-vec is optional at runtime: the baked relocatable CPython may lack
 on ``chunks``; ``chunks_vec`` (the vec0 kNN table) is populated only when
 the extension loads, and can be rebuilt from the BLOBs on a later run
 without re-embedding.
+
+``chunk_speakers`` tags every chunk with the casefolded names of the
+speakers who have at least one line in it, so retrieval can be scoped to
+one person through an indexed lookup rather than a scan over chunk text.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from typing import Any
 
 logger = logging.getLogger("transcription")
 
-INDEX_SCHEMA_VERSION = 1
+INDEX_SCHEMA_VERSION = 2
 
 DOC_KINDS = ("transcript", "summary", "note")
 
@@ -61,6 +65,13 @@ CREATE TABLE chunks(
   embedding BLOB
 );
 CREATE INDEX chunks_by_doc ON chunks(doc_id);
+
+CREATE TABLE chunk_speakers(
+  chunk_id INTEGER NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+  speaker_key TEXT NOT NULL,
+  PRIMARY KEY(chunk_id, speaker_key)
+);
+CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
   text,
@@ -99,6 +110,15 @@ CREATE TRIGGER docs_au AFTER UPDATE ON docs BEGIN
 END;
 """
 
+# Speaker-filter subqueries. `{}` takes `?` placeholders only -- every
+# value still binds.
+_TAGGED_CHUNKS = "SELECT chunk_id FROM chunk_speakers WHERE speaker_key IN ({})"
+_TAGGED_DOCS = (
+    "SELECT chunks.doc_id FROM chunks"
+    " JOIN chunk_speakers ON chunk_speakers.chunk_id = chunks.chunk_id"
+    " WHERE chunk_speakers.speaker_key IN ({})"
+)
+
 # Filtered kNN over-fetch: sqlite-vec validates `k` before any outer filter
 # applies, so a filtered query silently under-returns unless it over-asks.
 VEC_OVERFETCH_FACTOR = 4
@@ -127,6 +147,7 @@ class ChunkRecord:
     start_sec: float | None = None
     end_sec: float | None = None
     embedding: list[float] | None = None
+    speakers: tuple[str, ...] = ()  # display names; stored casefolded
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -146,6 +167,20 @@ def _pack(vector: list[float]) -> bytes:
 
 def _unpack(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(blob) // 4}f", blob))
+
+
+def _holders(values: list[str]) -> str:
+    return ",".join("?" for _ in values)
+
+
+def _speaker_keys(speakers: set[str] | None) -> list[str] | None:
+    """Sorted casefolded filter keys, or None when there is no filter.
+
+    An empty set means "no filter" (same convention as ``dates``).
+    """
+    if not speakers:
+        return None
+    return sorted({name.strip().casefold() for name in speakers if name.strip()}) or None
 
 
 class IndexDb:
@@ -172,7 +207,13 @@ class IndexDb:
         self._lock = threading.Lock()
         self._conn = self._open()
         self.vec_available = self._setup_vec()
-        if not read_only:
+        self.schema_stale = False
+        if read_only:
+            # Never migrate a read-only file: report it instead, so the MCP
+            # server answers "not built yet" rather than serving a schema it
+            # does not understand.
+            self.schema_stale = self._user_version() != INDEX_SCHEMA_VERSION
+        else:
             self._migrate_or_recreate()
             if self.vec_available:
                 self._rebuild_vec_from_blobs()
@@ -216,8 +257,15 @@ class IndexDb:
             return {}
         return {str(row["key"]): str(row["value"]) for row in rows}
 
+    def _user_version(self) -> int:
+        try:
+            (user_version,) = self._conn.execute("PRAGMA user_version").fetchone()
+        except sqlite3.Error:
+            return 0
+        return int(user_version)
+
     def _migrate_or_recreate(self) -> None:
-        (user_version,) = self._conn.execute("PRAGMA user_version").fetchone()
+        user_version = self._user_version()
         settings = self._settings()
         expected = {
             "embedding_model": self._embedding_model,
@@ -328,11 +376,19 @@ class IndexDb:
                     " VALUES (?, ?, ?, ?, ?, ?)",
                     (doc_id, seq, chunk.text, chunk.start_sec, chunk.end_sec, blob),
                 )
+                chunk_id = int(chunk_cursor.lastrowid or 0)
                 if self.vec_available and chunk.embedding is not None:
                     self._conn.execute(
                         "INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?, ?)",
-                        (int(chunk_cursor.lastrowid or 0), blob),
+                        (chunk_id, blob),
                     )
+                keys = dict.fromkeys(
+                    name.strip().casefold() for name in chunk.speakers if name.strip()
+                )
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO chunk_speakers(chunk_id, speaker_key) VALUES (?, ?)",
+                    [(chunk_id, key) for key in keys],
+                )
             return doc_id
 
     def _delete_doc_locked(self, doc_id: int) -> None:
@@ -344,6 +400,11 @@ class IndexDb:
                 " (SELECT chunk_id FROM chunks WHERE doc_id = ?)",
                 (doc_id,),
             )
+        self._conn.execute(
+            "DELETE FROM chunk_speakers WHERE chunk_id IN"
+            " (SELECT chunk_id FROM chunks WHERE doc_id = ?)",
+            (doc_id,),
+        )
         # Explicit chunk delete (not just the FK cascade) so the FTS delete
         # triggers fire per row.
         self._conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
@@ -381,6 +442,7 @@ class IndexDb:
         limit: int,
         project: str | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[int]:
         """BM25-ranked doc ids for an FTS5 MATCH over chunk text -- collapsed
         per doc keeping each doc's best rank position."""
@@ -397,6 +459,10 @@ class IndexDb:
         if dates:
             sql += f" AND docs.meeting_date IN ({','.join('?' for _ in dates)})"
             params.extend(sorted(dates))
+        keys = _speaker_keys(speakers)
+        if keys is not None:
+            sql += f" AND chunks.chunk_id IN ({_TAGGED_CHUNKS.format(_holders(keys))})"
+            params.extend(keys)
         sql += " GROUP BY chunks.doc_id ORDER BY best_rank LIMIT ?"
         params.append(limit)
         with self._lock:
@@ -408,24 +474,41 @@ class IndexDb:
                 return []
         return [int(row["doc_id"]) for row in rows]
 
-    def best_chunk_for(self, doc_id: int, match: str) -> tuple[str, float | None] | None:
-        """The best-matching chunk's (text, start_sec) for snippeting."""
+    def best_chunk_for(
+        self,
+        doc_id: int,
+        match: str,
+        speakers: set[str] | None = None,
+    ) -> tuple[str, float | None] | None:
+        """The best-matching chunk's (text, start_sec) for snippeting.
+
+        With a speaker filter only that speaker's chunks are eligible --
+        the fallback included -- so a doc none of whose chunks are tagged
+        yields no snippet at all.
+        """
+        keys = _speaker_keys(speakers)
+        tagged = ""
+        extra: list[object] = []
+        if keys is not None:
+            tagged = f" AND chunks.chunk_id IN ({_TAGGED_CHUNKS.format(_holders(keys))})"
+            extra = list(keys)
+        columns = "SELECT chunks.text AS text, chunks.start_sec AS start_sec"
+        matched_sql = (
+            f"{columns} FROM chunks_fts JOIN chunks ON chunks.chunk_id = chunks_fts.rowid"  # noqa: S608
+            f" WHERE chunks_fts MATCH ? AND chunks.doc_id = ?{tagged}"
+            " ORDER BY chunks_fts.rank LIMIT 1"
+        )
+        first_sql = (
+            f"{columns} FROM chunks WHERE chunks.doc_id = ?{tagged}"  # noqa: S608
+            " ORDER BY chunks.seq LIMIT 1"
+        )
         with self._lock:
             try:
-                row = self._conn.execute(
-                    "SELECT chunks.text AS text, chunks.start_sec AS start_sec"
-                    " FROM chunks_fts JOIN chunks ON chunks.chunk_id = chunks_fts.rowid"
-                    " WHERE chunks_fts MATCH ? AND chunks.doc_id = ?"
-                    " ORDER BY chunks_fts.rank LIMIT 1",
-                    (match, doc_id),
-                ).fetchone()
+                row = self._conn.execute(matched_sql, [match, doc_id, *extra]).fetchone()
             except sqlite3.OperationalError:
                 row = None
             if row is None:
-                row = self._conn.execute(
-                    "SELECT text, start_sec FROM chunks WHERE doc_id = ? ORDER BY seq LIMIT 1",
-                    (doc_id,),
-                ).fetchone()
+                row = self._conn.execute(first_sql, [doc_id, *extra]).fetchone()
         if row is None:
             return None
         start = row["start_sec"]
@@ -437,6 +520,7 @@ class IndexDb:
         limit: int,
         project: str | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[int]:
         sql = "SELECT rowid AS doc_id FROM titles_fts WHERE titles_fts MATCH ?"
         params: list[object] = [match]
@@ -449,6 +533,10 @@ class IndexDb:
             placeholders = ",".join("?" for _ in dates)
             sql += f" AND rowid IN (SELECT doc_id FROM docs WHERE meeting_date IN ({placeholders}))"  # noqa: S608
             params.extend(sorted(dates))
+        keys = _speaker_keys(speakers)
+        if keys is not None:
+            sql += f" AND rowid IN ({_TAGGED_DOCS.format(_holders(keys))})"
+            params.extend(keys)
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)
         with self._lock:
@@ -463,14 +551,20 @@ class IndexDb:
         query: str,
         project: str | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[int]:
         """Docs whose meeting title contains the query, case-insensitively."""
         needle = query.strip().casefold()
         if not needle:
             return []
+        keys = _speaker_keys(speakers)
         sql = "SELECT doc_id, meeting_title, project, meeting_date FROM docs"
+        params: list[object] = []
+        if keys is not None:
+            sql += f" WHERE doc_id IN ({_TAGGED_DOCS.format(_holders(keys))})"
+            params.extend(keys)
         with self._lock:
-            rows = self._conn.execute(sql).fetchall()
+            rows = self._conn.execute(sql, params).fetchall()
         return [
             int(row["doc_id"])
             for row in rows
@@ -485,12 +579,22 @@ class IndexDb:
         k: int,
         project: str | None = None,
         dates: set[str] | None = None,
+        speakers: set[str] | None = None,
     ) -> list[tuple[int, int]]:
         """Nearest chunks by cosine distance: ``(doc_id, chunk_id)`` pairs in
         rank order, collapsed per doc keeping the best chunk."""
         if not self.vec_available:
             return []
         fetch_k = max(k * VEC_OVERFETCH_FACTOR, VEC_MIN_K)
+        keys = _speaker_keys(speakers)
+        chunk_sql = (
+            "SELECT chunks.doc_id AS doc_id, docs.project AS project,"
+            " docs.meeting_date AS meeting_date"
+            " FROM chunks JOIN docs ON docs.doc_id = chunks.doc_id"
+            " WHERE chunks.chunk_id = ?"
+        )
+        if keys is not None:
+            chunk_sql += f" AND chunks.chunk_id IN ({_TAGGED_CHUNKS.format(_holders(keys))})"
         with self._lock:
             try:
                 rows = self._conn.execute(
@@ -506,11 +610,7 @@ class IndexDb:
             seen_docs: set[int] = set()
             for row in rows:
                 chunk = self._conn.execute(
-                    "SELECT chunks.doc_id AS doc_id, docs.project AS project,"
-                    " docs.meeting_date AS meeting_date"
-                    " FROM chunks JOIN docs ON docs.doc_id = chunks.doc_id"
-                    " WHERE chunks.chunk_id = ?",
-                    (int(row["chunk_id"]),),
+                    chunk_sql, [int(row["chunk_id"]), *(keys or [])]
                 ).fetchone()
                 if chunk is None:
                     continue
@@ -560,6 +660,26 @@ class IndexDb:
             return None
         start = row["start_sec"]
         return str(row["text"]), (float(start) if start is not None else None)
+
+    def known_speakers(self, project: str | None = None) -> list[str]:
+        """Every casefolded speaker key the index knows, optionally scoped to
+        one project -- the roster the chat matches a question against."""
+        sql = "SELECT DISTINCT chunk_speakers.speaker_key AS speaker_key FROM chunk_speakers"
+        params: list[object] = []
+        if project is not None:
+            sql += (
+                " JOIN chunks ON chunks.chunk_id = chunk_speakers.chunk_id"
+                " JOIN docs ON docs.doc_id = chunks.doc_id"
+                " WHERE docs.project = ?"
+            )
+            params.append(project)
+        sql += " ORDER BY speaker_key"
+        with self._lock:
+            try:
+                rows = self._conn.execute(sql, params).fetchall()
+            except sqlite3.Error:
+                return []
+        return [str(row["speaker_key"]) for row in rows]
 
     def doc_count(self) -> int:
         with self._lock:

@@ -44,6 +44,7 @@ from transcription.llm.prompts import render_transcript_lines
 from transcription.search.dates import normalize_date_param
 from transcription.search.index_db import IndexDb
 from transcription.search.service import SearchService
+from transcription.search.speakers import normalize_speaker_param
 
 _MAX_TEXT_BYTES = 4 * 1024 * 1024
 
@@ -93,12 +94,20 @@ class _Vault:
             index_path = Path(self.config.index_db_path)
             if not index_path.is_file():
                 return None
-            self._db = IndexDb(
+            db = IndexDb(
                 index_path,
                 embedding_model=self.config.embedding_model,
                 embedding_dim=0,  # never migrates in read-only mode
                 read_only=True,
             )
+            if db.schema_stale:
+                # An index left behind by an older release: read-only opens
+                # never migrate, so treat it as absent (the app rebuilds it on
+                # its next launch) instead of querying a schema whose answers
+                # we cannot trust.
+                db.close()
+                return None
+            self._db = db
         return self._db
 
     def search_service(self) -> SearchService | None:
@@ -132,19 +141,31 @@ def build_server(config: Config) -> Any:
 
     @server.tool()
     def hybrid_search(
-        query: str, project: str | None = None, top_k: int = 10, date: str | None = None
+        query: str,
+        project: str | None = None,
+        top_k: int = 10,
+        date: str | None = None,
+        speaker: str | None = None,
     ) -> list[dict[str, Any]] | str:
         """Search all meeting transcripts, summaries and notes (hybrid:
         semantic + full-text + fuzzy titles). Returns ranked hits with a
         snippet, the meeting's vault-relative directory and a timestamp.
         ``date`` (``YYMMDD`` or ``YYYY-MM-DD``) hard-filters to that
-        meeting day."""
+        meeting day; ``speaker`` (a person's name as it appears in the
+        transcripts, e.g. "Иван Петров") hard-filters to the transcript
+        chunks that person speaks in -- a name nobody in the vault
+        carries simply finds nothing."""
         service = vault.search_service()
         if service is None:
             return _NO_INDEX_MESSAGE
         normalized = normalize_date_param(date)
+        speaker_key = normalize_speaker_param(speaker)
         results = service.search(
-            query, project=project, top_k=top_k, dates={normalized} if normalized else None
+            query,
+            project=project,
+            top_k=top_k,
+            dates={normalized} if normalized else None,
+            speakers={speaker_key} if speaker_key else None,
         )
         return [result.as_dict() for result in results]
 

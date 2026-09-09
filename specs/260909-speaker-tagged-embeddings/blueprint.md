@@ -2,7 +2,7 @@
 slug: 260909-speaker-tagged-embeddings
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Speaker-tagged embeddings (per-chunk speaker tags + speaker-scoped retrieval)
@@ -138,7 +138,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 
 ## Tasks
 
-### [ ] T1: Per-chunk speaker tags in the index DB, speaker-filtered reads, schema v2  [deps: —]
+### [x] T1: Per-chunk speaker tags in the index DB, speaker-filtered reads, schema v2  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/search/index_db.py`
 - **Test first**: `services/transcription/tests/test_index_db_speakers.py` — cases (real tmp-path SQLite, `FakeEmbedder` dims, seeded through `upsert_doc` with `ChunkRecord(speakers=...)`): a chunk is found by `fts_query(..., speakers={"иван петров"})` when tagged "Иван Петров" and not when the filter names "anna" (FR-1, FR-4); the filter is casefold-insensitive for Cyrillic (`"ИВАН ПЕТРОВ"` stored, `"иван петров"` queried) (FR-1); `best_chunk_for` with a speaker filter returns a chunk tagged with that speaker even when another chunk of the doc ranks higher on the MATCH (FR-4); `exact_title_docs` / `title_trigram_query` with a filter return only docs having a tagged chunk (FR-4); `vec_query` with a filter returns only tagged chunks — skipped when `db.vec_available` is false (FR-4); a filter naming an unknown speaker returns `[]` from every read (FR-4); `known_speakers()` lists distinct keys and `known_speakers(project)` scopes them (FR-5); re-upserting a doc with different speakers and `delete_docs_not_in` leave `known_speakers()` consistent (FR-1); a file written with `user_version = 1` (write the pragma by hand on a fresh sqlite3 connection) is recreated empty on a read-write open and reports `schema_stale` on a read-only open without being modified (FR-3); `ChunkRecord()` without `speakers` still round-trips (existing callers unaffected).
@@ -146,7 +146,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: all cases green; existing `tests/test_index_db.py` unchanged and green; `make lint`, `make type`, `make test` pass.
 
-### [ ] T3: Speaker mention extraction (pure logic)  [deps: —]
+### [x] T3: Speaker mention extraction (pure logic)  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/search/speakers.py`
 - **Test first**: `services/transcription/tests/test_search_speakers.py` — cases for `extract_query_speakers` with `known = {"иван петров", "ольга смирнова", "anna", "марк", "speaker 1", "speaker_02"}`: "что говорил Иван про дедлайн" → `{"иван петров"}`; "у Ивана и Ольги" → both; "Иваном" (2-letter ending) → hit, "Иванович" → no hit; "Ольге" (final `а` swapped) → hit; "какая марка машины" → `{"марк"}` is NOT required — assert "в марте" → empty (FR-5); "Иван Петров сказал" full-name match; case-insensitive Latin "ANNA" → `{"anna"}`; two known speakers "иван петров" and "иван сидоров" both returned for "Иван"; "which speakers were there" → empty (generic labels never match); text naming nobody → empty; `normalize_speaker_param`: `" Иван Петров "` → `"иван петров"`, `""`/`None`/whitespace → `None` (FR-4).
@@ -154,7 +154,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: all cases green; `make lint`, `make type`, `make test` pass.
 
-### [ ] T2: Indexer tags chunks with their speakers and names them in the breadcrumb  [deps: T1]
+### [x] T2: Indexer tags chunks with their speakers and names them in the breadcrumb  [deps: T1]
 
 - **Files**: `services/transcription/src/transcription/search/indexer.py`
 - **Test first**: `services/transcription/tests/test_indexer_speakers.py` — cases (synthetic vault like `test_indexer.py`, `FakeEmbedder`, tmp-path `IndexDb`): after `index_vault`, `db.fts_query("дедлайн", 10, speakers={"speaker 1"})` finds the labelled meeting and `speakers={"nobody"}` finds nothing (FR-1); a `speakers.json` override renames the tag — the chunk is found under the operator's name and no longer under the diarization label (FR-1); the unlabelled `unsorted` transcript's chunks carry no tags (`known_speakers()` lacks them) and summary/note chunks carry none (FR-1); the stored chunk text's first line equals `[ACME / 260831 - Weekly sync / 0:00–0:04 / Speaker 1, Speaker 2]` for the fixture (read via `db.get_chunk` on the vector hit or `best_chunk_for`) (FR-2); a note's first line is still `[ACME / 260831 - Weekly sync / note]` (FR-2); the embedder received texts whose first line names the speakers (`FakeEmbedder.calls`) (FR-2); a chunk whose lines have no speaker gets a breadcrumb without the speaker segment (FR-2).
@@ -162,7 +162,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: all cases green; `tests/test_indexer.py` still green; `make lint`, `make type`, `make test` pass.
 
-### [ ] T4: Speaker filter through SearchService and `POST /v1/search`  [deps: T1, T2]
+### [x] T4: Speaker filter through SearchService and `POST /v1/search`  [deps: T1, T2]
 
 - **Files**: `services/transcription/src/transcription/search/service.py`, `services/transcription/src/transcription/schema.py`, `services/transcription/src/transcription/api/search_routes.py`
 - **Test first**: `services/transcription/tests/test_api_search_speakers.py` — cases (app fixture as in `test_api_search.py`, index built by `index_vault` over a vault whose two meetings have different `speaker` labels, one with a `speakers.json` override): `{"query": "дедлайн", "speaker": "Иван Петров"}` returns only the meeting where Иван speaks (FR-4); the same query without `speaker` returns both, ranked as before (FR-4); `"speaker": "   "` behaves as no filter (FR-4); `"speaker": "Nobody"` returns `{"results": []}` with 200 (FR-4); the hit's snippet with a filter comes from a chunk the speaker took part in (assert a phrase unique to that speaker's lines) (FR-4); response keys are exactly the pinned wire shape (no new field) (FR-4); a `speaker` over 200 chars is a 422.
@@ -170,7 +170,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: all cases green; `tests/test_api_search.py` still green; `make lint`, `make type`, `make test` pass.
 
-### [ ] T5: Chat auto-scopes retrieval to the speaker the question names; README  [deps: T3, T4]
+### [x] T5: Chat auto-scopes retrieval to the speaker the question names; README  [deps: T3, T4]
 
 - **Files**: `services/transcription/src/transcription/api/search_routes.py`, `services/transcription/README.md`
 - **Test first**: `services/transcription/tests/test_api_chat_speakers.py` — cases (fixtures as in `test_api_chat.py` with `FakeLlm`, vault with one meeting whose segments alternate "Иван Петров" / "Anna" and a second meeting where only "Anna" speaks): "что говорил Иван про дедлайн" yields `sources` only from the Иван meeting (FR-5); "что говорила Anna" yields sources from both meetings (FR-5); a question naming nobody yields the same sources as before the feature (FR-5); a question naming an unknown person ("что сказал Пётр") is not filtered (no known match → unscoped retrieval) (FR-5); with `project` set to a project where Иван never speaks, "Иван" is not treated as a filter (known set is project-scoped) (FR-5); the date and speaker filters compose: "что говорил Иван 260830" against a vault where Иван's meeting is 260831 yields no sources (FR-5).
@@ -178,7 +178,7 @@ CREATE INDEX chunk_speakers_by_key ON chunk_speakers(speaker_key);
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: all cases green; `tests/test_api_chat.py` still green; README section reflects the shipped behaviour; `make lint`, `make type`, `make test` pass.
 
-### [ ] T6: MCP `hybrid_search` speaker argument and stale-index degradation  [deps: T1, T4]
+### [x] T6: MCP `hybrid_search` speaker argument and stale-index degradation  [deps: T1, T4]
 
 - **Files**: `services/transcription/src/transcription/mcp_server.py`
 - **Test first**: `services/transcription/tests/test_mcp_server_speakers.py` — cases (in-process `FastMCP.call_tool` via the `_call` helper pattern of `test_mcp_server.py`, index built with `FakeEmbedder`): `hybrid_search` with `speaker="Иван Петров"` returns only that speaker's meeting and without it returns all (FR-4); an unknown `speaker` returns an empty list, not an error (FR-4); an index file whose `user_version` is 1 (written by hand) makes every search tool answer the "index has not been built yet" message rather than raising (FR-3); the tool's docstring mentions `speaker` (the MCP client's only documentation — assert via the listed tool description).

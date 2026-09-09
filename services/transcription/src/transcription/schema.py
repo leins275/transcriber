@@ -210,6 +210,11 @@ class SearchRequest(BaseModel):
     # `YYMMDD` or ISO `YYYY-MM-DD`. An unparseable value degrades to no
     # filter rather than an error.
     date: str | None = Field(default=None, max_length=10)
+    # Hard speaker filter over the index's per-chunk speaker tags: a
+    # display name as the operator knows it, matched casefolded. Empty or
+    # whitespace means no filter; a name nobody in the vault has simply
+    # finds nothing.
+    speaker: str | None = Field(default=None, max_length=200)
 
 
 class SearchResultModel(BaseModel):
