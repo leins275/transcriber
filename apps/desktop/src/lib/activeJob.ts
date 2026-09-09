@@ -13,6 +13,10 @@ export type ActiveJobView = {
   label: string;
   /** Whole percent, or `null` while the stage has not reported progress. */
   percent: number | null;
+  /** What the running stage is doing right now (e.g. `rendering PDF`),
+   * or `null` when it reports none -- and always `null` unless the job is
+   * running, so a stale phase never narrates a job that is merely waiting. */
+  phase: string | null;
 };
 
 /** What each job type is doing — the header's verb, mirroring `JobRow`'s
@@ -54,5 +58,6 @@ export function activeJobView(jobs: JobSnapshot[]): ActiveJobView | null {
     job.state === "running" && job.progress != null
       ? Math.round(Math.max(0, Math.min(1, job.progress)) * 100)
       : null;
-  return { label: `${verb} “${displayName(job)}”`, percent };
+  const phase = job.state === "running" ? (job.phase ?? null) : null;
+  return { label: `${verb} “${displayName(job)}”`, percent, phase };
 }

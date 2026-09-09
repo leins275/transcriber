@@ -49,6 +49,15 @@ function projectFor(job: JobSnapshot): string | null {
   return parseFileName(job.file_name)?.project ?? null;
 }
 
+/** The bar's fraction as whole percent, clamped: the service is the source
+ * of truth, but a fraction that overshoots must never paint past the end of
+ * the track (nor announce more than 100). `null` means this phase has no
+ * linear signal at all -- an honest absence, not a zero. */
+function percentFor(job: JobSnapshot): number | null {
+  if (job.progress == null) return null;
+  return Math.round(Math.max(0, Math.min(1, job.progress)) * 100);
+}
+
 function metaLine(job: JobSnapshot, project: string | null): string {
   const jobType: JobType = job.job_type ?? "transcribe";
   switch (job.state) {
@@ -56,9 +65,10 @@ function metaLine(job: JobSnapshot, project: string | null): string {
       return project ? `Queued · next in line · ${project}` : "Queued · next in line";
     case "running": {
       const parts = [RUNNING_TEXT[jobType] ?? "Working"];
-      if (job.progress != null) {
-        parts.push(`${Math.round(job.progress * 100)}%`);
-      }
+      // <verb> · <phase> · <NN%> · <project>, each part only when it exists.
+      if (job.phase) parts.push(job.phase);
+      const percent = percentFor(job);
+      if (percent != null) parts.push(`${percent}%`);
       if (project) parts.push(project);
       return parts.join(" · ");
     }
@@ -149,8 +159,7 @@ export function JobRow({ job, onReveal, onCancel }: JobRowProps) {
   // unrevealable and showed no path at all).
   const revealablePath = job.transcript_path ?? job.source_dest ?? job.meeting_dir;
   const project = projectFor(job);
-  const progressPercent =
-    job.progress != null ? Math.max(0, Math.min(1, job.progress)) * 100 : null;
+  const percent = percentFor(job);
 
   return (
     <div className={styles.row} data-state={job.state}>
@@ -170,11 +179,31 @@ export function JobRow({ job, onReveal, onCancel }: JobRowProps) {
             Ingesting, please wait...
           </span>
         )}
-        {job.state === "running" && progressPercent != null && (
-          <div className={styles.progressTrack}>
-            <div className={styles.progressFill} style={{ width: `${progressPercent}%` }} />
-          </div>
-        )}
+        {job.state === "running" &&
+          (percent != null ? (
+            <div
+              className={styles.progressTrack}
+              role="progressbar"
+              aria-label="Job progress"
+              aria-valuenow={percent}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div className={styles.progressFill} style={{ width: `${percent}%` }} />
+            </div>
+          ) : (
+            // The phase reports no linear signal, so the bar announces no
+            // value: a sliver slides across the track to say "still working"
+            // rather than an empty 0% bar claiming no progress was made.
+            <div
+              className={styles.progressTrack}
+              role="progressbar"
+              aria-label="Job progress"
+              data-indeterminate="true"
+            >
+              <div className={`${styles.progressFill} ${styles.progressSliver}`} />
+            </div>
+          ))}
         {job.message && <p className={styles.message}>{job.message}</p>}
         {revealablePath && <span className={`${styles.path} mono`}>{revealablePath}</span>}
       </div>

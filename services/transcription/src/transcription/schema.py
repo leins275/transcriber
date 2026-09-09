@@ -183,7 +183,14 @@ class JobStatus(BaseModel):
     job_id: str
     status: JobState
     job_type: JobType = "transcribe"
-    progress: float
+    # The current phase's real fraction, or null when the running phase has
+    # no linear signal (a summarize call, a PDF render) -- never a
+    # hand-picked constant (FR-1).
+    progress: float | None
+    # A short lowercase label for the running sub-step ("rendering PDF"),
+    # or null while queued, in every terminal state, and whenever the
+    # headline verb already says it all (a transcribe job's decode).
+    phase: str | None = None
     # Non-fatal degradations (a failed diarization, a failed PDF render)
     # the job survived but the caller should surface.
     warnings: list[str] = Field(default_factory=list)
@@ -196,7 +203,9 @@ class JobStatus(BaseModel):
 
     @field_validator("progress")
     @classmethod
-    def _clamp_progress(cls, value: float) -> float:
+    def _clamp_progress(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
         return max(0.0, min(1.0, value))
 
 

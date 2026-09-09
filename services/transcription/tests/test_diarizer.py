@@ -51,17 +51,29 @@ class FakePipeline:
     supports_embeddings: bool = True
     devices: list[Any] = field(default_factory=list)
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Step reports this pipeline replays through the `hook` it was handed,
+    # the way `pyannote/audio/pipelines/speaker_diarization.py` does:
+    # `(step_name, step_artifact, extra kwargs)`, always with `file=`.
+    hook_calls: list[tuple[str, Any, dict[str, Any]]] = field(default_factory=list)
+    # The `hook` seen on each call, in call order (the TypeError retry adds
+    # a second entry).
+    hooks: list[Any] = field(default_factory=list)
 
     def to(self, device: Any) -> None:
         self.devices.append(device)
 
     def __call__(self, audio: str, **kwargs: Any) -> Any:
+        hook = kwargs.pop("hook", None)
+        self.hooks.append(hook)
         wants_embeddings = bool(kwargs.pop("return_embeddings", False))
         if wants_embeddings and not self.supports_embeddings:
             raise TypeError("unexpected keyword argument 'return_embeddings'")
         self.calls.append((audio, kwargs))
         if self.raise_on_call is not None:
             raise self.raise_on_call
+        if hook is not None:
+            for step_name, step_artifact, counts in self.hook_calls:
+                hook(step_name, step_artifact, file=audio, **counts)
         annotation = FakeAnnotation(self.tracks)
         if wants_embeddings:
             return annotation, self.embeddings
@@ -371,3 +383,165 @@ def test_the_recording_is_decoded_by_faster_whisper_and_a_failure_is_audio_decod
 
     assert raised.value.kind is ErrorKind.AUDIO_DECODE
     assert "meeting.mp4" in raised.value.message
+
+
+# -- pyannote step progress (honest job progress, FR-4) ---------------------
+
+
+def _progress_spy(events: list[Any]) -> Any:
+    """The `on_progress` callback `diarize` is handed; every `(phase,
+    fraction)` pair lands in `events` in the order it was reported."""
+
+    def record(phase: str, fraction: float | None) -> None:
+        events.append((phase, fraction))
+
+    return record
+
+
+def _mark_load_and_decode(
+    monkeypatch: pytest.MonkeyPatch,
+    diarizer: PyannoteDiarizer,
+    pipeline_cls: FakePipelineClass,
+    events: list[Any],
+) -> None:
+    """Drop markers into the same timeline the progress spy writes to, so a
+    single list shows whether a phase was reported *before* its step ran."""
+    load = pipeline_cls.from_pretrained
+    decode = diarizer._decode
+
+    def marked_from_pretrained(source: str, **kwargs: Any) -> Any:
+        events.append("loaded the pipeline")
+        return load(source, **kwargs)
+
+    def marked_decode(path: Path) -> Any:
+        events.append("decoded the recording")
+        return decode(path)
+
+    monkeypatch.setattr(pipeline_cls, "from_pretrained", marked_from_pretrained)
+    monkeypatch.setattr(diarizer, "_decode", marked_decode)
+
+
+def test_the_load_and_decode_phases_are_reported_before_each_step_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[Any] = []
+    pipeline_cls = FakePipelineClass(FakePipeline(tracks=[(0.0, 2.0, "SPEAKER_00")]))
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, pipeline_cls)
+    _mark_load_and_decode(monkeypatch, diarizer, pipeline_cls, events)
+
+    diarizer.diarize(Path("meeting.wav"), cancel=CancelToken(), on_progress=_progress_spy(events))
+
+    assert events == [
+        ("loading speaker model", None),
+        "loaded the pipeline",
+        ("decoding audio", None),
+        "decoded the recording",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("step_name", "phase"),
+    [
+        ("segmentation", "segmenting speech"),
+        ("speaker_counting", "counting speakers"),
+        ("embeddings", "extracting voice embeddings"),
+        ("discrete_diarization", "assigning speakers"),
+        ("some_new_step", "some new step"),
+    ],
+)
+def test_a_pipeline_step_is_reported_under_its_display_phase(
+    monkeypatch: pytest.MonkeyPatch, step_name: str, phase: str
+) -> None:
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00")],
+        hook_calls=[(step_name, None, {"total": 10, "completed": 4})],
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+    events: list[Any] = []
+
+    diarizer.diarize(Path("meeting.wav"), cancel=CancelToken(), on_progress=_progress_spy(events))
+
+    assert events == [
+        ("loading speaker model", None),
+        ("decoding audio", None),
+        (phase, 0.4),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("step_artifact", "counts", "fraction"),
+    [
+        (None, {"total": 10, "completed": 4}, 0.4),
+        (None, {"total": 4, "completed": 0}, 0.0),
+        (None, {"total": 5, "completed": 5}, 1.0),
+        (None, {"total": 5, "completed": 7}, 1.0),
+        (None, {"total": 0, "completed": 0}, None),
+        (None, {}, None),
+        (3, {}, 1.0),
+        ("an artifact", {}, 1.0),
+    ],
+)
+def test_the_reported_fraction_follows_the_pipeline_step_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    step_artifact: Any,
+    counts: dict[str, Any],
+    fraction: float | None,
+) -> None:
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00")],
+        hook_calls=[("segmentation", step_artifact, counts)],
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+    events: list[Any] = []
+
+    diarizer.diarize(Path("meeting.wav"), cancel=CancelToken(), on_progress=_progress_spy(events))
+
+    assert events == [
+        ("loading speaker model", None),
+        ("decoding audio", None),
+        ("segmenting speech", fraction),
+    ]
+
+
+def test_a_pipeline_without_embedding_support_still_reports_its_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The `return_embeddings=True` call raises TypeError and the engine
+    # retries without it; the retry carries the hook too, so a hand-picked
+    # pipeline is not silently mute.
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00")],
+        supports_embeddings=False,
+        hook_calls=[("embeddings", None, {"total": 8, "completed": 2})],
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+    events: list[Any] = []
+
+    diarizer.diarize(Path("meeting.wav"), cancel=CancelToken(), on_progress=_progress_spy(events))
+
+    assert events == [
+        ("loading speaker model", None),
+        ("decoding audio", None),
+        ("extracting voice embeddings", 0.25),
+    ]
+
+
+def test_a_pipeline_reporting_steps_without_a_progress_listener_still_diarizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `on_progress` omitted: whatever hook the pipeline is handed must
+    # survive being called, and the turns are the artifact either way.
+    pipeline = FakePipeline(
+        tracks=[(0.0, 2.0, "SPEAKER_00")],
+        hook_calls=[("segmentation", None, {"total": 4, "completed": 2})],
+    )
+    diarizer = PyannoteDiarizer(_config())
+    _wire(monkeypatch, diarizer, FakePipelineClass(pipeline))
+
+    output = diarizer.diarize(Path("meeting.wav"), cancel=CancelToken())
+
+    assert output.turns == [SpeakerTurn(start=0.0, end=2.0, speaker="SPEAKER_00")]

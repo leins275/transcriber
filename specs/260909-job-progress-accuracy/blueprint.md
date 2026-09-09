@@ -2,7 +2,7 @@
 slug: 260909-job-progress-accuracy
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Honest job progress for every job type
@@ -151,7 +151,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 
 ## Tasks
 
-### [ ] T1: Service contract — `phase`, nullable `progress`, transcribe `preparing`  [deps: —]
+### [x] T1: Service contract — `phase`, nullable `progress`, transcribe `preparing`  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/schema.py`, `services/transcription/src/transcription/jobs.py`, `services/transcription/src/transcription/app.py`, `services/transcription/src/transcription/cli.py`, `services/transcription/README.md`
 - **Test first**: `services/transcription/tests/test_jobs_phase.py` — cases: (1) `JobStatus` accepts `progress=None` and `phase="rendering PDF"`, still clamps `1.7` to `1.0` and `-0.2` to `0.0` (FR-1); (2) through the FastAPI `TestClient` (fixtures as in `tests/test_api_jobs.py`, `FakeProvider` registered as `"fake"`), a job polled right after submission answers `progress: 0.0, phase: null`, and the succeeded job answers `progress: 1.0, phase: null` (FR-1); (3) a job answered from the ledger after `JobManager` forgets it (the `_job_state_from_ledger_row` path — construct a second manager over the same ledger) reads `1.0` / `null` (FR-1); (4) a test-local provider that blocks on a `threading.Event` *before* its first `on_progress` call is observed via `manager.status()` as `phase == "preparing"`, `progress == 0.0`; after the event is set and it reports `0.5`, the status reads `phase is None`, `progress == 0.5`; success ends `1.0` / `None` (FR-5 first bullet); (5) the CLI transcribe loop (`cli.run_transcribe`/`main` as `tests/test_cli.py` drives it, with the blocking provider) writes a `phase: preparing` line to stderr followed by `progress:` lines, and a status with `progress=None` produces no `progress:` line and no exception (FR-9).
@@ -159,7 +159,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: the new file passes; every existing test stays green untouched (`tests/test_api_jobs.py`'s monotonic-progress cases, and `tests/test_jobs_diarization.py` — its `..._scaled_below_one_...` test cannot tell scaled from unscaled with instant fakes, so it keeps passing until T3's author replaces it); `make format lint type test` green for the Python payload.
 
-### [ ] T2: pyannote step progress in `PyannoteDiarizer`  [deps: —]
+### [x] T2: pyannote step progress in `PyannoteDiarizer`  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/diarizer.py`
 - **Test first**: `services/transcription/tests/test_diarizer.py` — extend the file's own `FakePipeline` to accept and retain a `hook` kwarg; cases: (1) `diarize(path, cancel=…, on_progress=spy)` records `("loading speaker model", None)` before `FakePipelineClass.from_pretrained` runs and `("decoding audio", None)` before the decode seam runs (FR-4); (2) the pipeline was called with a callable `hook`; invoking it exactly as pyannote does — `hook("segmentation", None, file=audio, total=10, completed=4)` → spy sees `("segmenting speech", 0.4)`; `hook("embeddings", None, file=audio, total=5, completed=5)` → `("extracting voice embeddings", 1.0)`; `hook("speaker_counting", 3, file=audio)` → `("counting speakers", None)`; `hook("discrete_diarization", object(), file=audio)` → `("assigning speakers", None)`; `hook("segmentation", object(), file=audio)` → `("segmenting speech", 1.0)` (FR-4); (3) `total=0` and `completed > total` report `None` and `1.0` respectively, no exception (FR-4); (4) an unknown step `"some_new_step"` with counts reports `("some new step", fraction)` (FR-4); (5) the `TypeError` retry path (existing `test_a_pipeline_without_embedding_support_still_diarizes`) still receives the `hook` on the second call (FR-4); (6) with `on_progress` omitted the pipeline still gets a callable hook (or `None`) and every existing case in the file passes unchanged.
@@ -167,7 +167,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: `uv run --directory services/transcription pytest tests/test_diarizer.py -q` green; mypy clean (`make type`); `make lint` green.
 
-### [ ] T3: Diarization phases in both job paths  [deps: T1, T2]
+### [x] T3: Diarization phases in both job paths  [deps: T1, T2]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`
 - **Test first**: `services/transcription/tests/test_jobs_diarization.py` — this task's author also extends `services/transcription/tests/fakes.py::FakeDiarizer` (the only task touching `fakes.py`): an `on_progress=None` kwarg and a scripted `phases: list[tuple[str, float | None]]` it replays before returning, plus an optional `threading.Event` it waits on after replaying (so a test can observe the last replayed phase through `manager.status()`). Cases: (1) transcribe with `diarize=True` and a provider that blocks after reporting `0.75`: status reads `progress == 0.75`, `phase is None` — the fraction is no longer scaled to `0.9` (FR-5; replaces `test_transcription_progress_is_scaled_below_one_while_diarization_remains`); (2) same job, diarizer scripted with `[("segmenting speech", 0.4), ("extracting voice embeddings", 0.6)]` and blocking: status reads `("extracting voice embeddings", 0.6)` (FR-5); (3) after release, the job succeeds at `1.0` / `None`, transcript carries speakers as before (FR-5); (4) a diarizer raising `AUDIO_DECODE` on the transcribe path still yields a transcript with the `diarization.status == "failed"` block and ends `1.0` / `None` (FR-5); (5) the standalone `diarize` job with the blocking scripted diarizer is observed at its last replayed phase with `progress` equal to that phase's fraction, and ends `1.0` / `None` with `speaker_count`/`embeddings` in the manifest as before (FR-6); (6) a `diarize` job cancelled while the diarizer blocks ends `cancelled` with `phase is None` (FR-1); (7) with speaker embeddings and a sibling meeting to match, the final manifest's `auto_named_segments` and the sibling-named speakers are unchanged from today's test — the `naming speakers` phase write is not observed mid-flight (no seam is worth adding for a sub-second step) but must not alter the outcome (FR-5/6).
@@ -175,7 +175,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: `pytest tests/test_jobs_diarization.py tests/test_jobs.py tests/test_diarizer.py -q` green with the old scaled-progress test replaced; `make format lint type test` green for the Python payload.
 
-### [ ] T4: Summarize and export phases  [deps: T3]
+### [x] T4: Summarize and export phases  [deps: T3]
 
 - **Files**: `services/transcription/src/transcription/jobs.py`
 - **Test first**: `services/transcription/tests/test_llm_jobs.py` — cases (subclass `tests/fakes.py::FakeLlm` locally in this file with `threading.Event`s; do not edit `fakes.py`): (1) a summarize job whose LLM blocks *before* streaming is observed as `phase == "reading transcript"`, `progress is None` (FR-2); (2) an LLM that streams its 3 pieces then blocks is observed as `phase == "writing summary · 3 tokens"`, `progress is None` (FR-2); (3) a two-chunk transcript (as `test_a_long_transcript_is_map_reduced` builds one) with an LLM blocking during its second call is observed as `phase == "summarizing part 2/3 · 3 tokens"` (FR-2); (4) success ends `1.0` / `None` and writes `summary.md` (FR-2, keep the existing assertions); (5) an export job observed at the moment `exporting.build_export_md` runs (monkeypatch the module attribute `transcription.jobs.exporting.build_export_md` with a wrapper that captures `manager.status(job_id)` and delegates) reads `("writing export.md", None)`, and at the moment `transcription.jobs.render_pdf` runs reads `("rendering PDF", None)` (FR-3); (6) export ends `1.0` / `None` with both artifacts, and the PDF-font warning test still passes (FR-3).
@@ -183,7 +183,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`, `testing-toolkit:python-testing-patterns`
 - **Done when**: `pytest tests/test_llm_jobs.py tests/test_llm_units.py -q` green; full `uv run --directory services/transcription pytest -q` green under 30 s; `make format lint type test` green for the Python payload.
 
-### [ ] T5: Rust seam — `phase` and nullable `progress` through to `JobSnapshot`  [deps: —]
+### [x] T5: Rust seam — `phase` and nullable `progress` through to `JobSnapshot`  [deps: —]
 
 - **Files**: `apps/desktop/src-tauri/src/service/mod.rs`, `apps/desktop/src-tauri/src/service/http.rs`, `apps/desktop/src-tauri/src/service/fake.rs`, `apps/desktop/src-tauri/src/jobs.rs`, `apps/desktop/src-tauri/src/commands.rs`, `apps/desktop/src-tauri/src/commands/llm.rs`, `apps/desktop/src-tauri/src/commands/speakers.rs`
 - **Test first**: `apps/desktop/src-tauri/tests/job_phase.rs` (cargo integration test over the public `transcriber_desktop_lib` surface, like `tests/e2e_flow.rs`; `wiremock` is already a dev-dependency) — cases: (1) `JobStatus::from_wire("running", None, Some("rendering PDF"), None, None)` yields `progress: None`, `phase: Some(..)`; `from_wire("cancelled", Some(0.3), None, ..)` keeps the `"cancelled"` message override (FR-7); (2) `HttpService::new(mock_url, token)` `.status()` against a body `{"status":"running","progress":null,"phase":"rendering PDF"}` decodes to `None` / `Some`; against `{"status":"running","progress":0.5}` (no `phase` key) decodes to `Some(0.5)` / `None` (FR-7); (3) `FakeService` scripted with `FakeTiming { running_polls: 2, .. }` walks Queued → Running → Done with `progress` `Some(_)` non-decreasing and `phase` `None` throughout (FR-7); (4) a `JobRegistry` polling a test-local `TranscriptionService` impl whose consecutive `Running` statuses differ *only* in `phase` emits one `EventSink` snapshot per distinct phase, each carrying that phase (FR-7); (5) `serde_json::to_value(&JobSnapshot{..})` contains a `"phase"` key (`null` when unset) (FR-7).
@@ -191,7 +191,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: `cargo test -p transcriber-desktop` green (inline + `tests/`); `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --all --check` clean.
 
-### [ ] T6: `JobRow` — phase text, real bar or indeterminate track  [deps: T5]
+### [x] T6: `JobRow` — phase text, real bar or indeterminate track  [deps: T5]
 
 - **Files**: `apps/desktop/src/types.ts`, `apps/desktop/src/components/JobRow.tsx`, `apps/desktop/src/components/JobRow.module.css`
 - **Test first**: `apps/desktop/src/components/JobRow.test.tsx` — cases: (1) running `summarize` with `phase: "writing summary · 812 tokens"`, `progress: null` renders meta `Summarizing · writing summary · 812 tokens`, no `%`, and an element with `role="progressbar"` lacking `aria-valuenow` (the indeterminate track) (FR-8); (2) running `diarize` with `phase: "segmenting speech"`, `progress: 0.42` renders `Identifying speakers · segmenting speech · 42%` and a `role="progressbar"` with `aria-valuenow="42"` whose fill width is `42%` (FR-8); (3) running `transcribe` with `phase: null`, `progress: 0.42` still renders `Transcribing · 42%` (existing case stays green) (FR-8); (4) a `queued`, `done` and `failed` row given a stray `phase` renders no phase text and no progressbar (FR-8); (5) `progress: 1.7` is clamped in the rendered width (existing clamp behaviour).
@@ -199,7 +199,7 @@ Makefile QA targets present: format, lint, type, test (no aggregate `qa`).
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`, `frontend-toolkit:ui-ux-pro-max`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/JobRow.test.tsx` green; `npm --prefix apps/desktop run lint`, `run type`, `run format` clean.
 
-### [ ] T7: Header chip — percent or phase  [deps: T6]
+### [x] T7: Header chip — percent or phase  [deps: T6]
 
 - **Files**: `apps/desktop/src/lib/activeJob.ts`, `apps/desktop/src/components/AppHeader.tsx`
 - **Test first**: `apps/desktop/src/components/AppHeader.test.tsx` — cases (build the view with `activeJobView([...])` and render `AppHeader` with it): (1) a running `export` job with `progress: null`, `phase: "rendering PDF"` renders the chip `Exporting PDF “<name>” · rendering PDF` and no `%` (FR-8); (2) a running `diarize` job with `progress: 0.42` and a phase renders `· 42%` and not the phase text (percent wins; the chip stays short) (FR-8); (3) a queued job renders neither (existing case) (FR-8); (4) the chip still returns to Recordings on click (existing case).

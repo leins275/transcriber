@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -60,6 +61,12 @@ _MODEL_LOAD_ERROR_MARKERS = (
 )
 
 
+# What a job reports while a diarization pass runs: `(phase, fraction)`,
+# the fraction being the current step's own progress or None when the step
+# has no linear signal.
+ProgressCallback = Callable[[str, float | None], None]
+
+
 class DiarizerProtocol(Protocol):
     """What `jobs.py` may depend on -- the diarization counterpart of
     `TranscriptionProvider`."""
@@ -68,7 +75,74 @@ class DiarizerProtocol(Protocol):
     model: str
     device: str
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput: ...
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        cancel: CancelToken,
+        on_progress: ProgressCallback | None = None,
+    ) -> DiarizationOutput: ...
+
+
+# pyannote's internal step names -> the lowercase display phrase the job
+# status carries. An unrecognised step (a hand-picked pipeline, a future
+# pyannote) is shown as-is with its underscores turned to spaces rather than
+# hidden: a name the operator can read beats no label at all.
+_STEP_PHASES = {
+    "segmentation": "segmenting speech",
+    "speaker_counting": "counting speakers",
+    "embeddings": "extracting voice embeddings",
+    "discrete_diarization": "assigning speakers",
+}
+
+
+def _step_fraction(step_artifact: Any, total: Any, completed: Any) -> float | None:
+    """How far the current pipeline step has come, or None when it cannot say.
+
+    pyannote's chunked steps (`segmentation`, `embeddings`) report
+    `completed`/`total`; the single-shot ones hand over their artifact with
+    no counts, which means that step is finished. A call with neither is
+    progress-free -- the phase label is the whole signal.
+    """
+    if total is not None and completed is not None:
+        try:
+            total_steps = float(total)
+            done = float(completed)
+        except (TypeError, ValueError):
+            total_steps = 0.0
+            done = 0.0
+        if total_steps > 0:
+            return max(0.0, min(1.0, done / total_steps))
+    if step_artifact is not None:
+        return 1.0
+    return None
+
+
+def _progress_hook(on_progress: ProgressCallback | None) -> Callable[..., None]:
+    """Build the callable pyannote's pipelines invoke around every step.
+
+    The signature is pyannote 3's: `hook(step_name, step_artifact,
+    file=None, total=None, completed=None)` -- `Pipeline.__call__` wraps
+    whatever it is given with `file=` before handing it down, so the keyword
+    must be accepted even though nothing here uses it. Extra keywords are
+    swallowed for the same reason: a hook that raises would fail the whole
+    pass, and progress is never worth a lost transcript.
+    """
+
+    def hook(
+        step_name: str,
+        step_artifact: Any = None,
+        file: Any = None,  # noqa: ARG001 - pyannote's keyword, deliberately unused
+        total: Any = None,
+        completed: Any = None,
+        **_extra: Any,
+    ) -> None:
+        if on_progress is None:
+            return
+        phase = _STEP_PHASES.get(step_name, str(step_name).replace("_", " "))
+        on_progress(phase, _step_fraction(step_artifact, total, completed))
+
+    return hook
 
 
 def _classify_diarize_failure(exc: Exception) -> ErrorKind:
@@ -255,7 +329,13 @@ class PyannoteDiarizer:
         waveform = torch.from_numpy(samples).reshape(1, -1)
         return {"waveform": waveform, "sample_rate": _PIPELINE_SAMPLE_RATE, "uri": audio_path.stem}
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput:
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        cancel: CancelToken,
+        on_progress: ProgressCallback | None = None,
+    ) -> DiarizationOutput:
         """Run diarization over the whole file; returns speaker turns plus,
         when the pipeline supports it, one voice embedding per speaker.
 
@@ -263,10 +343,18 @@ class PyannoteDiarizer:
         the token is honoured at the boundaries: before the (possibly
         multi-second) pipeline load, before inference, and before the result
         is handed back.
+
+        `on_progress`, when given, is called with `(phase, fraction)` for the
+        two pre-inference stages and then for every step pyannote reports
+        through the pipeline hook.
         """
         cancel.raise_if_cancelled()
+        if on_progress is not None:
+            on_progress("loading speaker model", None)
         pipeline = self._ensure_pipeline()
         cancel.raise_if_cancelled()
+        if on_progress is not None:
+            on_progress("decoding audio", None)
         audio = self._decode(audio_path)
         cancel.raise_if_cancelled()
 
@@ -276,15 +364,18 @@ class PyannoteDiarizer:
         if self._max_speakers is not None:
             call_kwargs["max_speakers"] = self._max_speakers
 
+        hook = _progress_hook(on_progress)
         try:
             # The stock speaker-diarization pipeline computes per-speaker
             # embeddings internally either way; asking for them back costs
             # nothing. A hand-picked pipeline without the kwarg gets one
             # retry without it -- embeddings are a bonus, never a failure.
+            # The hook rides along on both calls: a pipeline that fell back
+            # is no reason to go mute.
             try:
-                result = pipeline(audio, return_embeddings=True, **call_kwargs)
+                result = pipeline(audio, return_embeddings=True, hook=hook, **call_kwargs)
             except TypeError:
-                result = pipeline(audio, **call_kwargs)
+                result = pipeline(audio, hook=hook, **call_kwargs)
         except Exception as exc:
             kind = _classify_diarize_failure(exc)
             raise ServiceError(kind, f"diarization failed on {audio_path.name}: {exc}") from exc

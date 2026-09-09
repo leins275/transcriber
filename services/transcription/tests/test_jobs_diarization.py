@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from fakes import FakeDiarizer, FakeProvider
+from fakes import BLOCK_TIMEOUT_SEC, FakeDiarizer, FakeProvider
 
 from transcription import providers
 from transcription.config import Config
@@ -22,6 +23,7 @@ from transcription.diarization import SpeakerTurn
 from transcription.errors import ErrorKind, ServiceError
 from transcription.jobs import TERMINAL_STATUSES, JobManager
 from transcription.ledger import Ledger
+from transcription.providers.base import CancelToken, TranscriptResult
 
 
 @pytest.fixture
@@ -77,6 +79,59 @@ async def _run_one(
     )
     await _wait_until_terminal(manager, job_id)
     return job_id
+
+
+async def _reach(event: threading.Event) -> None:
+    """Wait for a paused worker thread to signal `event`.
+
+    Off the event loop, so status polling stays live while the fake blocks;
+    bounded, so a test that never releases fails instead of hanging.
+    """
+    reached = await asyncio.to_thread(event.wait, BLOCK_TIMEOUT_SEC)
+    assert reached, "the fake never reached its pause point"
+
+
+# The provider fraction the pausing provider stops on: high enough that a
+# 0.9-scaled relay (0.675) is unmistakably different from the raw value.
+_PAUSE_AT = 0.75
+
+
+class PausingProvider(FakeProvider):
+    """A provider that pauses mid-decode, right after reporting 0.75, so a
+    test can read the job's status while transcription is still running."""
+
+    def __init__(
+        self, config: Any = None, *, reported: threading.Event, release: threading.Event
+    ) -> None:
+        super().__init__(config)
+        self._reported = reported
+        self._release = release
+
+    def transcribe(
+        self,
+        audio_path: Path,
+        *,
+        language: str | None,
+        on_progress: Callable[[float], None],
+        cancel: CancelToken,
+    ) -> TranscriptResult:
+        def report(fraction: float) -> None:
+            on_progress(fraction)
+            if fraction == _PAUSE_AT:
+                self._reported.set()
+                self._release.wait(BLOCK_TIMEOUT_SEC)
+
+        return super().transcribe(audio_path, language=language, on_progress=report, cancel=cancel)
+
+
+def _scripted_diarizer(
+    phases: list[tuple[str, float | None]],
+    blocked: threading.Event,
+    release: threading.Event,
+    **kwargs: Any,
+) -> FakeDiarizer:
+    """A diarizer that replays `phases` and then pauses until released."""
+    return FakeDiarizer(phases=phases, blocked=blocked, release=release, **kwargs)
 
 
 async def test_a_diarized_job_labels_segments_and_records_the_pass(
@@ -281,32 +336,105 @@ async def test_the_diarizer_is_constructed_once_across_jobs(
         await manager.aclose()
 
 
-async def test_transcription_progress_is_scaled_below_one_while_diarization_remains(
+async def test_transcription_reports_its_own_fraction_unscaled_with_diarization_queued(
     config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
 ) -> None:
-    providers.register("fake", FakeProvider)
-    seen: list[float] = []
-
-    class RecordingDiarizer(FakeDiarizer):
-        def diarize(self, audio_path: Path, *, cancel: Any) -> Any:
-            # Whatever the provider reported has been scaled: the bar must
-            # not read 100% while this pass is still ahead.
-            return super().diarize(audio_path, cancel=cancel)
-
-    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: RecordingDiarizer())
+    """The bar tells the truth about the phase it is showing: a diarization
+    pass waiting behind the decode no longer shrinks the decode's numbers
+    into the first 90% of the bar (the phase label carries that news)."""
+    reported, release = threading.Event(), threading.Event()
+    providers.register("fake", lambda cfg: PausingProvider(cfg, reported=reported, release=release))
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: FakeDiarizer())
     try:
         await manager.start()
         job_id = await manager.submit(
             audio_path=str(audio_file), output_dir=str(output_dir), diarize=True
         )
-        while manager.status(job_id).status not in TERMINAL_STATUSES:
-            seen.append(manager.status(job_id).progress)
-            await asyncio.sleep(0.001)
+        await _reach(reported)
 
-        assert manager.status(job_id).progress == 1.0
-        # Every observation before terminal is either scaled transcription
-        # progress (<= 0.9) or the final 1.0 written at success.
-        assert all(fraction <= 0.9 or fraction == 1.0 for fraction in seen)
+        job = manager.status(job_id)
+
+        assert job.progress == 0.75
+        assert job.phase is None
+    finally:
+        release.set()
+        await manager.aclose()
+
+
+async def test_a_running_diarization_pass_shows_the_engines_current_step(
+    config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    blocked, release = threading.Event(), threading.Event()
+    diarizer = _scripted_diarizer(
+        [("segmenting speech", 0.4), ("extracting voice embeddings", 0.6)], blocked, release
+    )
+    providers.register("fake", FakeProvider)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            audio_path=str(audio_file), output_dir=str(output_dir), diarize=True
+        )
+        await _reach(blocked)
+
+        job = manager.status(job_id)
+
+        assert job.phase == "extracting voice embeddings"
+        assert job.progress == 0.6
+    finally:
+        release.set()
+        await manager.aclose()
+
+
+async def test_a_diarized_transcription_ends_at_full_progress_with_no_phase(
+    config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    blocked, release = threading.Event(), threading.Event()
+    diarizer = _scripted_diarizer(
+        [("segmenting speech", 0.4), ("extracting voice embeddings", 0.6)], blocked, release
+    )
+    providers.register("fake", FakeProvider)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            audio_path=str(audio_file), output_dir=str(output_dir), diarize=True
+        )
+        await _reach(blocked)
+
+        release.set()
+        await _wait_until_terminal(manager, job_id)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        assert job.progress == 1.0
+        assert job.phase is None
+        doc = _read_transcript(output_dir)
+        assert [seg["speaker"] for seg in doc["segments"]] == ["Speaker 1", "Speaker 2"]
+    finally:
+        release.set()
+        await manager.aclose()
+
+
+async def test_a_diarization_that_cannot_decode_still_ends_at_full_progress(
+    config: Config, ledger: Ledger, audio_file: Path, output_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    manager = JobManager(
+        config,
+        ledger,
+        diarizer_factory=lambda _cfg: FakeDiarizer(raise_kind=ErrorKind.AUDIO_DECODE),
+    )
+    try:
+        job_id = await _run_one(manager, audio_file, output_dir, diarize=True)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        assert job.progress == 1.0
+        assert job.phase is None
+        doc = _read_transcript(output_dir)
+        assert doc["diarization"]["status"] == "failed"
+        assert doc["diarization"]["error_kind"] == "audio_decode"
     finally:
         await manager.aclose()
 
@@ -487,5 +615,140 @@ async def test_a_diarized_transcription_prefills_speakers_from_a_named_sibling(
         # Segment 0 is Speaker 1 (the voice named Anna next door); segment 1
         # is a new voice and stays unnamed.
         assert assignments["assignments"] == {"0": "Anna"}
+    finally:
+        await manager.aclose()
+
+
+def _write_named_sibling(root: Path) -> Path:
+    """A sibling meeting in the same project whose one voice the operator
+    named -- the project's speaker memory for a later pass to match."""
+    sibling = root / "ACME" / "260830 - Kickoff"
+    sibling.mkdir(parents=True)
+    (sibling / "transcript.json").write_text(
+        json.dumps(
+            {
+                "segments": [
+                    {"id": 0, "start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 1"}
+                ],
+                "diarization": {
+                    "status": "succeeded",
+                    "model": "m",
+                    "speaker_embeddings": {"Speaker 1": [0.0, 1.0]},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (sibling / "speakers.json").write_text(
+        json.dumps({"schema_version": 1, "assignments": {"0": "Boris"}}), encoding="utf-8"
+    )
+    return sibling
+
+
+async def test_a_running_diarize_job_shows_the_engines_current_step(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    blocked, release = threading.Event(), threading.Event()
+    diarizer = _scripted_diarizer(
+        [("segmenting speech", 0.4), ("extracting voice embeddings", 0.75)], blocked, release
+    )
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            job_type="diarize", input_path=str(meeting), output_dir=str(meeting)
+        )
+        await _reach(blocked)
+
+        job = manager.status(job_id)
+
+        assert job.phase == "extracting voice embeddings"
+        assert job.progress == 0.75
+    finally:
+        release.set()
+        await manager.aclose()
+
+
+async def test_a_finished_diarize_job_ends_at_full_progress_with_no_phase(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    diarizer = FakeDiarizer(
+        phases=[("segmenting speech", 0.4)],
+        embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]},
+    )
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        job_id = await _run_diarize(manager, meeting)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        assert job.progress == 1.0
+        assert job.phase is None
+        manifest = json.loads(job.result_json or "{}")
+        assert manifest["speaker_count"] == 2
+        assert manifest["embeddings"] == 2
+    finally:
+        await manager.aclose()
+
+
+async def test_a_diarize_job_cancelled_mid_pass_ends_without_a_phase(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    blocked, release = threading.Event(), threading.Event()
+    diarizer = _scripted_diarizer([("segmenting speech", 0.4)], blocked, release)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            job_type="diarize", input_path=str(meeting), output_dir=str(meeting)
+        )
+        await _reach(blocked)
+
+        await manager.cancel(job_id)
+        release.set()
+        await _wait_until_terminal(manager, job_id)
+
+        job = manager.status(job_id)
+        assert job.status == "cancelled"
+        assert job.phase is None
+    finally:
+        release.set()
+        await manager.aclose()
+
+
+async def test_a_diarize_job_names_a_returning_voice_from_a_sibling_meeting(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """The auto-naming step the `naming speakers` phase wraps: labelling an
+    existing transcript still pre-fills the operator's file from the
+    project's speaker memory, and still reports how many segments it named."""
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    _write_named_sibling(tmp_app_dir)
+    diarizer = FakeDiarizer(
+        embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]},
+        turns=[
+            SpeakerTurn(start=0.0, end=0.6, speaker="SPEAKER_00"),
+            SpeakerTurn(start=0.6, end=1.0, speaker="SPEAKER_01"),
+        ],
+    )
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: diarizer)
+    try:
+        job_id = await _run_diarize(manager, meeting)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        manifest = json.loads(job.result_json or "{}")
+        assert manifest["auto_named_segments"] == 1
+        assignments = json.loads((meeting / "speakers.json").read_text(encoding="utf-8"))
+        # "Anna" is the operator's own assignment, untouched; "Boris" is the
+        # voice recognized from next door.
+        assert assignments["assignments"] == {"0": "Anna", "1": "Boris"}
     finally:
         await manager.aclose()

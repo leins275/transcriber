@@ -78,6 +78,26 @@
   border-radius: 1px;
 }
 
+.progressTrack[data-indeterminate] {
+  overflow: hidden;
+}
+
+/* An unmeasurable phase: a sliver travels the track instead of a fill that
+   would have to invent a percentage. */
+.progressSliver {
+  width: 30%;
+  animation: job-progress-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes job-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(333%);
+  }
+}
+
 .message {
   margin: 0;
   font-size: var(--text-sm);

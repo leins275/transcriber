@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ import pytest
 from fakes import FakeLlm
 from pdf_asserts import embedded_base_fonts, extract_text
 
+from transcription import exporting, jobs
 from transcription.config import Config
 from transcription.errors import ErrorKind
 from transcription.jobs import TERMINAL_STATUSES, JobManager
@@ -665,5 +667,223 @@ async def test_export_renders_cyrillic_with_embedded_fonts(
         ):
             assert needle in text, f"{section}: {needle!r} missing from the export text: {text!r}"
         assert "■" not in text, f"replacement boxes in the export text: {text!r}"
+    finally:
+        await manager.aclose()
+
+
+# ------------------------------------------------- job phases (FR-2 / FR-3)
+
+# How long a rendezvous may wait before the test is declared broken. Never a
+# sleep: both sides block on a `threading.Event` (NFR-1).
+_GATE_TIMEOUT = 10.0
+
+
+class _Gate:
+    """A one-shot rendezvous between the worker thread and the test.
+
+    The worker announces it reached a chosen point and waits there, so the
+    test can read the job's phase mid-flight instead of racing it.
+    """
+
+    def __init__(self) -> None:
+        self.reached = threading.Event()
+        self._released = threading.Event()
+
+    def arrive(self) -> None:
+        self.reached.set()
+        if not self._released.wait(timeout=_GATE_TIMEOUT):
+            raise AssertionError("the paused job was never released")
+
+    def release(self) -> None:
+        self._released.set()
+
+
+async def _paused_at(gate: _Gate, what: str) -> None:
+    """Await the worker reaching `gate`, keeping the event loop free."""
+    if not await asyncio.to_thread(gate.reached.wait, _GATE_TIMEOUT):
+        raise TimeoutError(f"the job never reached {what}")
+
+
+def _pausing(gate: _Gate, func: Callable[..., Any]) -> Callable[..., Any]:
+    """`func`, wrapped to stop at `gate` before it runs."""
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        gate.arrive()
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+class _PausingLlm(FakeLlm):
+    """A `FakeLlm` that stops inside one chosen `complete()` call.
+
+    `pause_after_streaming` picks the side of the streamed pieces to stop
+    on: before the first one (the job is still reading the transcript) or
+    after the last one (the job has streamed the whole answer).
+    """
+
+    def __init__(
+        self,
+        *,
+        responses: list[str | tuple[str, str]],
+        pause_on_call: int = 1,
+        pause_after_streaming: bool = False,
+    ) -> None:
+        super().__init__(responses=responses)
+        self.gate = _Gate()
+        self._pause_on_call = pause_on_call
+        self._pause_after_streaming = pause_after_streaming
+        self._started_calls = 0
+
+    def complete(self, messages: list[dict[str, str]], **kwargs: Any) -> Any:
+        self._started_calls += 1
+        pausing = self._started_calls == self._pause_on_call
+        if pausing and not self._pause_after_streaming:
+            self.gate.arrive()
+        completion = super().complete(messages, **kwargs)
+        if pausing and self._pause_after_streaming:
+            self.gate.arrive()
+        return completion
+
+
+async def _submit(manager: JobManager, *, job_type: str, meeting: Path) -> str:
+    await manager.start()
+    return await manager.submit(job_type=job_type, input_path=str(meeting), output_dir=str(meeting))
+
+
+async def test_a_summarize_job_reads_the_transcript_before_the_first_token(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    llm = _PausingLlm(responses=["We planned things."])
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _submit(manager, job_type="summarize", meeting=meeting_dir)
+        await _paused_at(llm.gate, "its first completion call")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "reading transcript"
+        assert job.progress is None
+    finally:
+        llm.gate.release()
+        await manager.aclose()
+
+
+async def test_a_summarize_job_counts_the_tokens_it_has_written(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    # 18 characters: `FakeLlm` streams them back as exactly three pieces.
+    llm = _PausingLlm(responses=["We planned things."], pause_after_streaming=True)
+    manager = _manager(config, ledger, llm)
+    try:
+        job_id = await _submit(manager, job_type="summarize", meeting=meeting_dir)
+        await _paused_at(llm.gate, "the end of its first completion call")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "writing summary · 3 tokens"
+        assert job.progress is None
+    finally:
+        llm.gate.release()
+        await manager.aclose()
+
+
+async def test_a_map_reduced_summary_names_the_part_it_is_summarizing(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    # ~7400 chars against the 2048-token context: two map chunks plus one
+    # reduce, so the second call is part 2 of 3.
+    meeting = _meeting_with_language(tmp_app_dir, "en", segment_count=200)
+    llm = _PausingLlm(
+        responses=["part summary", "part summary", "merged summary"],
+        pause_on_call=2,
+        pause_after_streaming=True,
+    )
+    manager = _manager(_small_ctx(config), ledger, llm)
+    try:
+        job_id = await _submit(manager, job_type="summarize", meeting=meeting)
+        await _paused_at(llm.gate, "the end of its second completion call")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "summarizing part 2/3 · 3 tokens"
+        assert job.progress is None
+    finally:
+        llm.gate.release()
+        await manager.aclose()
+
+
+async def test_a_finished_summarize_job_reports_a_full_bar_and_no_phase(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    manager = _manager(config, ledger, FakeLlm(responses=["## Summary"]))
+    try:
+        job_id = await _run_job(
+            manager, job_type="summarize", input_path=meeting_dir, output_dir=meeting_dir
+        )
+
+        job = manager.status(job_id)
+
+        assert job.status == "succeeded"
+        assert job.progress == 1.0
+        assert job.phase is None
+        assert (meeting_dir / "summary.md").is_file()
+    finally:
+        await manager.aclose()
+
+
+async def test_an_export_job_reports_writing_the_markdown_while_it_is_built(
+    config: Config, ledger: Ledger, meeting_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _Gate()
+    monkeypatch.setattr(exporting, "build_export_md", _pausing(gate, exporting.build_export_md))
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _submit(manager, job_type="export", meeting=meeting_dir)
+        await _paused_at(gate, "the export.md build")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "writing export.md"
+        assert job.progress is None
+    finally:
+        gate.release()
+        await manager.aclose()
+
+
+async def test_an_export_job_reports_rendering_the_pdf_while_it_renders(
+    config: Config, ledger: Ledger, meeting_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _Gate()
+    monkeypatch.setattr(jobs, "render_pdf", _pausing(gate, jobs.render_pdf))
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _submit(manager, job_type="export", meeting=meeting_dir)
+        await _paused_at(gate, "the PDF render")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "rendering PDF"
+        assert job.progress is None
+    finally:
+        gate.release()
+        await manager.aclose()
+
+
+async def test_a_finished_export_job_reports_a_full_bar_and_no_phase(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _run_job(
+            manager, job_type="export", input_path=meeting_dir, output_dir=meeting_dir
+        )
+
+        job = manager.status(job_id)
+
+        assert job.status == "succeeded"
+        assert job.progress == 1.0
+        assert job.phase is None
+        assert (meeting_dir / EXPORT_PDF_NAME).is_file()
     finally:
         await manager.aclose()

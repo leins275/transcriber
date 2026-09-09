@@ -46,6 +46,11 @@ export function AppHeader({
 }: AppHeaderProps) {
   const label = serviceStatusLabel(serviceStatus.state, modelStatus?.cuda_runtime_present);
   const modelSuffix = modelStatus?.model_present ? " · large-v3" : "";
+  // The chip is one short line, so it says the percentage *or* the phase --
+  // a real fraction beats the words describing it, and a stage reporting
+  // neither (or a job not running yet) leaves the label alone.
+  const jobSuffix =
+    activeJob?.percent != null ? `${activeJob.percent}%` : (activeJob?.phase ?? null);
 
   return (
     <header className={styles.header}>
@@ -73,9 +78,7 @@ export function AppHeader({
               <circle cx="12" cy="12" r="9" strokeDasharray="34 22"></circle>
             </svg>
             <span className={styles.jobLabel}>{activeJob.label}</span>
-            {activeJob.percent != null && (
-              <span className={styles.jobPercent}>· {activeJob.percent}%</span>
-            )}
+            {jobSuffix != null && <span className={styles.jobPercent}>· {jobSuffix}</span>}
           </button>
         ) : (
           <span className={styles.status}>
