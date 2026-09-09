@@ -81,6 +81,8 @@ class DiarizerProtocol(Protocol):
         *,
         cancel: CancelToken,
         on_progress: ProgressCallback | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> DiarizationOutput: ...
 
 
@@ -335,9 +337,18 @@ class PyannoteDiarizer:
         *,
         cancel: CancelToken,
         on_progress: ProgressCallback | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> DiarizationOutput:
         """Run diarization over the whole file; returns speaker turns plus,
         when the pipeline supports it, one voice embedding per speaker.
+
+        `min_speakers` / `max_speakers` are this job's bounds: each one, when
+        given, wins over the corresponding config key
+        (`diarization_min_speakers` / `diarization_max_speakers`) for this
+        call only, independently of the other. A bound with no per-call and
+        no config value is not passed to the pipeline at all, so pyannote
+        keeps choosing the speaker count itself.
 
         The pyannote pipeline is not cooperatively cancellable mid-run, so
         the token is honoured at the boundaries: before the (possibly
@@ -358,11 +369,13 @@ class PyannoteDiarizer:
         audio = self._decode(audio_path)
         cancel.raise_if_cancelled()
 
+        effective_min = min_speakers if min_speakers is not None else self._min_speakers
+        effective_max = max_speakers if max_speakers is not None else self._max_speakers
         call_kwargs: dict[str, Any] = {}
-        if self._min_speakers is not None:
-            call_kwargs["min_speakers"] = self._min_speakers
-        if self._max_speakers is not None:
-            call_kwargs["max_speakers"] = self._max_speakers
+        if effective_min is not None:
+            call_kwargs["min_speakers"] = effective_min
+        if effective_max is not None:
+            call_kwargs["max_speakers"] = effective_max
 
         hook = _progress_hook(on_progress)
         try:

@@ -75,8 +75,8 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarize` | `TRANSCRIBER_DIARIZE` | `false` |
 | `diarization_model` | `TRANSCRIBER_DIARIZATION_MODEL` | `pyannote/speaker-diarization-3.1` |
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
-| `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates) |
-| `speaker_match_threshold` | `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` | `0.5` -- cosine floor for pre-naming a diarized voice already named in a sibling meeting; above `1.0` disables auto-naming |
+| `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates); overridden for one job by `min_speakers` / `max_speakers` in `POST /v1/jobs` |
+| `speaker_match_threshold` | `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` | `0.5` -- cosine floor for pre-naming a diarized voice already named in a sibling meeting; above `1.0` disables auto-naming; overridden for one job by `speaker_match_threshold` in `POST /v1/jobs` |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
 | `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`, the only entry); a config still naming the retired `qwen3.6-35b-a3b` migrates to the default |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
@@ -324,6 +324,40 @@ Two prerequisites, both optional by design:
 (`runtime_present`, `model_present`, `token_present`, `gpu_present` -- the
 CUDA runtime is the only build offered) and whether `diarize` is on.
 
+### Per-job speaker tuning
+
+`POST /v1/jobs` takes three optional fields that apply to the speaker pass
+of that one job and override the matching config key for it alone:
+
+| Field | Overrides | Accepted |
+|---|---|---|
+| `min_speakers` | `diarization_min_speakers` | integer `>= 1` |
+| `max_speakers` | `diarization_max_speakers` | integer `>= 1`, and `>= min_speakers` when both are sent |
+| `speaker_match_threshold` | `speaker_match_threshold` | float in `[0.0, 1.0]` |
+
+Each is independent of the others: a job sending only `max_speakers` still
+takes `min_speakers` from `diarization_min_speakers`, and a job sending
+none of the three behaves exactly as before the fields existed (the
+pipeline is called without those keyword arguments at all). All three are
+honoured by both entry points -- a `transcribe` job with diarization on and
+the standalone `diarize` job below.
+
+They are meaningful only on those two job types, and an unusable request is
+refused rather than quietly ignored: any of the three on a `summarize`,
+`export` or `index` job, a bound below `1`, `min_speakers` above
+`max_speakers`, or a threshold outside `[0, 1]` is answered **400
+`invalid_request`** before the job is created, so no ledger row is left
+behind. None of the three is echoed by `GET /v1/jobs/{id}` -- `JobStatus`
+returns no request tuning at all.
+
+The desktop app fills them from the meeting's **project speaker roster**
+(`docs/setup.md`): a project whose `roster.json` is in strict mode with N
+names has every transcribe, re-transcribe and `diarize` submission for its
+meetings carry `max_speakers: N` together with the app's own lower matching
+threshold (`speaker_match_threshold_strict`, `docs/config-contract.md`).
+The service stays roster-agnostic -- it receives numbers, never names, and
+never learns why a caller capped the speakers or relaxed the matching.
+
 ### `diarize`: speakers for an already-transcribed meeting
 
 `POST /v1/jobs {"job_type": "diarize", "input_path": <meeting dir>,
@@ -336,7 +370,9 @@ is the backfill behind cross-meeting recognition: a meeting labelled by
 hand while it had no diarization becomes voice memory for every later
 recording in its project. Unlike the transcribe path, a failing pass fails
 this job (identification is its whole point); a meeting without a
-recording or a transcript is refused up front.
+recording or a transcript is refused up front. It takes the same per-job
+`min_speakers` / `max_speakers` / `speaker_match_threshold` tuning as a
+diarized `transcribe` does.
 
 Diarization **degrades, never fails the job**: if the pass cannot run
 (extra not installed, model not fetchable, runtime error), the transcript
@@ -354,6 +390,14 @@ embeddings) and pre-fills the new meeting's `speakers.json` on a match at
 or above `speaker_match_threshold`. Additive only -- an assignment the
 operator made by hand is never overwritten -- and best-effort: any failure
 is a job warning, never a failed job.
+
+A generic `Speaker N` assignment is not a name and contributes no
+voiceprint. The app's transcript viewer saves the whole speaker map, seeded
+labels included, so a sibling meeting's `speakers.json` can carry
+`"Speaker 2"` for segments nobody ever named; treating that as a name would
+send a placeholder travelling across the project as if it were a person, so
+`speaker_matching` skips it (the UI mirrors the same form in
+`apps/desktop/src/lib/turns.ts`).
 
 ### Model weights and CUDA runtime are prerequisites, not this service's job
 

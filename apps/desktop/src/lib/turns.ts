@@ -216,3 +216,26 @@ export function filterTurns(turns: Turn[], query: string): Turn[] {
       (turn.speaker !== null && turn.speaker.toLowerCase().includes(needle)),
   );
 }
+
+/**
+ * Whether `name` is a diarization label rather than a person's name.
+ *
+ * The service names its clusters `Speaker 1`, `Speaker 2`, … — a count of
+ * voices it told apart, not anyone it recognized (`SPEAKER_LABEL_PREFIX` in
+ * `diarization.py`). Under a strict project roster that count must never be
+ * read as a person, so the UI withholds it; the raw label stays in the
+ * transcript, because it is what holds a turn together.
+ *
+ * The exact mirror of `speaker_matching._GENERIC_LABEL`, which decides the
+ * same question on the service side (where it also decides which entries of
+ * a `speakers.json` auto-naming may overwrite). Both are the one form the
+ * service ever writes: pyannote's raw `SPEAKER_00` is renamed before a
+ * transcript is stored, so nothing else in a speaker map is a placeholder.
+ *
+ * Exact on purpose: a looser match would swallow "Speaker" typed by hand,
+ * "Speaker 7b" or a lower-case "speaker 3" — names an operator chose and
+ * the UI must show as themselves.
+ */
+export function isGenericSpeakerLabel(name: string): boolean {
+  return /^Speaker \d+$/.test(name);
+}

@@ -81,6 +81,13 @@ class JobState:
     job_type: str = "transcribe"
     language: str | None = None
     diarize: bool = False
+    # This job's diarization tuning, each `None` when the request gave none
+    # (the config value then applies, exactly as before the fields existed):
+    # the speaker bounds handed to the engine and the cosine threshold
+    # cross-meeting speaker recognition matches at.
+    min_speakers: int | None = None
+    max_speakers: int | None = None
+    speaker_match_threshold: float | None = None
     # The current phase's real fraction, or None while the running phase has
     # no linear signal; `phase` names that sub-step (FR-1).
     progress: float | None = 0.0
@@ -336,6 +343,9 @@ class JobManager:
         model: str | None = None,
         meeting: dict[str, Any] | None = None,
         diarize: bool | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
+        speaker_match_threshold: float | None = None,
     ) -> str:
         """Validate, insert the ledger row and enqueue a job (FR-2, FR-9).
 
@@ -344,6 +354,13 @@ class JobManager:
         input/output paths fall outside the configured allowlist, when the
         job type is unknown, or when a derived job's input directory holds
         no ``transcript.json`` to work from.
+
+        `min_speakers` / `max_speakers` / `speaker_match_threshold` are this
+        job's diarization tuning: each one, when given, wins over its config
+        key (`diarization_min_speakers` / `diarization_max_speakers` /
+        `speaker_match_threshold`) for this job alone; `None` defers to the
+        configured value. Range and job-type checks live in
+        `schema.JobCreate`, before any ledger row exists.
         """
         if job_type not in KNOWN_JOB_TYPES:
             known = ", ".join(sorted(KNOWN_JOB_TYPES))
@@ -482,6 +499,9 @@ class JobManager:
             language=language,
             # Per-job flag wins; `None` defers to the configured default.
             diarize=self._config.diarize if diarize is None else bool(diarize),
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            speaker_match_threshold=speaker_match_threshold,
         )
         self._jobs[job_id] = job
 
@@ -640,6 +660,30 @@ class JobManager:
             speaker_embeddings=speaker_embeddings,
         )
 
+    @staticmethod
+    def _speaker_bounds(job: JobState) -> dict[str, int]:
+        """This job's speaker bounds as engine kwargs -- only the ones it
+        actually carries.
+
+        A bound the request did not set is *omitted*, never passed as
+        `None`: the engine resolves its own config fallback, and an engine
+        (or a test double) that predates the bounds is still called exactly
+        as it always was.
+        """
+        bounds: dict[str, int] = {}
+        if job.min_speakers is not None:
+            bounds["min_speakers"] = job.min_speakers
+        if job.max_speakers is not None:
+            bounds["max_speakers"] = job.max_speakers
+        return bounds
+
+    def _match_threshold(self, job: JobState) -> float:
+        """The cosine threshold this job recognizes returning voices at:
+        its own when the request carried one, else the configured default."""
+        if job.speaker_match_threshold is not None:
+            return job.speaker_match_threshold
+        return self._config.speaker_match_threshold
+
     async def _diarize_segments(
         self,
         job: JobState,
@@ -666,6 +710,7 @@ class JobManager:
                     # counted step runs its own 0..1 under its own label,
                     # and the label says which step that is (FR-5).
                     on_progress=lambda phase, fraction: _set_phase(job, phase, fraction),
+                    **self._speaker_bounds(job),
                 ),
             )
             return self._label_with_turns(segments, diarizer, output, split=True)
@@ -778,7 +823,7 @@ class JobManager:
                         Path(job.output_path),
                         diarization_info.speaker_embeddings,
                         segment_dicts,
-                        threshold=self._config.speaker_match_threshold,
+                        threshold=self._match_threshold(job),
                     )
                 except Exception as exc:  # noqa: BLE001 - never job-fatal
                     job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
@@ -992,6 +1037,7 @@ class JobManager:
             source,
             cancel=job.cancel_token,
             on_progress=lambda phase, fraction: _set_phase(job, phase, fraction),
+            **self._speaker_bounds(job),
         )
         _set_phase(job, "assigning speakers", None)
         labelled, info = self._label_with_turns(segments, diarizer, output, split=False)
@@ -1008,7 +1054,7 @@ class JobManager:
                     meeting_dir,
                     info.speaker_embeddings,
                     labelled,
-                    threshold=self._config.speaker_match_threshold,
+                    threshold=self._match_threshold(job),
                 )
             except Exception as exc:  # noqa: BLE001 - never job-fatal
                 job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")

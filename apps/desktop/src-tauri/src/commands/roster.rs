@@ -225,6 +225,59 @@ pub async fn save_project_roster_handler(
     })?
 }
 
+// -- the roster as a bound on speaker identification ------------------------
+
+/// The number of people the project's roster says may speak in
+/// `meeting_dir`, or `None` when the roster puts no bound on it.
+///
+/// `Some(n)` only for a meeting filed in a real project whose roster is in
+/// [`RosterMode::Roster`] and lists at least one name, counted after the
+/// same normalization the editor applies -- so the cap the service gets is
+/// exactly the pick-list the operator sees. Everything else answers
+/// `None`, which is the pre-roster behaviour: a meeting under `unsorted`
+/// (never a project, even if someone plants a `roster.json` there), a
+/// meeting that is not one level under the root, an `open` roster, a
+/// strict roster with no names, and every unreadable or unparseable file
+/// (degradation over failure -- a broken roster must not stop a job).
+///
+/// Blocking (it reads a file), and called by `jobs.rs` from
+/// `spawn_blocking` at the moment a job is submitted, so a backfill queued
+/// before a roster edit still carries the roster as it stands when its own
+/// turn comes.
+pub fn roster_speaker_cap(root: &Path, meeting_dir: &Path) -> Option<u32> {
+    let canonical_root = crate::paths::canonicalize_existing(root).ok()?;
+    // Containment, 8.3 short names and junctions are all this function's
+    // problem exactly once: `ensure_inside` already resolves both sides the
+    // way every other vault path in this crate is resolved.
+    let canonical_meeting = crate::paths::ensure_inside(root, meeting_dir).ok()?;
+    let relative = canonical_meeting.strip_prefix(&canonical_root).ok()?;
+
+    // `<root>/<PROJECT>/<meeting>` and nothing else: two components, the
+    // first of which is a plain directory name.
+    let mut components = relative.components();
+    let project = match components.next()? {
+        std::path::Component::Normal(name) => name.to_owned(),
+        _ => return None,
+    };
+    components.next()?;
+    if components.next().is_some() {
+        return None;
+    }
+    if project
+        .to_string_lossy()
+        .eq_ignore_ascii_case(vault::UNSORTED_DIR_NAME)
+    {
+        return None;
+    }
+
+    let file = read_roster_file(&roster_path(&canonical_root.join(&project)))?;
+    if file.mode != RosterMode::Roster {
+        return None;
+    }
+    let names = normalize_names(&file.names);
+    u32::try_from(names.len()).ok().filter(|count| *count >= 1)
+}
+
 // -- `#[tauri::command]` wrappers -------------------------------------------
 
 #[tauri::command]

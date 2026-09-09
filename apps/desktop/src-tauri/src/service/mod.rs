@@ -336,11 +336,22 @@ pub struct DiarizationStatus {
 /// directory as `input_path` and writes its artifacts under
 /// `output_dir` -- both computed on this side, both validated against F2's
 /// own allowlist over there.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (No `Eq`: `speaker_match_threshold` is an `f64`, which forbids it.
+/// Nothing hashes or totally-orders these requests.)
+#[derive(Debug, Clone, PartialEq)]
 pub struct LlmSubmitRequest {
     pub kind: LlmJobKind,
     pub input_path: String,
     pub output_dir: String,
+    /// Cap on the number of voices the diarization pass may find, filled by
+    /// the job registry from the meeting's project roster (FR-2). Only ever
+    /// set for `Diarize`, the one derived kind that diarizes; `None` leaves
+    /// the bound to the service.
+    pub max_speakers: Option<u32>,
+    /// Cross-meeting voice-matching threshold for this job, filled by the
+    /// registry alongside `max_speakers` on a strict-roster meeting (FR-7).
+    /// `None` leaves the service's own configured threshold in force.
+    pub speaker_match_threshold: Option<f64>,
 }
 
 /// `POST /v1/search` request body.
@@ -467,7 +478,9 @@ pub struct LedgerJob {
 
 /// `POST /v1/jobs` request body (F2's `JobCreate`, minus the fields this
 /// app never sets).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (No `Eq`: `speaker_match_threshold` is an `f64`, which forbids it.
+/// Nothing hashes or totally-orders these requests.)
+#[derive(Debug, Clone, PartialEq)]
 pub struct SubmitRequest {
     pub audio_path: String,
     pub output_dir: String,
@@ -479,6 +492,14 @@ pub struct SubmitRequest {
     /// "original file name" would be a lie (FR-5). Travels in F2's existing
     /// `meeting` object and is persisted verbatim as `meeting_json`.
     pub original_file_name: Option<String>,
+    /// Cap on the number of voices the diarization pass may find, filled by
+    /// the job registry from the meeting's project roster (FR-2). `None`
+    /// leaves the bound to the service.
+    pub max_speakers: Option<u32>,
+    /// Cross-meeting voice-matching threshold for this job, filled by the
+    /// registry alongside `max_speakers` on a strict-roster meeting (FR-7).
+    /// `None` leaves the service's own configured threshold in force.
+    pub speaker_match_threshold: Option<f64>,
 }
 
 /// The seam's four job states (FR-12). F2 has five (`queued`, `running`,

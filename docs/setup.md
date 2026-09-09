@@ -280,6 +280,28 @@ existed (or pre-named by speaker recognition) stays as it is and is still
 shown as the chosen name. Unfiled recordings (`unsorted`) have no project,
 so they always take free text.
 
+**What strict mode does to speaker identification.** With **Only the roster
+below** on, the roster also bounds the identification itself. Every
+transcription, re-transcription and **Identify speakers** run for a meeting
+in that project asks the service for at most as many voices as the roster
+has names, and to match a voice against the ones already named in the
+project a little more leniently (a cosine floor of `0.4` instead of the
+usual `0.5`; hand-tune it with `speaker_match_threshold_strict` in
+`config.json` -- `docs/config-contract.md` -- if that over- or
+under-matches on your recordings). Whatever still matches nobody is shown
+as **Unnamed voice** rather than `Speaker 7`: click the tag, pick the person
+from the roster list, and choose **All N turns of this voice** to give every
+turn that voice holds the name in one go. A name is filled in
+automatically only after that person's voice has been named once in some
+meeting of the project -- the roster is a list of names and holds no voice
+data, so the first labelling of a new person is always yours.
+
+To see this working after an update: in a project set to **Only the roster
+below**, re-run **Identify speakers** on a meeting. No `Speaker N` should
+remain anywhere in the transcript -- unmatched voices read "Unnamed voice"
+-- and a person you have named in another meeting of the same project
+should come back already named.
+
 **How the models get into the installer.** The three pinned pyannote
 snapshots (~32 MB; MIT and CC BY 4.0, attribution in the service README)
 are **committed** under `apps/desktop/src-tauri/resources/models/diarization/`

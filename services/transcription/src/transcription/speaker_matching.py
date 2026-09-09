@@ -10,8 +10,9 @@ named.
 
 Additive only, by contract: ``speakers.json`` is the operator's file (see
 the vault-side comment on ``SPEAKERS_FILE_NAME`` in the app), and this
-module never overwrites an existing assignment -- it fills segments that
-have none. Everything here degrades rather than fails: an unreadable
+module never overwrites a name the operator gave -- it fills segments that
+have none and segments the app only seeded with a generic ``Speaker N``
+label. Everything here degrades rather than fails: an unreadable
 sibling contributes nothing, and the caller treats any raised error as a
 job warning.
 """
@@ -22,10 +23,13 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+from transcription.diarization import SPEAKER_LABEL_PREFIX
 
 logger = logging.getLogger("transcription")
 
@@ -37,6 +41,10 @@ _SPEAKERS_SCHEMA_VERSION = 1
 # it claims to be.
 _MAX_SPEAKERS_BYTES = 1024 * 1024
 _MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
+
+# What diarization calls a voice it has no name for, derived from the one
+# place that mints those labels (``diarization.SPEAKER_LABEL_PREFIX``).
+_GENERIC_LABEL = re.compile(rf"^{re.escape(SPEAKER_LABEL_PREFIX)}\d+$")
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -86,6 +94,21 @@ def _label_embeddings(doc: dict[str, Any]) -> dict[str, list[float]]:
     return out
 
 
+def _is_generic(name: str) -> bool:
+    """Is this "name" just what diarization calls a voice it cannot name?
+
+    Exactly the form this service writes and nothing else: ``normalize_labels``
+    renames every raw pyannote label (``SPEAKER_00``) to
+    ``SPEAKER_LABEL_PREFIX`` + a number before a transcript is ever written, so
+    ``Speaker 3`` is the only placeholder that can reach a ``speakers.json``.
+    Anything else in that file is a string a person typed, and this predicate
+    decides which entries ``auto_assign_speakers`` may overwrite -- a looser
+    pattern would silently rename someone. ``lib/turns.ts::isGenericSpeakerLabel``
+    mirrors it for the UI.
+    """
+    return _GENERIC_LABEL.match(name.strip()) is not None
+
+
 def collect_project_voiceprints(meeting_dir: Path) -> dict[str, list[list[float]]]:
     """The project's speaker memory: operator-given name -> known voice
     embeddings, gathered from every *other* meeting in the same project.
@@ -93,6 +116,11 @@ def collect_project_voiceprints(meeting_dir: Path) -> dict[str, list[list[float]
     A sibling contributes one vector per diarized label whose segments the
     operator has (majority-)named. Meetings without embeddings or without
     assignments contribute nothing.
+
+    A generic ``Speaker N`` "name" is not a name (the app's transcript
+    viewer saves the whole speaker map, seeded labels included), so such an
+    assignment contributes no voiceprint -- otherwise a placeholder would
+    travel across the project as if it were a person.
     """
     voiceprints: dict[str, list[list[float]]] = defaultdict(list)
     project_dir = meeting_dir.parent
@@ -125,7 +153,7 @@ def collect_project_voiceprints(meeting_dir: Path) -> dict[str, list[list[float]
                 continue
             label = segment.get("speaker")
             name = assignments.get(str(segment.get("id")))
-            if isinstance(label, str) and label in embeddings and name:
+            if isinstance(label, str) and label in embeddings and name and not _is_generic(name):
                 votes[label][name] += 1
         for label, counter in votes.items():
             name = counter.most_common(1)[0][0]
@@ -188,8 +216,19 @@ def auto_assign_speakers(
 ) -> int:
     """Pre-fill ``speakers.json`` from the project's speaker memory.
 
-    Returns how many segments gained a name. Existing assignments are never
-    touched; with none added, the file is not rewritten at all.
+    Returns how many segments gained a name; with none added, the file is
+    not rewritten at all.
+
+    Operator assignments are never touched -- but a seeded ``Speaker N`` is
+    not one. The app's transcript viewer holds the whole speaker map,
+    diarized labels included, and saves all of it the moment anything in the
+    meeting is renamed, so an edited meeting's ``speakers.json`` names every
+    segment. Treating those placeholders as decisions would make a re-run of
+    "Identify speakers" (the pass that carries a roster's lowered threshold)
+    inert on exactly the meetings it is run on. A recognized name therefore
+    replaces a generic one; a name the operator typed always wins, and a
+    match is never generic itself (``collect_project_voiceprints`` refuses to
+    remember one).
     """
     if not embeddings or threshold > 1.0:
         return 0
@@ -210,7 +249,7 @@ def auto_assign_speakers(
             continue
         name = matches.get(label)
         segment_id = str(segment.get("id"))
-        if name and segment_id not in assignments:
+        if name and (segment_id not in assignments or _is_generic(assignments[segment_id])):
             assignments[segment_id] = name
             added += 1
     if added:

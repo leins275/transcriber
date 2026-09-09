@@ -43,6 +43,26 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// directory.
 pub const CONFIG_FILE_NAME: &str = "config.json";
 
+/// The strict-roster matching threshold used when neither
+/// `speaker_match_threshold_strict` nor the service's own flat
+/// `speaker_match_threshold` is set -- i.e. what an untouched install
+/// sends: a tenth below the service default of `0.5`.
+pub const DEFAULT_STRICT_SPEAKER_MATCH_THRESHOLD: f64 = 0.4;
+
+/// The lowest value the *derived* strict threshold may take. A hand-lowered
+/// global `speaker_match_threshold` must not drag the strict one into
+/// "anything matches anything" territory; an explicit
+/// `speaker_match_threshold_strict` is honoured as written.
+pub const STRICT_SPEAKER_MATCH_THRESHOLD_FLOOR: f64 = 0.2;
+
+/// The service's own default for `speaker_match_threshold`, used as the
+/// derivation base when the shared file does not pin one
+/// (`services/transcription/README.md`).
+const SERVICE_SPEAKER_MATCH_THRESHOLD_DEFAULT: f64 = 0.5;
+
+/// How far below the base the derived strict threshold sits.
+const STRICT_SPEAKER_MATCH_THRESHOLD_DELTA: f64 = 0.1;
+
 /// `service.*` — currently just the base URL; anything else F4 (or a
 /// future version) writes is preserved in `extra`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +128,17 @@ pub struct Settings {
     /// UI: `SettingsView` reports only whether one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hf_token: Option<String>,
+    /// The cross-meeting speaker-matching threshold the shell sends with a
+    /// strict-roster submission, where a cluster that is *nearly* a known
+    /// voice should still get its roster name rather than a generic label.
+    /// Unlike `diarize` / `hf_token` this key is read by the **app**, not by
+    /// the service (which sees it as an unknown top-level key and ignores
+    /// it); the app sends the resolved number as the per-job
+    /// `speaker_match_threshold`. Absent by default -- see
+    /// `strict_speaker_match_threshold` for how it is then derived -- and
+    /// never serialized as `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_match_threshold_strict: Option<f64>,
     #[serde(flatten)]
     pub extra: Map<String, serde_json::Value>,
 }
@@ -125,6 +156,7 @@ impl Default for Settings {
             model: ModelSettings::default(),
             diarize: None,
             hf_token: None,
+            speaker_match_threshold_strict: None,
             extra: Map::new(),
         }
     }
@@ -235,6 +267,36 @@ pub fn set_diarization(
         };
     }
     save(dir, settings)
+}
+
+/// The speaker-matching threshold a strict-roster submission carries.
+///
+/// `speaker_match_threshold_strict` wins whenever it is a finite number
+/// inside `[0, 1]`; an out-of-range or non-finite value is ignored rather
+/// than an error, so a typo in a hand-edited file degrades to the derived
+/// value instead of breaking speaker identification. Otherwise the value is
+/// derived as `max(0.2, base - 0.1)`, where `base` is the service's own flat
+/// `speaker_match_threshold` seen through `extra` (the app does not type
+/// that key) and `0.5` -- the service default -- when the file does not pin
+/// one. So an untouched install resolves to `0.4`, and an operator who
+/// tunes the global key keeps a strict value below it.
+///
+/// Caveat: the service's effective threshold may also come from
+/// `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` or a CLI flag, which this file
+/// cannot see; setting the strict key explicitly removes the ambiguity.
+pub fn strict_speaker_match_threshold(settings: &Settings) -> f64 {
+    if let Some(explicit) = settings.speaker_match_threshold_strict {
+        if explicit.is_finite() && (0.0..=1.0).contains(&explicit) {
+            return explicit;
+        }
+    }
+    let base = settings
+        .extra
+        .get("speaker_match_threshold")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or(SERVICE_SPEAKER_MATCH_THRESHOLD_DEFAULT);
+    (base - STRICT_SPEAKER_MATCH_THRESHOLD_DELTA).clamp(STRICT_SPEAKER_MATCH_THRESHOLD_FLOOR, 1.0)
 }
 
 /// Whether `candidate` is `app_dir` itself or lies anywhere underneath it,

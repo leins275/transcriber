@@ -82,6 +82,8 @@ fn submit_request() -> SubmitRequest {
         output_dir: "C:\\Meetings\\ELS\\260812 - Security issue".to_string(),
         language: None,
         original_file_name: None,
+        max_speakers: None,
+        speaker_match_threshold: None,
     }
 }
 

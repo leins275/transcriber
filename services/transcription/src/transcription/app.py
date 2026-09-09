@@ -292,6 +292,9 @@ def create_app(
             model=payload.model,
             meeting=payload.meeting,
             diarize=payload.diarize,
+            min_speakers=payload.min_speakers,
+            max_speakers=payload.max_speakers,
+            speaker_match_threshold=payload.speaker_match_threshold,
         )
         return {"job_id": job_id}
 

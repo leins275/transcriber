@@ -69,6 +69,29 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   the app reports only `hf_token_present` to the UI. A blank string on
   save clears the key. Both keys are read by the service at startup, so
   the command restarts the sidecar after saving.
+- `speaker_match_threshold_strict` (`number` in `[0, 1]`, absent by
+  default) — the cosine floor the app sends as the per-job
+  `speaker_match_threshold` (`services/transcription/README.md`) on the
+  submissions it caps from a strict project roster (`roster.json` in
+  `roster` mode — `docs/setup.md`), so a voice that is *nearly* a voice
+  already named in that project gets its roster name instead of a generic
+  `Speaker N`. Unlike `diarize` and `hf_token` this key is read by the
+  **app**, not by the service, which sees it as an unknown top-level key
+  and ignores it. Absent (or set to anything that is not a finite number in
+  `[0, 1]`, which is ignored rather than an error) means the effective
+  value is derived: `max(0.2, base − 0.1)`, where `base` is the flat
+  `speaker_match_threshold` in this same file when that is a finite number,
+  and the service's own default `0.5` otherwise. So an untouched file
+  yields `0.4`; `speaker_match_threshold: 0.35` yields `0.25`; `0.25`
+  yields the `0.2` floor. There is no UI for the key: hand-edit it, and
+  like every other flat tuning key here it takes effect on the next app
+  start (the app resolves it once at startup — `config.rs`'s
+  `strict_speaker_match_threshold`; the sidecar never sees it, so no
+  `TRANSCRIBER_*` variable or CLI flag reaches it either). A wrongly
+  *typed* value (a string, say) is a malformed typed field like any other:
+  `load` returns a `config`-kind error naming the file, not a panic. The
+  app never writes the key as `null`, and a value already in the file
+  survives every load → modify → save round-trip.
 - **Unknown keys are preserved.** Every level (`Settings`, `ServiceSettings`,
   `ModelSettings`) carries `#[serde(flatten)] extra: serde_json::Map<...>`,
   so any additional top-level key, or additional key nested under `service`

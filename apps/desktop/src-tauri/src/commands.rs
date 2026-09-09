@@ -453,6 +453,11 @@ impl AppState {
             status_sink: status_sink.clone(),
             base_url: service_base_url.clone(),
         }));
+        // Read once, at startup, like every other hand-edited flat tuning
+        // key in `config.json` (FR-7): the registry carries it from here to
+        // every strict-roster submission.
+        registry
+            .set_strict_speaker_match_threshold(config::strict_speaker_match_threshold(&settings));
         AppState {
             config_dir,
             app_dir,

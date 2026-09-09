@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FocusEvent } from "react";
 import { SpeakerNameField } from "./SpeakerNameField";
+import { isGenericSpeakerLabel } from "../lib/turns";
 import styles from "./SpeakerTag.module.css";
 
 export type SpeakerTagProps = {
@@ -45,6 +46,13 @@ export type SpeakerTagProps = {
  * becomes a picker over the project's names instead of a text box — never
  * which of the two acts an edit is, nor the scope question it raises.
  *
+ * It does change what a *generic* label reads as. `Speaker 2` is diarization
+ * counting voices, not naming one; under a roster that is the project's whole
+ * cast, showing it as a name invents a person who is not on the list. So such
+ * a tag reads "Unnamed voice" and opens on an empty picker. Only the display
+ * changes: the label underneath is untouched, so it still groups the turns it
+ * holds, and naming the voice for all of them is the same rename as ever.
+ *
  * Presentational only: no invoke, no listen, no fetch.
  */
 export function SpeakerTag({
@@ -56,8 +64,15 @@ export function SpeakerTag({
   onAssign,
   onRename,
 }: SpeakerTagProps) {
+  // A voice diarization only counted, seen under a roster that names everyone
+  // the project has: there is a label, but no one it belongs to yet.
+  const unattributed = roster !== undefined && speaker !== null && isGenericSpeakerLabel(speaker);
+  // What the editor opens on. An unattributed voice offers nothing to edit —
+  // its label is not a name — so the picker starts on its placeholder.
+  const editableName = unattributed ? "" : (speaker ?? "");
+
   const [mode, setMode] = useState<"idle" | "editing" | "choosing">("idle");
-  const [draft, setDraft] = useState(speaker ?? "");
+  const [draft, setDraft] = useState(editableName);
   const narrowChoiceRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -95,7 +110,7 @@ export function SpeakerTag({
   }
 
   function cancel() {
-    setDraft(speaker ?? "");
+    setDraft(editableName);
     setMode("idle");
   }
 
@@ -148,7 +163,13 @@ export function SpeakerTag({
           // No onCancel and no commitOnBlur: Escape and what leaving the
           // editor means are both decided on the wrapper above, the only
           // place that can see the scope chooser as well.
-          ariaLabel={speaker === null ? "Name this speaker" : "Edit speaker for this turn"}
+          ariaLabel={
+            unattributed
+              ? "Name this voice"
+              : speaker === null
+                ? "Name this speaker"
+                : "Edit speaker for this turn"
+          }
           className={styles.input}
           suggestions={suggestions}
           roster={roster}
@@ -165,7 +186,10 @@ export function SpeakerTag({
               Only this turn
             </button>
             <button type="button" className={styles.scopeButton} onClick={renameEverywhere}>
-              All {turnsHeld} turns of {speaker}
+              {/* The wide choice is named by whose turns it covers, and an
+                  unattributed voice has no name to give — only the fact that
+                  every turn here is the same voice. */}
+              All {turnsHeld} turns of {unattributed ? "this voice" : speaker}
             </button>
           </span>
         ) : (
@@ -191,13 +215,13 @@ export function SpeakerTag({
     <span className={styles.tag}>
       <button
         type="button"
-        className={speaker === null ? styles.unassigned : styles.name}
+        className={speaker === null || unattributed ? styles.unassigned : styles.name}
         onClick={() => {
-          setDraft(speaker ?? "");
+          setDraft(editableName);
           setMode("editing");
         }}
       >
-        {speaker ?? "Add speaker"}
+        {unattributed ? "Unnamed voice" : (speaker ?? "Add speaker")}
         <svg
           width="10"
           height="10"

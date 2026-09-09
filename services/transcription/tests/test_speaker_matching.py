@@ -170,3 +170,46 @@ def test_majority_vote_survives_a_stray_mislabeled_segment(tmp_path: Path) -> No
     prints = collect_project_voiceprints(new_meeting)
 
     assert set(prints) == {"Алиса"}
+
+
+def test_auto_assign_replaces_a_seeded_generic_label_but_not_a_real_name(tmp_path: Path) -> None:
+    """The meeting's own `speakers.json` carries `Speaker N` for every
+    segment as soon as the operator has opened and saved it once (the viewer
+    persists the whole seeded map). Those placeholders are not operator
+    decisions: a recognized voice overwrites them. A name the operator
+    actually typed still wins -- including one that merely looks like a
+    label, since `Speaker <n>` is the only form the service itself writes.
+    """
+    project = tmp_path / "ACME"
+    _write_meeting(
+        project / "260801 - Kickoff",
+        embeddings={"Speaker 1": ALICE},
+        speakers={0: "Speaker 1"},
+        names={"0": "Алиса"},
+    )
+    new_meeting = project / "260803 - New"
+    segments = [
+        {"id": 0, "speaker": "Speaker 1"},
+        {"id": 1, "speaker": "Speaker 1"},
+        {"id": 2, "speaker": "Speaker 1"},
+    ]
+    _write_meeting(
+        new_meeting,
+        embeddings={"Speaker 1": ALICE},
+        speakers={0: "Speaker 1", 1: "Speaker 1", 2: "Speaker 1"},
+        # Segment 0 as the viewer seeded it; 1 and 2 renamed by hand.
+        names={
+            "0": "Speaker 1",
+            "1": "Кто-то другой",
+            "2": "speaker 3",
+        },
+    )
+
+    added = auto_assign_speakers(new_meeting, {"Speaker 1": ALICE}, segments, threshold=0.5)
+
+    assert added == 1  # segment 0 only
+    assert _assignments(new_meeting) == {
+        "0": "Алиса",
+        "1": "Кто-то другой",
+        "2": "speaker 3",
+    }

@@ -160,9 +160,42 @@ class JobCreate(BaseModel):
     # `None` defers to the service's configured default (`config.diarize`);
     # an explicit true/false overrides it for this job only.
     diarize: bool | None = None
+    # Per-job diarization tuning, all three optional and all three
+    # meaningful only on the two job types that run the speaker pass
+    # (`transcribe` with diarization on, and `diarize`). Each one, when
+    # given, wins over its config key for that job alone:
+    # `diarization_min_speakers` / `diarization_max_speakers` for the
+    # bounds and `speaker_match_threshold` for cross-meeting recognition.
+    # The caller sends numbers only -- the service knows nothing about why
+    # a caller capped the speakers or relaxed the matching (the app derives
+    # both from the project's speaker roster).
+    min_speakers: int | None = Field(default=None, ge=1)
+    max_speakers: int | None = Field(default=None, ge=1)
+    speaker_match_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _require_the_path_matching_the_job_type(self) -> JobCreate:
+        # Tuning that could never take effect is a mistake worth reporting,
+        # not something to swallow: rejected here (a validation error, so
+        # `submit` never runs and no ledger row appears) rather than in the
+        # job manager.
+        if self.job_type not in ("transcribe", "diarize"):
+            tuned = [
+                name
+                for name in ("min_speakers", "max_speakers", "speaker_match_threshold")
+                if getattr(self, name) is not None
+            ]
+            if tuned:
+                raise ValueError(
+                    f"{', '.join(tuned)} apply only to transcribe and diarize jobs, "
+                    f"not to a {self.job_type} job"
+                )
+        if (
+            self.min_speakers is not None
+            and self.max_speakers is not None
+            and self.min_speakers > self.max_speakers
+        ):
+            raise ValueError("min_speakers must not exceed max_speakers")
         if self.job_type == "index":
             if self.audio_path is not None or self.input_path is not None or self.output_dir:
                 raise ValueError("an index job takes no paths; it walks the configured vault")

@@ -10,6 +10,7 @@ import {
   assignSpeakerToSegments,
   filterTurns,
   groupIntoTurns,
+  isGenericSpeakerLabel,
   renameSpeaker,
   speakerNames,
   speakerTurnCounts,
@@ -90,7 +91,6 @@ export function TranscriptViewer({
     [transcript.segments, speakers],
   );
   const visible = useMemo(() => filterTurns(turns, query), [turns, query]);
-  const known = useMemo(() => speakerNames(turns), [turns]);
   // The scope question a tag asks ("All N turns of ...") is counted in turns,
   // and counted once for the whole transcript rather than scanned per tag.
   const turnCounts = useMemo(() => speakerTurnCounts(turns), [turns]);
@@ -100,6 +100,17 @@ export function TranscriptViewer({
     () => pickerSource(roster, suggestedSpeakers),
     [roster, suggestedSpeakers],
   );
+  // The names offered for reuse — beside a tag and in the selection popover.
+  // Under a roster they are also the only names a turn may be given, so a
+  // generic diarization label ("Speaker 2": a voice counted, not a person)
+  // must not be among them; offering it would put someone off the roster onto
+  // a second turn with one click. Filtered here, once, for both controls.
+  const known = useMemo(() => {
+    const names = speakerNames(turns);
+    return picker.roster === undefined
+      ? names
+      : names.filter((name) => !isGenericSpeakerLabel(name));
+  }, [turns, picker.roster]);
   // One lookup built per transcript rather than a scan per turn: an hour of
   // speech is thousands of segments, and the paragraphs re-render on every
   // keystroke in the search box.

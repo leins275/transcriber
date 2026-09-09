@@ -4,6 +4,7 @@ import {
   assignSpeakerToSegments,
   filterTurns,
   groupIntoTurns,
+  isGenericSpeakerLabel,
   renameSpeaker,
   speakerNames,
   speakerTurnCounts,
@@ -294,5 +295,37 @@ describe("filterTurns", () => {
 
   it("returns nothing when nothing matches", () => {
     expect(filterTurns(turns, "kubernetes")).toEqual([]);
+  });
+});
+
+describe("isGenericSpeakerLabel", () => {
+  // The predicate is the UI half of a mirror: `speaker_matching._GENERIC_LABEL`
+  // decides the same question in the service, derived from the single place
+  // that mints these labels (`diarization.SPEAKER_LABEL_PREFIX = "Speaker "`).
+  // The form is exact on both sides on purpose — the service side gates which
+  // on-disk assignments auto-naming may overwrite, so anything looser would
+  // rename a person; here, anything looser would hide a name someone typed.
+  // These cases pin the exactness the two comments only describe.
+
+  it.each(["Speaker 1", "Speaker 12"])("reads %j as the service's generic label", (name) => {
+    expect(isGenericSpeakerLabel(name)).toBe(true);
+  });
+
+  it.each([
+    // Case and separator: pyannote's raw form and hand-typed variants. The
+    // service renames every raw `SPEAKER_00` to `Speaker N` before a
+    // transcript is written, so none of these can be a placeholder — they are
+    // strings an operator chose, and the tag must show them as themselves.
+    "speaker 1",
+    "SPEAKER_00",
+    "Speaker_3",
+    // The UI deliberately does not trim, unlike the service (which matches on
+    // `name.strip()`): a leading space is part of the name the operator typed.
+    " Speaker 2",
+    // No digits at all, and a digit with a suffix.
+    "Speaker",
+    "Speaker 7b",
+  ])("reads %j as a name a person chose", (name) => {
+    expect(isGenericSpeakerLabel(name)).toBe(false);
   });
 });

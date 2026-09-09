@@ -168,6 +168,16 @@ struct SubmitBody<'a> {
     /// object F2 would then persist as a meaningless `meeting_json`.
     #[serde(skip_serializing_if = "Option::is_none")]
     meeting: Option<SubmitMeeting<'a>>,
+    /// FR-2/FR-7: present only for a meeting under a strict project roster.
+    /// Skipped otherwise, so a submission without bounds posts a body
+    /// byte-identical to the pre-feature one rather than a `null` F2 would
+    /// have to interpret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_speakers: Option<u32>,
+    /// FR-7: travels independently of `max_speakers` -- omitted alone, it
+    /// leaves the service's own configured threshold in force.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_match_threshold: Option<f64>,
 }
 
 /// The `meeting` member of F2's `JobCreate` (`schema.py`), which the service
@@ -184,6 +194,13 @@ struct LlmSubmitBody<'a> {
     job_type: &'a str,
     input_path: &'a str,
     output_dir: &'a str,
+    /// FR-2/FR-7: set only on a `diarize` submission under a strict roster;
+    /// `summarize` / `export` bodies stay exactly their three pre-feature
+    /// keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_speakers: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_match_threshold: Option<f64>,
 }
 
 /// `POST /v1/jobs` `202` response body.
@@ -684,6 +701,8 @@ impl TranscriptionService for HttpTranscriptionService {
                 .original_file_name
                 .as_deref()
                 .map(|original_file_name| SubmitMeeting { original_file_name }),
+            max_speakers: req.max_speakers,
+            speaker_match_threshold: req.speaker_match_threshold,
         };
         let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -803,6 +822,8 @@ impl TranscriptionService for HttpTranscriptionService {
             job_type: req.kind.wire_name(),
             input_path: &req.input_path,
             output_dir: &req.output_dir,
+            max_speakers: req.max_speakers,
+            speaker_match_threshold: req.speaker_match_threshold,
         };
         let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -1182,6 +1203,8 @@ mod tests {
             output_dir: "C:\\Meetings\\ELS\\260812".to_string(),
             language: None,
             original_file_name: None,
+            max_speakers: None,
+            speaker_match_threshold: None,
         }
     }
 

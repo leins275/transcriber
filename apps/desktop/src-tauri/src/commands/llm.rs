@@ -72,6 +72,8 @@ async fn enqueue(state: &AppState, kind: LlmJobKind, input: &Path, output: &Path
             kind,
             input_path: input.to_string_lossy().into_owned(),
             output_dir: output.to_string_lossy().into_owned(),
+            max_speakers: None,
+            speaker_match_threshold: None,
         })
         .await
 }

@@ -187,6 +187,12 @@ struct Shared {
     /// is enough since this is only ever read by cloning the `Option` out
     /// before any `.await`, never held across one.
     status_sink: StdMutex<Option<Arc<dyn ServiceUnavailableSink>>>,
+    /// The matching threshold a submission carries when the meeting's
+    /// project roster is strict (T4/FR-7). Set once at startup from
+    /// `config::strict_speaker_match_threshold`; a plain `std::Mutex` for
+    /// the same reason `status_sink` is one -- the value is copied out
+    /// before any `.await`, never held across one.
+    strict_speaker_match_threshold: StdMutex<f64>,
     jobs: RwLock<HashMap<String, JobSnapshot>>,
     /// `this app's job id -> F2's job id`, for jobs currently in flight.
     ///
@@ -205,6 +211,32 @@ struct Shared {
 }
 
 impl Shared {
+    /// The strict-roster matching threshold currently configured.
+    fn strict_speaker_match_threshold(&self) -> f64 {
+        *self
+            .strict_speaker_match_threshold
+            .lock()
+            .expect("strict_speaker_match_threshold mutex poisoned")
+    }
+
+    /// The speaker cap the meeting's project roster imposes, and the
+    /// matching threshold that goes with it -- `(None, None)` whenever the
+    /// roster puts no bound on this meeting, which is the pre-roster
+    /// submission byte for byte.
+    ///
+    /// The roster is read here, at submit time, rather than at enqueue:
+    /// a backfill that queues twenty meetings must submit each against the
+    /// roster as it stands when its own turn comes.
+    async fn roster_bounds(&self, meeting_dir: PathBuf) -> (Option<u32>, Option<f64>) {
+        let root = self.root.read().await.clone();
+        let cap = tokio::task::spawn_blocking(move || {
+            crate::commands::roster::roster_speaker_cap(&root, &meeting_dir)
+        })
+        .await
+        .unwrap_or(None);
+        (cap, cap.map(|_| self.strict_speaker_match_threshold()))
+    }
+
     /// Stores `snapshot` (inserting or replacing by id) and emits it
     /// unconditionally — used for every real transition.
     async fn store_and_emit(&self, snapshot: JobSnapshot) {
@@ -285,6 +317,9 @@ impl JobRegistry {
             service: RwLock::new(service),
             sink,
             status_sink: StdMutex::new(None),
+            strict_speaker_match_threshold: StdMutex::new(
+                crate::config::DEFAULT_STRICT_SPEAKER_MATCH_THRESHOLD,
+            ),
             jobs: RwLock::new(HashMap::new()),
             service_job_ids: RwLock::new(HashMap::new()),
             poll_interval,
@@ -331,6 +366,21 @@ impl JobRegistry {
             .status_sink
             .lock()
             .expect("status_sink mutex poisoned") = Some(sink);
+    }
+
+    /// Sets the matching threshold every strict-roster submission carries
+    /// (T4/FR-7). Optional and synchronous, like [`set_status_sink`]: a
+    /// registry with none set falls back to
+    /// [`crate::config::DEFAULT_STRICT_SPEAKER_MATCH_THRESHOLD`], so every
+    /// existing caller keeps working unchanged.
+    ///
+    /// [`set_status_sink`]: JobRegistry::set_status_sink
+    pub fn set_strict_speaker_match_threshold(&self, value: f64) {
+        *self
+            .shared
+            .strict_speaker_match_threshold
+            .lock()
+            .expect("strict_speaker_match_threshold mutex poisoned") = value;
     }
 
     /// Registers each path as a new `Pending` job and returns their initial
@@ -604,11 +654,17 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
     snapshot.source_dest = Some(path_string(&source_dest));
     snapshot.transcript_path = Some(path_string(&transcript_path));
 
+    // The one place a transcribe submission is built -- a fresh drop and a
+    // re-transcribe of a filed recording both arrive here, so both are
+    // bounded by the project roster the same way (FR-2).
+    let (max_speakers, speaker_match_threshold) = shared.roster_bounds(meeting_dir.clone()).await;
     let submit_request = SubmitRequest {
         audio_path: path_string(&source_dest),
         output_dir: path_string(&meeting_dir),
         language,
         original_file_name,
+        max_speakers,
+        speaker_match_threshold,
     };
 
     let service = shared.service.read().await.clone();
@@ -651,9 +707,21 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
 async fn submit_llm_and_poll(
     shared: Arc<Shared>,
     mut snapshot: JobSnapshot,
-    request: LlmSubmitRequest,
+    mut request: LlmSubmitRequest,
     follow_up: Option<FollowUp>,
 ) {
+    // `diarize` is the one derived job that runs a diarization pass, so it
+    // is the one that carries the project roster's cap and the strict
+    // matching threshold (FR-2 c3); summarize/export/index go out
+    // unbounded, exactly as before (FR-2 c4).
+    if request.kind == LlmJobKind::Diarize {
+        let (max_speakers, speaker_match_threshold) = shared
+            .roster_bounds(PathBuf::from(&request.input_path))
+            .await;
+        request.max_speakers = max_speakers;
+        request.speaker_match_threshold = speaker_match_threshold;
+    }
+
     let service = shared.service.read().await.clone();
     let service_job_id = match service.submit_llm(request).await {
         Ok(service_job_id) => service_job_id,
@@ -822,10 +890,15 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         // `export_recording` (commands/llm.rs) uses.
         FollowUp::Export => (LlmJobKind::Export, meeting_dir.clone(), None),
     };
+    // Chained derived stages (`summarize` / `export`) run no diarization
+    // pass, so they carry no speaker bounds -- their bodies stay the three
+    // pre-feature keys.
     let request = LlmSubmitRequest {
         kind,
         input_path: meeting_dir,
         output_dir,
+        max_speakers: None,
+        speaker_match_threshold: None,
     };
 
     // The same registration `enqueue_llm` performs: a `Pending` snapshot

@@ -160,10 +160,14 @@ async fn enqueue_diarize(state: &AppState, meeting_dir: &Path) -> JobSnapshot {
         .registry
         .read()
         .await
+        // `diarize` does run the diarization pass, but its bounds are
+        // resolved in the registry at submit time (T4), not here.
         .enqueue_llm(LlmSubmitRequest {
             kind: LlmJobKind::Diarize,
             input_path: dir.clone(),
             output_dir: dir,
+            max_speakers: None,
+            speaker_match_threshold: None,
         })
         .await
 }

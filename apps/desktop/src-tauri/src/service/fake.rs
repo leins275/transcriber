@@ -6,9 +6,10 @@
 //! without a running F2 process.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::{
@@ -278,6 +279,11 @@ impl Inner {
 /// In-memory fake used by tests and by `--fake-service` dev mode (T11).
 pub struct FakeService {
     inner: Mutex<Inner>,
+    /// One-shot gate over [`TranscriptionService::submit_llm`], armed by
+    /// [`FakeService::hold_llm_submissions`] and opened for good by
+    /// [`FakeService::release_llm_submissions`]. `None` -- the default, and
+    /// what `--fake-service` dev mode always uses -- means "never block".
+    llm_gate: Mutex<Option<Arc<Semaphore>>>,
 }
 
 impl FakeService {
@@ -292,6 +298,7 @@ impl FakeService {
     /// to simulate a fresh install for T13's own tests.
     pub fn with_timing(timing: FakeTiming) -> Self {
         FakeService {
+            llm_gate: Mutex::new(None),
             inner: Mutex::new(Inner {
                 down: false,
                 timing,
@@ -380,6 +387,38 @@ impl FakeService {
             .lock()
             .expect("fake service mutex poisoned")
             .index_submissions
+    }
+
+    /// Arms a one-shot hold on derived-job submissions: from now on every
+    /// `submit_llm` call records its request (so a test can see that it
+    /// arrived) and then *blocks inside the call* until
+    /// [`FakeService::release_llm_submissions`] opens the gate.
+    ///
+    /// This is the only way a test can pin the moment a submission happens:
+    /// the registry's serial worker submits the next job as soon as the
+    /// previous `submit_llm` returns (polling runs in its own task), so
+    /// without a hold two queued jobs reach the service microseconds apart
+    /// and anything a test does "between" them is a race.
+    pub fn hold_llm_submissions(&self) {
+        *self
+            .llm_gate
+            .lock()
+            .expect("fake service gate mutex poisoned") = Some(Arc::new(Semaphore::new(0)));
+    }
+
+    /// Opens the gate armed by [`FakeService::hold_llm_submissions`]: every
+    /// held call returns and every later one passes straight through.
+    pub fn release_llm_submissions(&self) {
+        if let Some(gate) = self
+            .llm_gate
+            .lock()
+            .expect("fake service gate mutex poisoned")
+            .take()
+        {
+            // Closing wakes every waiter at once and keeps waking any that
+            // arrive later -- a gate that stays open, not a permit count.
+            gate.close();
+        }
     }
 
     /// Every derived-job submission this fake has accepted, in order.
@@ -580,24 +619,44 @@ impl TranscriptionService for FakeService {
     }
 
     async fn submit_llm(&self, req: LlmSubmitRequest) -> Result<String, ServiceError> {
-        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
-        if inner.down {
-            return Err(ServiceError::Unavailable {
-                detail: "fake service is down".to_string(),
-            });
+        // Scoped so the (non-`Send`) guard is gone before the gate await
+        // below -- and so a test polling `llm_submissions()` sees the
+        // request the instant this call starts blocking.
+        let job_id = {
+            let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+            if inner.down {
+                return Err(ServiceError::Unavailable {
+                    detail: "fake service is down".to_string(),
+                });
+            }
+            let job_id = Uuid::new_v4().to_string();
+            let outcome = std::mem::replace(&mut inner.next_outcome, ScriptedOutcome::Succeed);
+            let timing = inner.timing;
+            inner.llm_submissions.push(req);
+            inner.jobs.insert(
+                job_id.clone(),
+                ScriptedJob {
+                    outcome,
+                    timing,
+                    polls: 0,
+                },
+            );
+            job_id
+        };
+
+        // Unarmed -- dev mode and every other test -- this is a `None` clone
+        // and the call returns as immediately as it always did.
+        let gate = self
+            .llm_gate
+            .lock()
+            .expect("fake service gate mutex poisoned")
+            .clone();
+        if let Some(gate) = gate {
+            // `Err` here means the gate was closed, i.e. released: the only
+            // two outcomes are "held until released" and "open".
+            let _ = gate.acquire().await;
         }
-        let job_id = Uuid::new_v4().to_string();
-        let outcome = std::mem::replace(&mut inner.next_outcome, ScriptedOutcome::Succeed);
-        let timing = inner.timing;
-        inner.llm_submissions.push(req);
-        inner.jobs.insert(
-            job_id.clone(),
-            ScriptedJob {
-                outcome,
-                timing,
-                polls: 0,
-            },
-        );
+
         Ok(job_id)
     }
 
@@ -864,6 +923,8 @@ mod tests {
             output_dir: "C:\\Meetings\\ELS\\260812".to_string(),
             language: None,
             original_file_name: None,
+            max_speakers: None,
+            speaker_match_threshold: None,
         }
     }
 
