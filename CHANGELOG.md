@@ -3,6 +3,33 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.23.0 — 2026-09-09
+
+### Bug fixes
+
+- **release**: Compute the bump from the unreleased range, not a full-history walk
+- **260909-trn-260909-spec**: Quality gate round 1 — E2, E3, E4, E6
+- **260909-trn-260909-spec**: Quality gate — align stale tests with merged features
+
+### Chores
+
+- **project-speaker-roster**: Keep the CLAUDE.md layout table unformatted
+- **sdd**: Batch 260909 state before integration
+
+### Documentation
+
+- **sdd**: Close batch 260909-trn-260909-spec
+- **sdd**: Blueprints for batch 260909-trn-260909-spec
+
+### Features
+
+- **project-speaker-roster**: Per-project speaker roster
+- **per-turn-speaker-reassign**: Choose the scope before renaming a speaker
+- **selection-menu-viewport-clamp**: Keep the selection speaker popover inside the window
+- **job-progress-accuracy**: Honest job progress with phase labels
+- **speaker-tagged-embeddings**: Tag index chunks with their speakers
+- **search-index-in-vault**: Retire the orphaned app-dir search index at startup
+
 ## 0.22.3 — 2026-09-03
 
 ### Bug fixes
