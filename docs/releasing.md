@@ -8,7 +8,7 @@ How a change gets from a commit to an installer someone can download.
 2. Merge it into `main` with a [conventional commit](#commit-messages)
    subject.
 3. If anything since the last tag is bump-worthy, CI writes the new version
-   everywhere, regenerates `CHANGELOG.md`, commits `chore(release): X.Y.Z`
+   everywhere, prepends the new section to `CHANGELOG.md`, commits `chore(release): X.Y.Z`
    to `main` and tags it `vX.Y.Z`.
 4. The tag triggers the release build: the Windows installer (NSIS `.exe`)
    and the macOS Apple Silicon installer (`.dmg`) are built in parallel and
@@ -178,7 +178,7 @@ repo secret.
 
 ```
 make next-version     # what would the next release be called?
-make release-prep     # write that version everywhere + regenerate CHANGELOG.md
+make release-prep     # write that version everywhere + prepend the section to CHANGELOG.md
 make installer        # build dist/Transcriber_<version>_x64-setup.exe
                       # (on a Mac: dist/Transcriber_<version>_aarch64.dmg)
 ```

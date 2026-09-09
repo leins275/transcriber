@@ -42,7 +42,7 @@ def test_next_version_strips_the_tag_prefix():
     run = _runner(stdout="v0.2.0\n")
 
     assert prepare_release.next_version(run) == "0.2.0"
-    assert run.calls == [["--bumped-version"]]
+    assert run.calls == [["--unreleased", "--bumped-version"]]
 
 
 def test_next_version_handles_a_version_without_a_prefix():
@@ -78,12 +78,22 @@ def test_empty_output_is_an_error_rather_than_an_empty_version():
         prepare_release.next_version(_runner(stdout="   \n"))
 
 
-def test_write_changelog_targets_the_repo_changelog():
+def test_write_changelog_prepends_the_unreleased_section_to_the_repo_changelog():
     run = _runner()
 
     prepare_release.write_changelog(run)
 
-    assert run.calls == [["--bump", "-o", str(prepare_release.CHANGELOG)]]
+    assert run.calls == [["--unreleased", "--bump", "--prepend", str(prepare_release.CHANGELOG)]]
+
+
+def test_write_changelog_creates_the_file_when_there_is_none_yet(monkeypatch, tmp_path):
+    missing = tmp_path / "CHANGELOG.md"
+    monkeypatch.setattr(prepare_release, "CHANGELOG", missing)
+    run = _runner()
+
+    prepare_release.write_changelog(run)
+
+    assert run.calls == [["--unreleased", "--bump", "-o", str(missing)]]
 
 
 def test_write_changelog_raises_on_failure():

@@ -56,7 +56,10 @@ sort_commits = "newest"
 commit_parsers = [
   # Release commits this pipeline made itself: never in the changelog.
   { message = "^chore\\(release\\)", skip = true },
-  { message = "^[Mm]erge (branch|pull request|remote)", skip = true },
+  # Every merge commit, whatever it merged: its subject names no change and
+  # its body is git's own conflict list, neither of which belongs in a
+  # changelog. The changes themselves arrive through the merged commits.
+  { message = "^[Mm]erge ", skip = true },
 
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug fixes" },

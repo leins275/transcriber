@@ -3,9 +3,9 @@
 
 The seam between the two halves of releasing:
 
-    git-cliff              decides *what* the next version is, and writes
-    (cliff.toml)           CHANGELOG.md, from conventional commits since the
-                           most recent `v*` tag.
+    git-cliff              decides *what* the next version is, and prepends
+    (cliff.toml)           its section to CHANGELOG.md, from conventional
+                           commits since the most recent `v*` tag.
 
     sync_version.py        decides *where* the version lives -- version.txt
                            plus the five manifests and the two Cargo.lock
@@ -85,7 +85,14 @@ def next_version(runner=_default_runner) -> str | None:
     `None` means git-cliff found nothing bump-worthy since the last tag --
     the normal state of a repository between releases, not an error.
     """
-    result = runner(["--bumped-version"])
+    # `--unreleased` restricts git-cliff to `<last v* tag>..HEAD` instead of
+    # letting it re-derive releases from a full-history walk. The walk closes
+    # a release at the first *tagged commit it meets*, which is only right
+    # when history is linear: after a merge that brings the tagged release
+    # commit in as a second parent, the walk meets that commit after every
+    # commit made since, files them all under the already-shipped tag, and
+    # answers "nothing to bump" for a main full of feat commits.
+    result = runner(["--unreleased", "--bumped-version"])
     if result.returncode != 0:
         combined = (result.stdout or "") + (result.stderr or "")
         if "nothing to bump" in combined.lower():
@@ -161,8 +168,19 @@ def has_bump_worthy_commit(messages: list[str] | None = None) -> bool:
 
 
 def write_changelog(runner=_default_runner) -> None:
-    """Regenerate CHANGELOG.md with the bumped version as its newest heading."""
-    result = runner(["--bump", "-o", str(CHANGELOG)])
+    """Prepend the bumped version's section to CHANGELOG.md.
+
+    Same `--unreleased` range as `next_version` (see the note there): only
+    the commits since the last tag are rendered, and the section they make
+    is prepended under the configured header. Older sections are what an
+    earlier release wrote, and stay as they are. A checkout with no
+    changelog yet gets the file created with just that one section.
+    """
+    if CHANGELOG.exists():
+        args = ["--unreleased", "--bump", "--prepend", str(CHANGELOG)]
+    else:
+        args = ["--unreleased", "--bump", "-o", str(CHANGELOG)]
+    result = runner(args)
     if result.returncode != 0:
         combined = (result.stdout or "") + (result.stderr or "")
         raise PrepareReleaseError(
@@ -208,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print(f"would write version {version} to version.txt, the manifests and Cargo.lock")
-        print(f"would regenerate {CHANGELOG.relative_to(REPO_ROOT)}")
+        print(f"would prepend the new section to {CHANGELOG.relative_to(REPO_ROOT)}")
         return 0
 
     # Imported here, not at module scope: `--print-next` must work even from
