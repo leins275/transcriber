@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { useClampedPosition } from "../state/useClampedPosition";
 import styles from "./SelectionSpeakerMenu.module.css";
 
 export type SelectionSpeakerMenuProps = {
@@ -41,6 +42,10 @@ export function SelectionSpeakerMenu({
   const [draft, setDraft] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const suggestionsId = useId();
+  // Placed against the measured box and the window rather than at the raw
+  // anchor: a selection ending near an edge would otherwise open the popover
+  // with its buttons off-screen.
+  const placement = useClampedPosition(anchor, menuRef);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -82,7 +87,7 @@ export function SelectionSpeakerMenu({
     <div
       ref={menuRef}
       className={styles.menu}
-      style={{ left: anchor.x, top: anchor.y }}
+      style={placement}
       role="group"
       aria-label="Attribute the selected text to a speaker"
     >
