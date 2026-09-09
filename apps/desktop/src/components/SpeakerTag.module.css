@@ -73,3 +73,31 @@
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* The scope question takes the hint's place rather than opening anywhere
+   else: the answer belongs beside the name it is about. */
+.scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scopeButton {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  background: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-family: var(--font-body);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.scopeButton:hover,
+.scopeButton:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}

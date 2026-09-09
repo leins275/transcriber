@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type FocusEvent } from "react";
 import styles from "./SpeakerTag.module.css";
 
 export type SpeakerTagProps = {
@@ -6,6 +6,10 @@ export type SpeakerTagProps = {
   speaker: string | null;
   /** Names already in use in this transcript, offered for reuse. */
   known: string[];
+  /** How many turns of this transcript `speaker` currently holds, this one
+   * included. `0` for an unattributed turn. Drives the scope question: with
+   * one turn both answers write the same map, so it is not worth asking. */
+  turnsHeld?: number;
   /** Names remembered across the whole project — offered while typing (a
    * datalist), never as buttons: a project can hold many more people than
    * this call does. */
@@ -21,70 +25,120 @@ export type SpeakerTagProps = {
  *
  * Editing one carries an ambiguity worth resolving out loud: typing over
  * "Speaker 2" could mean *this turn was someone else* or *Speaker 2 is
- * actually called Anna*. The design resolves it as the latter — "renames
- * every segment" — so editing an existing name renames that speaker
- * throughout, and attributing this turn to someone else is a separate act:
- * picking from the names already in use, or adding a new one.
+ * actually called Anna*. The design refuses to guess — confirming a changed
+ * name asks which it was, naming the blast radius as a number ("Only this
+ * turn" vs. "All 3 turns of Speaker 2"), and writes nothing until the
+ * operator picks. The narrow, non-destructive choice is the focused one, so
+ * a reflexive second Enter can never rename everybody.
+ *
+ * Nothing is ever written on the way out either: losing focus with an
+ * unconfirmed edit on an existing speaker discards it. The exception is a
+ * turn nobody has claimed — there is no ambiguity and nothing to lose, so a
+ * typed name still commits on blur.
  *
  * Presentational only: no invoke, no listen, no fetch.
  */
 export function SpeakerTag({
   speaker,
   known,
+  turnsHeld = 1,
   suggestions = [],
   onAssign,
   onRename,
 }: SpeakerTagProps) {
-  const [editing, setEditing] = useState(false);
+  const [mode, setMode] = useState<"idle" | "editing" | "choosing">("idle");
   const [draft, setDraft] = useState(speaker ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
+  const narrowChoiceRef = useRef<HTMLButtonElement>(null);
   const suggestionsId = useId();
 
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
+    if (mode === "editing") inputRef.current?.focus();
+    else if (mode === "choosing") narrowChoiceRef.current?.focus();
+  }, [mode]);
 
   function commit() {
     const trimmed = draft.trim();
-    setEditing(false);
     if (trimmed.length === 0) {
       // Clearing the box unattributes this turn rather than storing a
       // nameless speaker.
+      setMode("idle");
       onAssign(null);
       return;
     }
     if (speaker === null) {
+      setMode("idle");
       onAssign(trimmed);
       return;
     }
-    if (trimmed !== speaker) {
-      onRename(speaker, trimmed);
+    if (trimmed === speaker) {
+      setMode("idle");
+      return;
     }
+    if (turnsHeld <= 1) {
+      // Only this turn holds the name: both scopes would write the same map,
+      // and asking would be noise.
+      setMode("idle");
+      onAssign(trimmed);
+      return;
+    }
+    setMode("choosing");
   }
 
   function cancel() {
     setDraft(speaker ?? "");
-    setEditing(false);
+    setMode("idle");
   }
 
-  if (editing) {
+  function assignThisTurn() {
+    const trimmed = draft.trim();
+    setMode("idle");
+    onAssign(trimmed);
+  }
+
+  function renameEverywhere() {
+    const trimmed = draft.trim();
+    setMode("idle");
+    if (speaker !== null) onRename(speaker, trimmed);
+  }
+
+  function handleBlur(event: FocusEvent<HTMLSpanElement>) {
+    // Focus moving between the input and the chooser stays inside the tag and
+    // decides nothing.
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    if (mode === "choosing" || speaker !== null) {
+      cancel();
+      return;
+    }
+    commit();
+  }
+
+  if (mode !== "idle") {
     return (
-      <span className={styles.tag}>
+      <span
+        className={styles.tag}
+        onBlur={handleBlur}
+        onKeyDown={(event) => {
+          // On the wrapper, not the input, so Escape abandons from the
+          // chooser too.
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancel();
+          }
+        }}
+      >
         <input
           ref={inputRef}
           className={styles.input}
           value={draft}
-          aria-label={speaker === null ? "Name this speaker" : `Rename ${speaker}`}
+          readOnly={mode === "choosing"}
+          aria-label={speaker === null ? "Name this speaker" : "Edit speaker for this turn"}
           list={suggestions.length > 0 ? suggestionsId : undefined}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
               commit();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              cancel();
             }
           }}
         />
@@ -95,9 +149,29 @@ export function SpeakerTag({
             ))}
           </datalist>
         )}
-        <span className={styles.hint}>
-          {speaker === null ? "Enter to name" : "renames every segment · Enter to save"}
-        </span>
+        {mode === "choosing" && speaker !== null ? (
+          <span className={styles.scope}>
+            <button
+              ref={narrowChoiceRef}
+              type="button"
+              className={styles.scopeButton}
+              onClick={assignThisTurn}
+            >
+              Only this turn
+            </button>
+            <button type="button" className={styles.scopeButton} onClick={renameEverywhere}>
+              All {turnsHeld} turns of {speaker}
+            </button>
+          </span>
+        ) : (
+          <span className={styles.hint}>
+            {speaker === null
+              ? "Enter to name"
+              : turnsHeld <= 1
+                ? "this turn only · Enter to save"
+                : "Enter, then choose the scope"}
+          </span>
+        )}
       </span>
     );
   }
@@ -109,7 +183,7 @@ export function SpeakerTag({
         className={speaker === null ? styles.unassigned : styles.name}
         onClick={() => {
           setDraft(speaker ?? "");
-          setEditing(true);
+          setMode("editing");
         }}
       >
         {speaker ?? "Add speaker"}

@@ -6,6 +6,7 @@ import {
   groupIntoTurns,
   renameSpeaker,
   speakerNames,
+  speakerTurnCounts,
 } from "./turns";
 import type { TranscriptSegmentView } from "../types";
 
@@ -95,6 +96,55 @@ describe("speakerNames", () => {
 
   it("is empty when nothing is attributed", () => {
     expect(speakerNames(groupIntoTurns([seg(0, 0, 2, "a")], {}))).toEqual([]);
+  });
+});
+
+describe("speakerTurnCounts", () => {
+  it("counts the turns a name holds, not the segments they contain", () => {
+    // Maxim speaks twice: once across three segments, once across two.
+    const turns = groupIntoTurns(
+      [
+        seg(0, 0, 2, "a"),
+        seg(1, 2, 4, "b"),
+        seg(2, 4, 6, "c"),
+        seg(3, 6, 8, "d"),
+        seg(4, 8, 10, "e"),
+        seg(5, 10, 12, "f"),
+      ],
+      { "0": "Maxim", "1": "Maxim", "2": "Maxim", "3": "Anna", "4": "Maxim", "5": "Maxim" },
+    );
+
+    expect(speakerTurnCounts(turns)).toEqual({ Maxim: 2, Anna: 1 });
+  });
+
+  it("ignores the turns nobody has attributed", () => {
+    const turns = groupIntoTurns([seg(0, 0, 2, "a"), seg(1, 2, 4, "b"), seg(2, 20, 22, "c")], {
+      "1": "Maxim",
+    });
+
+    expect(speakerTurnCounts(turns)).toEqual({ Maxim: 1 });
+  });
+
+  it("counts nothing for a transcript with no turns", () => {
+    expect(speakerTurnCounts(groupIntoTurns([], {}))).toEqual({});
+  });
+
+  it("counts nothing when the whole transcript is unattributed", () => {
+    const turns = groupIntoTurns([seg(0, 0, 2, "a"), seg(1, 9, 11, "b")], {});
+
+    expect(speakerTurnCounts(turns)).toEqual({});
+  });
+
+  it("does not mutate the turns it is given", () => {
+    const turns = groupIntoTurns([seg(0, 0, 2, "a"), seg(1, 2, 4, "b")], {
+      "0": "Maxim",
+      "1": "Anna",
+    });
+    const before = structuredClone(turns);
+
+    speakerTurnCounts(turns);
+
+    expect(turns).toEqual(before);
   });
 });
 
