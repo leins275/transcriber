@@ -518,7 +518,11 @@ impl TranscriptionService for FakeService {
         if poll < job.timing.queued_polls {
             return Ok(JobStatus {
                 state: JobState::Queued,
-                progress: 0.0,
+                progress: Some(0.0),
+                // The scripted walk never labels a sub-step: phases are
+                // F2's to compose, and a fake that invented them would let
+                // a test pass against labels no service ever sends.
+                phase: None,
                 error_kind: None,
                 error_message: None,
             });
@@ -533,7 +537,8 @@ impl TranscriptionService for FakeService {
             };
             return Ok(JobStatus {
                 state: JobState::Running,
-                progress,
+                progress: Some(progress),
+                phase: None,
                 error_kind: None,
                 error_message: None,
             });
@@ -542,13 +547,15 @@ impl TranscriptionService for FakeService {
         match &job.outcome {
             ScriptedOutcome::Succeed => Ok(JobStatus {
                 state: JobState::Done,
-                progress: 1.0,
+                progress: Some(1.0),
+                phase: None,
                 error_kind: None,
                 error_message: None,
             }),
             ScriptedOutcome::Fail(message) => Ok(JobStatus {
                 state: JobState::Failed,
-                progress: 1.0,
+                progress: Some(1.0),
+                phase: None,
                 error_kind: None,
                 error_message: Some(message.clone()),
             }),
@@ -889,13 +896,14 @@ mod tests {
                 match snapshot.state {
                     JobState::Running => {
                         saw_running = true;
+                        let progress = snapshot
+                            .progress
+                            .expect("the fake reports a number for every poll");
                         assert!(
-                            snapshot.progress >= last_progress,
-                            "progress must never decrease: {} then {}",
-                            last_progress,
-                            snapshot.progress
+                            progress >= last_progress,
+                            "progress must never decrease: {last_progress} then {progress}"
                         );
-                        last_progress = snapshot.progress;
+                        last_progress = progress;
                     }
                     JobState::Done => {
                         terminal = Some(snapshot);
@@ -907,7 +915,7 @@ mod tests {
 
             assert!(saw_running, "job must pass through Running");
             let terminal = terminal.expect("job must reach Done");
-            assert_eq!(terminal.progress, 1.0);
+            assert_eq!(terminal.progress, Some(1.0));
             assert_eq!(terminal.error_message, None);
         });
     }
@@ -978,19 +986,20 @@ mod tests {
 
     #[test]
     fn job_status_from_wire_forces_cancelled_message_and_passes_others_through() {
-        let succeeded = JobStatus::from_wire("succeeded", 1.0, None, None)
+        let succeeded = JobStatus::from_wire("succeeded", Some(1.0), None, None, None)
             .expect("succeeded must map to a JobStatus");
         assert_eq!(succeeded.state, JobState::Done);
         assert_eq!(succeeded.error_message, None);
 
-        let cancelled = JobStatus::from_wire("cancelled", 0.4, None, None)
+        let cancelled = JobStatus::from_wire("cancelled", Some(0.4), None, None, None)
             .expect("cancelled must map to a JobStatus");
         assert_eq!(cancelled.state, JobState::Failed);
         assert_eq!(cancelled.error_message.as_deref(), Some("cancelled"));
 
         let failed = JobStatus::from_wire(
             "failed",
-            0.9,
+            Some(0.9),
+            None,
             Some("provider_unavailable".to_string()),
             Some("provider is unavailable".to_string()),
         )
@@ -1003,7 +1012,10 @@ mod tests {
         );
 
         assert_eq!(JobState::from_wire("bogus"), None);
-        assert_eq!(JobStatus::from_wire("bogus", 0.0, None, None), None);
+        assert_eq!(
+            JobStatus::from_wire("bogus", Some(0.0), None, None, None),
+            None
+        );
     }
 
     // -- model download simulation (T13, FR-12, FR-16, FR-17) -------------

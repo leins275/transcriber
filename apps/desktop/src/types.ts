@@ -73,6 +73,11 @@ export type JobSnapshot = {
   source_dest: string | null;
   transcript_path: string | null;
   progress: number | null;
+  /** The sub-step a running job is in ("rendering PDF", "writing summary ·
+   * 812 tokens"), or null while queued, while the headline verb already says
+   * it all, and in every terminal state. Optional so snapshot literals
+   * written before the service reported phases still typecheck. */
+  phase?: string | null;
   message: string | null;
   error_kind: string | null;
   created_at: string;

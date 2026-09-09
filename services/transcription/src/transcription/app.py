@@ -309,6 +309,7 @@ def create_app(
             status=job.status,  # type: ignore[arg-type]
             job_type=job.job_type,  # type: ignore[arg-type]
             progress=job.progress,
+            phase=job.phase,
             warnings=list(job.warnings),
             elapsed_sec=job.elapsed_sec,
             audio_duration_sec=job.audio_duration_sec,

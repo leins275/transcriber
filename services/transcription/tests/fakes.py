@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,11 +172,28 @@ def _default_turns() -> list[SpeakerTurn]:
     ]
 
 
+# How long a blocked fake waits to be released before giving up, so a test
+# that forgets to release fails loudly instead of hanging the suite.
+BLOCK_TIMEOUT_SEC = 10.0
+
+
 class FakeDiarizer:
     """A network-free, torch-free stand-in for the pyannote engine.
 
     Satisfies `diarizer.DiarizerProtocol`; can be configured to raise a
     given :class:`ErrorKind` to exercise the degradation path.
+
+    Progress and blocking (all optional, all off by default -- a
+    `FakeDiarizer()` behaves exactly as it always has):
+
+    * ``phases`` is a script of ``(phase, fraction)`` pairs replayed
+      through the caller's ``on_progress`` before the pass returns.
+    * ``blocked`` is set once the script has been replayed, so a test can
+      wait for the pass to reach its pause point without sleeping.
+    * ``release`` is waited on at that same point; the pass returns only
+      once the test sets it, which keeps the mid-pass job state readable
+      through ``JobManager.status()``. A cancellation requested while the
+      pass is paused is honoured on wake, like a cooperative engine.
     """
 
     name = "fake-diarizer"
@@ -189,6 +207,9 @@ class FakeDiarizer:
         raise_kind: ErrorKind | None = None,
         model: str = "fake-diarization-model",
         device: str = "cpu",
+        phases: list[tuple[str, float | None]] | None = None,
+        blocked: threading.Event | None = None,
+        release: threading.Event | None = None,
     ) -> None:
         self.config = config
         self._turns = turns if turns is not None else _default_turns()
@@ -197,12 +218,29 @@ class FakeDiarizer:
         self.model = model
         self.device = device
         self.calls: list[Path] = []
+        self._phases = list(phases) if phases is not None else []
+        self._blocked = blocked
+        self._release = release
 
-    def diarize(self, audio_path: Path, *, cancel: CancelToken) -> DiarizationOutput:
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        cancel: CancelToken,
+        on_progress: Callable[[str, float | None], None] | None = None,
+    ) -> DiarizationOutput:
         cancel.raise_if_cancelled()
         self.calls.append(audio_path)
         if self.raise_kind is not None:
             raise ServiceError(self.raise_kind, f"fake diarizer raised {self.raise_kind.value}")
+        for phase, fraction in self._phases:
+            if on_progress is not None:
+                on_progress(phase, fraction)
+        if self._blocked is not None:
+            self._blocked.set()
+        if self._release is not None:
+            self._release.wait(BLOCK_TIMEOUT_SEC)
+        cancel.raise_if_cancelled()
         return DiarizationOutput(turns=list(self._turns), embeddings=self._embeddings)
 
 

@@ -8,8 +8,11 @@
 //! - `POST /v1/jobs` — body `{audio_path, output_dir, language?}` (F2's
 //!   `JobCreate` has more optional fields; this app never sets them) — a
 //!   `202` response body is `{"job_id": "..."}`.
-//! - `GET /v1/jobs/{id}` — response includes `status`, `progress`,
-//!   `error_kind`, `error_message` among other fields this seam ignores.
+//! - `GET /v1/jobs/{id}` — response includes `status`, `progress`
+//!   (nullable: `null` whenever the running phase has no linear signal),
+//!   `phase` (the sub-step's display label, absent on a service older than
+//!   F3), `error_kind`, `error_message` among other fields this seam
+//!   ignores.
 //! - `GET /health` — `{"status": "ok", ...}`; any other status string (F2
 //!   does not currently emit one) is treated as not ready.
 //! - Every `/v1/*` route requires `Authorization: Bearer <token>` when F2
@@ -354,10 +357,19 @@ fn drain_sse_events(buffer: &mut String) -> Vec<ChatEvent> {
 }
 
 /// `GET /v1/jobs/{id}` response body, reduced to the fields this seam uses.
+///
+/// Both `progress` and `phase` default on absence *and* accept `null`:
+/// F2 answers `progress: null` for a phase with no linear signal, and a
+/// build of F2 older than F3 sends no `phase` key at all. Neither is a
+/// decode failure -- a poll that cannot read a label must still read the
+/// job's state.
 #[derive(Deserialize)]
 struct StatusResponse {
     status: String,
-    progress: f64,
+    #[serde(default)]
+    progress: Option<f64>,
+    #[serde(default)]
+    phase: Option<String>,
     #[serde(default)]
     error_kind: Option<String>,
     #[serde(default)]
@@ -709,6 +721,7 @@ impl TranscriptionService for HttpTranscriptionService {
         JobStatus::from_wire(
             &parsed.status,
             parsed.progress,
+            parsed.phase,
             parsed.error_kind,
             parsed.error_message,
         )
@@ -1393,7 +1406,7 @@ mod tests {
 
                 let status = service.status(wire).await.expect("status should succeed");
                 assert_eq!(status.state, *expected, "wire status {wire}");
-                assert_eq!(status.progress, 0.5);
+                assert_eq!(status.progress, Some(0.5));
             }
         });
     }
@@ -1421,7 +1434,7 @@ mod tests {
                 .await
                 .expect("status should succeed");
             assert_eq!(status.state, JobState::Failed);
-            assert_eq!(status.progress, 0.75);
+            assert_eq!(status.progress, Some(0.75));
             assert_eq!(status.error_kind.as_deref(), Some("provider_unavailable"));
             assert_eq!(
                 status.error_message.as_deref(),

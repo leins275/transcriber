@@ -3,7 +3,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppHeader } from "./AppHeader";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
-import type { ServiceStatusView } from "../types";
+import { activeJobView } from "../lib/activeJob";
+import type { JobSnapshot, ServiceStatusView } from "../types";
 
 const readyStatus: ServiceStatusView = { state: "ready", base_url: null, detail: null };
 
@@ -18,6 +19,29 @@ function modelStatus(overrides: Partial<ModelDownloadStatus> = {}): ModelDownloa
     model_present: true,
     cuda_warning: null,
     cuda_runtime_present: null,
+    ...overrides,
+  };
+}
+
+/** A job snapshot as `useJobs` hands it over -- the header narrates whatever
+ * `activeJobView` derives from these, so the tests below go through the real
+ * derivation rather than hand-built view objects. */
+function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
+  return {
+    id: "job-1",
+    source_path: "C:/vault/ELS/260825 - Weekly sync",
+    file_name: "260825 - Weekly sync",
+    job_type: "export",
+    state: "running",
+    classification: "sorted",
+    meeting_dir: null,
+    source_dest: null,
+    transcript_path: null,
+    progress: null,
+    phase: null,
+    message: null,
+    error_kind: null,
+    created_at: "2026-08-25T00:00:00Z",
     ...overrides,
   };
 }
@@ -58,7 +82,7 @@ describe("AppHeader", () => {
         modelStatus={modelStatus({ cuda_runtime_present: true })}
         settingsOpen={false}
         onToggleSettings={() => {}}
-        activeJob={{ label: "Transcribing “ELS - Incident review”", percent: 42 }}
+        activeJob={{ label: "Transcribing “ELS - Incident review”", percent: 42, phase: null }}
         onShowRecordings={onShowRecordings}
       />,
     );
@@ -77,7 +101,7 @@ describe("AppHeader", () => {
         modelStatus={null}
         settingsOpen={false}
         onToggleSettings={() => {}}
-        activeJob={{ label: "Summarizing “Weekly sync”", percent: null }}
+        activeJob={{ label: "Summarizing “Weekly sync”", percent: null, phase: null }}
         onShowRecordings={() => {}}
       />,
     );
@@ -114,5 +138,68 @@ describe("AppHeader", () => {
       "aria-pressed",
       "true",
     );
+  });
+
+  it("narrates the running job's phase when it reports no percent", () => {
+    const activeJob = activeJobView([buildJob({ progress: null, phase: "rendering PDF" })]);
+
+    render(
+      <AppHeader
+        serviceStatus={readyStatus}
+        modelStatus={null}
+        settingsOpen={false}
+        onToggleSettings={() => {}}
+        activeJob={activeJob}
+        onShowRecordings={() => {}}
+      />,
+    );
+
+    const chip = screen.getByRole("button", { name: /Exporting PDF “Weekly sync”/ });
+    expect(chip).toHaveTextContent("· rendering PDF");
+    expect(chip).not.toHaveTextContent("%");
+  });
+
+  it("shows the percent instead of the phase when the running job reports both", () => {
+    const activeJob = activeJobView([
+      buildJob({ job_type: "diarize", progress: 0.42, phase: "segmenting speech" }),
+    ]);
+
+    render(
+      <AppHeader
+        serviceStatus={readyStatus}
+        modelStatus={null}
+        settingsOpen={false}
+        onToggleSettings={() => {}}
+        activeJob={activeJob}
+        onShowRecordings={() => {}}
+      />,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: /Identifying speakers in “Weekly sync”/,
+    });
+    expect(chip).toHaveTextContent("· 42%");
+    expect(chip).not.toHaveTextContent("segmenting speech");
+  });
+
+  it("shows neither percent nor phase while the job is still queued", () => {
+    const activeJob = activeJobView([
+      buildJob({ state: "queued", progress: 0, phase: "rendering PDF" }),
+    ]);
+
+    render(
+      <AppHeader
+        serviceStatus={readyStatus}
+        modelStatus={null}
+        settingsOpen={false}
+        onToggleSettings={() => {}}
+        activeJob={activeJob}
+        onShowRecordings={() => {}}
+      />,
+    );
+
+    const chip = screen.getByRole("button", { name: /Exporting PDF “Weekly sync”/ });
+    expect(chip).not.toHaveTextContent("rendering PDF");
+    expect(chip).not.toHaveTextContent("%");
   });
 });

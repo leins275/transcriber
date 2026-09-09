@@ -16,6 +16,7 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
     source_dest: null,
     transcript_path: null,
     progress: null,
+    phase: null,
     message: null,
     error_kind: null,
     created_at: "2026-08-21T00:00:00Z",
@@ -144,5 +145,86 @@ describe("JobRow", () => {
     });
     render(<JobRow job={job} onReveal={() => {}} />);
     expect(screen.getByText(/Transcribing · 50% · ELS/)).toBeInTheDocument();
+  });
+
+  it("names the phase between the verb and the percentage while running", () => {
+    const job = buildJob({
+      job_type: "diarize",
+      state: "running",
+      phase: "segmenting speech",
+      progress: 0.42,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByText("Identifying speakers · segmenting speech · 42%")).toBeInTheDocument();
+  });
+
+  it("names the phase without a percentage when the phase has no measurable fraction", () => {
+    const job = buildJob({
+      job_type: "summarize",
+      state: "running",
+      phase: "writing summary · 812 tokens",
+      progress: null,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByText("Summarizing · writing summary · 812 tokens")).toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+  });
+
+  it("shows a progress bar with no announced value while a phase has no measurable fraction", () => {
+    const job = buildJob({
+      job_type: "summarize",
+      state: "running",
+      phase: "writing summary · 812 tokens",
+      progress: null,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow");
+  });
+
+  it("announces the measured fraction on the progress bar and fills it to match", () => {
+    const job = buildJob({
+      job_type: "diarize",
+      state: "running",
+      phase: "segmenting speech",
+      progress: 0.42,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "42");
+    expect(bar.querySelector('[style*="width"]')).toHaveStyle({ width: "42%" });
+  });
+
+  it.each(["queued", "done", "failed"] as JobState[])(
+    "hides a stale phase left over on a %s job",
+    (state) => {
+      const job = buildJob({
+        job_type: "summarize",
+        state,
+        phase: "writing summary · 812 tokens",
+        progress: 0.5,
+      });
+      render(<JobRow job={job} onReveal={() => {}} />);
+      expect(screen.queryByText(/writing summary/)).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["queued", "done", "failed"] as JobState[])(
+    "shows no progress bar on a %s job",
+    (state) => {
+      const job = buildJob({
+        job_type: "summarize",
+        state,
+        phase: "writing summary · 812 tokens",
+        progress: 0.5,
+      });
+      render(<JobRow job={job} onReveal={() => {}} />);
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    },
+  );
+
+  it("fills the bar no further than full when the service overshoots the fraction", () => {
+    const job = buildJob({ state: "running", progress: 1.7 });
+    const { container } = render(<JobRow job={job} onReveal={() => {}} />);
+    expect(container.querySelector('[style*="width"]')).toHaveStyle({ width: "100%" });
   });
 });

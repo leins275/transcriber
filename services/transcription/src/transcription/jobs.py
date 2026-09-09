@@ -81,7 +81,10 @@ class JobState:
     job_type: str = "transcribe"
     language: str | None = None
     diarize: bool = False
-    progress: float = 0.0
+    # The current phase's real fraction, or None while the running phase has
+    # no linear signal; `phase` names that sub-step (FR-1).
+    progress: float | None = 0.0
+    phase: str | None = None
     elapsed_sec: float | None = None
     audio_duration_sec: float | None = None
     cost_usd: float | None = None
@@ -92,6 +95,19 @@ class JobState:
     # Non-fatal degradations (a failed diarization, a failed PDF render).
     warnings: list[str] = field(default_factory=list)
     cancel_token: CancelToken = field(default_factory=CancelToken)
+
+
+def _set_phase(job: JobState, phase: str | None, fraction: float | None = None) -> None:
+    """Write the running sub-step and its real fraction onto a job.
+
+    The single writer every runner uses: `phase` is the display label (None
+    once the headline verb says it all, and in every terminal state) and
+    `fraction` the phase's own 0..1 signal, or None when the phase has no
+    linear one. Costs one clamp on the worker thread; status polling only
+    ever reads these two fields (NFR-2).
+    """
+    job.phase = phase
+    job.progress = None if fraction is None else max(0.0, min(1.0, fraction))
 
 
 class JobManager:
@@ -642,7 +658,15 @@ class JobManager:
             diarizer = await asyncio.to_thread(self._get_diarizer)
             output = await loop.run_in_executor(
                 self._executor,
-                functools.partial(diarizer.diarize, Path(job.source_path), cancel=job.cancel_token),
+                functools.partial(
+                    diarizer.diarize,
+                    Path(job.source_path),
+                    cancel=job.cancel_token,
+                    # The engine's steps take over the bar from here: each
+                    # counted step runs its own 0..1 under its own label,
+                    # and the label says which step that is (FR-5).
+                    on_progress=lambda phase, fraction: _set_phase(job, phase, fraction),
+                ),
             )
             return self._label_with_turns(segments, diarizer, output, split=True)
         except ServiceError as exc:
@@ -667,13 +691,11 @@ class JobManager:
     async def _run_job(self, job: JobState, loop: asyncio.AbstractEventLoop) -> None:
         start = time.monotonic()
 
-        # With a diarization pass still ahead, transcription owns only the
-        # first 90% of the progress bar, so the bar never reads "done" while
-        # the job is visibly still running.
-        progress_scale = 0.9 if job.diarize else 1.0
-
         def on_progress(fraction: float) -> None:
-            job.progress = fraction * progress_scale
+            # The first callback ends `preparing`: from here the decode is
+            # the headline verb and the bar is whisper's own fraction,
+            # unscaled whether or not diarization is queued behind it (FR-5).
+            _set_phase(job, None, fraction)
 
         try:
             # Resolve (and, the first time, import) the provider off the
@@ -697,6 +719,10 @@ class JobManager:
                 ) from exc
 
             job.status = "running"
+            # Model load, decode setup and language detection all happen
+            # before whisper's first segment: name that stall instead of
+            # showing a bar that sits at zero (FR-5).
+            _set_phase(job, "preparing", 0.0)
             self._ledger.mark_running(job.job_id, device=provider_instance.describe().device)
 
             result = await loop.run_in_executor(
@@ -745,6 +771,7 @@ class JobManager:
             # (additive only -- operator assignments are never touched).
             # Best-effort like diarization itself: a failure is a warning.
             if diarization_info is not None and diarization_info.speaker_embeddings:
+                _set_phase(job, "naming speakers", None)
                 try:
                     await asyncio.to_thread(
                         auto_assign_speakers,
@@ -757,7 +784,7 @@ class JobManager:
                     job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
 
             job.status = "succeeded"
-            job.progress = 1.0
+            _set_phase(job, None, 1.0)
             job.elapsed_sec = elapsed
             job.audio_duration_sec = result.duration_sec
             job.cost_usd = result.cost_usd
@@ -778,6 +805,7 @@ class JobManager:
         except ServiceError as exc:
             elapsed = time.monotonic() - start
             job.elapsed_sec = elapsed
+            job.phase = None
             if exc.kind is ErrorKind.CANCELLED:
                 job.status = "cancelled"
                 job.error_kind = ErrorKind.CANCELLED
@@ -792,6 +820,7 @@ class JobManager:
         except Exception as exc:  # noqa: BLE001 - anything unclassified is `internal` (FR-8)
             elapsed = time.monotonic() - start
             job.status = "failed"
+            job.phase = None
             job.error_kind = ErrorKind.INTERNAL
             job.error_message = str(exc)
             job.elapsed_sec = elapsed
@@ -874,7 +903,7 @@ class JobManager:
 
             elapsed = time.monotonic() - start
             job.status = "succeeded"
-            job.progress = 1.0
+            _set_phase(job, None, 1.0)
             job.elapsed_sec = elapsed
             job.result_json = json.dumps(manifest, ensure_ascii=False)
             self._ledger.finish_succeeded(
@@ -883,6 +912,7 @@ class JobManager:
         except ServiceError as exc:
             elapsed = time.monotonic() - start
             job.elapsed_sec = elapsed
+            job.phase = None
             if exc.kind is ErrorKind.CANCELLED:
                 job.status = "cancelled"
                 job.error_kind = ErrorKind.CANCELLED
@@ -897,6 +927,7 @@ class JobManager:
         except Exception as exc:  # noqa: BLE001 - anything unclassified is `internal` (FR-8)
             elapsed = time.monotonic() - start
             job.status = "failed"
+            job.phase = None
             job.error_kind = ErrorKind.INTERNAL
             job.error_message = str(exc)
             job.elapsed_sec = elapsed
@@ -933,6 +964,7 @@ class JobManager:
         everywhere they are read). Unlike the transcribe path, a failing
         pass fails this job: identification is its whole point.
         """
+        _set_phase(job, "reading transcript", None)
         meeting_dir = Path(job.source_path)
         data = exporting.load_transcript(meeting_dir)
         if data is None:
@@ -955,10 +987,13 @@ class JobManager:
         if not segments:
             raise ServiceError(ErrorKind.UNSUPPORTED_INPUT, "the transcript is empty")
 
-        job.progress = 0.05
         diarizer = self._get_diarizer()
-        output = diarizer.diarize(source, cancel=job.cancel_token)
-        job.progress = 0.9
+        output = diarizer.diarize(
+            source,
+            cancel=job.cancel_token,
+            on_progress=lambda phase, fraction: _set_phase(job, phase, fraction),
+        )
+        _set_phase(job, "assigning speakers", None)
         labelled, info = self._label_with_turns(segments, diarizer, output, split=False)
 
         doc = TranscriptDoc.model_validate(
@@ -1010,6 +1045,7 @@ class JobManager:
         *,
         json_schema: dict[str, Any] | None = None,
         on_progress: Callable[[float], None] | None = None,
+        on_token: Callable[[str], None] | None = None,
         reasoning_sink: list[str] | None = None,
     ) -> str:
         """One completion, with the model's chain-of-thought split off.
@@ -1026,6 +1062,10 @@ class JobManager:
         cut-off text must never pass as an answer (a truncated summary, or
         chain-of-thought whose `</think>` was never emitted) and truncated
         JSON cannot be repaired textually; callers split the input and retry.
+
+        ``on_token`` (when given) receives every decoded piece as it lands,
+        on this thread -- the seam the summary runner counts written tokens
+        on for its phase label (FR-2).
         """
         max_tokens = self._config.llm_max_output_tokens
         if json_schema is None:
@@ -1037,6 +1077,7 @@ class JobManager:
             temperature=self._config.llm_temperature,
             on_progress=on_progress if on_progress is not None else (lambda fraction: None),
             cancel=job.cancel_token,
+            on_token=on_token,
         )
         if completion.finish_reason == "length":
             raise LlmTruncatedError(
@@ -1056,29 +1097,43 @@ class JobManager:
         # every map call and the reduce. Missing, null or unsupported values
         # are the prompt builder's problem: it falls back to the soft rule.
         language = data.get("language")
-        # Split-retries and reduce rounds can add calls beyond this plan, so
-        # progress is clamped monotone against a denominator that grows with
-        # the actual call count instead of ever running backwards.
+        # A summary has no linear signal to show: the prompt evaluation
+        # reports nothing at all and the answer's length is unknown until it
+        # ends, so `progress` stays None and the phase label carries the
+        # truth (FR-2). Split-retries and reduce rounds can add calls beyond
+        # this plan, so the part denominator grows with the actual call
+        # count instead of ever running backwards.
         planned_calls = len(chunks) + (1 if len(chunks) > 1 else 0)
         calls_done = 0
         reasoning: list[str] = []
 
-        def advance(fraction: float) -> None:
-            total = max(planned_calls, calls_done + 1)
-            job.progress = min(0.99, max(job.progress, (calls_done + fraction) / total))
+        def call_label() -> str:
+            if planned_calls == 1:
+                return "writing summary"
+            return f"summarizing part {calls_done + 1}/{max(planned_calls, calls_done + 1)}"
 
         def complete(messages: list[Message]) -> str:
             nonlocal calls_done
             job.cancel_token.raise_if_cancelled()
+            # Until the first piece lands, the model is reading the
+            # transcript (prompt evaluation), which no callback reports.
+            _set_phase(job, "reading transcript", None)
+            label = call_label()
+            tokens = 0
+
+            def on_token(piece: str) -> None:
+                nonlocal tokens
+                tokens += 1
+                _set_phase(job, f"{label} · {tokens} tokens", None)
+
             text = self._complete_text(
                 job,
                 provider,
                 messages,
-                on_progress=advance,
+                on_token=on_token,
                 reasoning_sink=reasoning,
             )
             calls_done += 1
-            advance(0.0)
             return text
 
         def split_chunk(chunk: str, depth: int) -> list[str]:
@@ -1140,7 +1195,9 @@ class JobManager:
         meeting_dir = Path(job.source_path)
         export_dir = Path(job.output_path)
 
-        job.progress = 0.1
+        # Two phases, neither with a linear signal: the markdown is
+        # assembled in one pass and xhtml2pdf renders in one call (FR-3).
+        _set_phase(job, "writing export.md", None)
         export_md, warnings = exporting.build_export_md(
             meeting_dir=meeting_dir,
             meeting_name=meeting_dir.name,
@@ -1148,7 +1205,7 @@ class JobManager:
         job.warnings.extend(warnings)
         md_path = artifacts.write_text_atomic(export_md, export_dir / "export.md")
         artifact_paths = [str(md_path)]
-        job.progress = 0.5
+        _set_phase(job, "rendering PDF", None)
         job.cancel_token.raise_if_cancelled()
         try:
             pdf_path = render_pdf(

@@ -158,6 +158,44 @@ and version, so `uv sync --extra llm-cuda` over an already-installed CPU
 wheel audits it as satisfied. Force the swap once with
 `uv sync --extra llm-cuda --reinstall-package llama-cpp-python`.
 
+## Progress and phases
+
+`GET /v1/jobs/{id}` answers two fields about a running job:
+
+- `progress` — `float | null`. When it is a number it is the **current
+  phase's** real fraction, clamped to `[0, 1]`: whisper's
+  `segment.end / duration`, pyannote's `completed / total` for the step it
+  is on, the indexer's `docs processed / total`. It is `null` whenever the
+  running phase has no linear signal. There are no hand-picked constants
+  and no synthetic percentages anywhere — a phase either has a real
+  fraction or shows none.
+- `phase` — `string | null`. A short lowercase label for the sub-step
+  ("rendering PDF", "writing summary · 812 tokens"). It is `null` while the
+  job is queued, in every terminal state (succeeded, failed, cancelled,
+  and for a job reconstructed from the ledger row after a restart), and
+  while the headline verb already says it all — a transcribe job's decode.
+
+A queued job reads `progress: 0.0, phase: null`; a succeeded one reads
+`progress: 1.0, phase: null`.
+
+Because the bar shows the *current* phase, a job with several counted
+phases restarts it at each one (a transcribe-with-diarization run reaches
+100 % on the decode, then starts over at "segmenting speech"). The label
+is what makes that legible; a weighted single bar would only be a guess.
+
+| `job_type` | phases, in order (`progress`) |
+|---|---|
+| `transcribe` | `preparing` (`0.0` — model load, decode setup, language detection) → *no phase*, whisper's own fraction |
+| `transcribe` with `diarize: true` | the above, then the diarizer's phases relayed verbatim, then `naming speakers` (`null`, cross-meeting auto-naming) |
+| `diarize` | `reading transcript` (`null`) → `loading speaker model` (`null`) → `decoding audio` (`null`) → `segmenting speech` / `counting speakers` / `extracting voice embeddings` / `assigning speakers` (pyannote's `completed / total` where the step reports counts, else `null`) → `assigning speakers` while labels are written |
+| `summarize` | `reading transcript` (`null`) → `writing summary · N tokens`, or `summarizing part k/n · N tokens` for a map-reduced transcript (`null` throughout — the token count is a length, not a percentage) |
+| `export` | `writing export.md` (`null`) → `rendering PDF` (`null`) |
+| `index` | *no phase*; `docs processed / total` |
+
+The CLI's `transcribe` poll loop mirrors this on stderr: a `phase: <label>`
+line whenever the phase changes, and a `progress: <fraction>` line only
+when `progress` is a number that changed.
+
 ## Hybrid search and the MCP server
 
 `POST /v1/jobs {"job_type": "index"}` incrementally walks `vault_root` into

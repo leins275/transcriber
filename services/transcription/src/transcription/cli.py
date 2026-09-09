@@ -280,11 +280,22 @@ async def _run_transcribe(config: Config, audio_path: str, output_dir: str) -> i
 
         job = manager.status(job_id)
         last_reported: float | None = None
+        last_phase: str | None = None
         while job.status not in TERMINAL_STATUSES:
-            rounded = round(job.progress, 2)
-            if rounded != last_reported:
-                print(f"progress: {rounded:.2f}", file=sys.stderr)
-                last_reported = rounded
+            # The phase names the sub-step; the number is printed only when
+            # that phase actually has one, so a phase without a linear
+            # signal reports no progress line at all (FR-9).
+            phase = job.phase
+            if phase != last_phase:
+                if phase is not None:
+                    print(f"phase: {phase}", file=sys.stderr)
+                last_phase = phase
+            progress = job.progress
+            if progress is not None:
+                rounded = round(progress, 2)
+                if rounded != last_reported:
+                    print(f"progress: {rounded:.2f}", file=sys.stderr)
+                    last_reported = rounded
             await asyncio.sleep(0.2)
             job = manager.status(job_id)
 

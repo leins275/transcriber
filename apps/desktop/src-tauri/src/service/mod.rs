@@ -517,7 +517,18 @@ impl JobState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobStatus {
     pub state: JobState,
-    pub progress: f64,
+    /// The *current phase's* real fraction, or `None` when the running
+    /// phase has no linear signal at all (F3, FR-1): a summarize job's
+    /// generation, an export's PDF render. Never a hand-picked constant --
+    /// the seam passes F2's answer through and the UI draws an
+    /// indeterminate track rather than a made-up percentage.
+    pub progress: Option<f64>,
+    /// A short display label for the sub-step F2 is currently in
+    /// (`"rendering PDF"`, `"segmenting speech"`), or `None` while queued,
+    /// in every terminal state, and whenever the headline verb already says
+    /// it all. Composed service-side and passed through verbatim -- this
+    /// seam never invents or re-words a label.
+    pub phase: Option<String>,
     pub error_kind: Option<String>,
     pub error_message: Option<String>,
 }
@@ -528,7 +539,8 @@ impl JobStatus {
     /// override. Returns `None` for an unrecognised wire status.
     pub fn from_wire(
         status: &str,
-        progress: f64,
+        progress: Option<f64>,
+        phase: Option<String>,
         error_kind: Option<String>,
         error_message: Option<String>,
     ) -> Option<Self> {
@@ -541,6 +553,7 @@ impl JobStatus {
         Some(JobStatus {
             state,
             progress,
+            phase,
             error_kind,
             error_message,
         })

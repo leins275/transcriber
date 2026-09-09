@@ -79,6 +79,13 @@ pub struct JobSnapshot {
     pub source_dest: Option<String>,
     pub transcript_path: Option<String>,
     pub progress: Option<f64>,
+    /// The service's label for the sub-step this job is currently in
+    /// (`"rendering PDF"`, `"segmenting speech"`), copied verbatim from
+    /// every poll. `None` while pending/queued, in every terminal state,
+    /// and whenever F2 sends no label -- the UI then shows the headline
+    /// verb alone. Additive to the frozen IPC contract, always serialised
+    /// (as `null` when unset) so the frontend can read it unconditionally.
+    pub phase: Option<String>,
     pub message: Option<String>,
     pub error_kind: Option<String>,
     pub created_at: String,
@@ -236,6 +243,10 @@ fn snapshots_equal_ignoring_created_at(a: &JobSnapshot, b: &JobSnapshot) -> bool
         && a.source_dest == b.source_dest
         && a.transcript_path == b.transcript_path
         && a.progress == b.progress
+        // A summarize job holds one state and a `None` progress for its
+        // whole life: without this, every label after the first would be
+        // deduped away and the UI would never move past the first phase.
+        && a.phase == b.phase
         && a.message == b.message
         && a.error_kind == b.error_kind
 }
@@ -864,7 +875,12 @@ fn collision_message(collision: &CollisionOutcome) -> Option<String> {
 }
 
 fn apply_status(snapshot: &mut JobSnapshot, status: &JobStatus) {
-    snapshot.progress = Some(status.progress);
+    // Both are pass-through: F2 owns what "progress" and "phase" mean, and
+    // a `None` progress is the honest answer for a phase with no linear
+    // signal -- never rewritten here into a number the service did not
+    // report.
+    snapshot.progress = status.progress;
+    snapshot.phase = status.phase.clone();
     snapshot.error_kind = status.error_kind.clone();
     // Only overwrite an existing message when the service actually reports
     // one -- otherwise a collision note set at ingest time (E4) would be
@@ -893,6 +909,7 @@ fn new_pending_snapshot(source_path: &Path) -> JobSnapshot {
         source_dest: None,
         transcript_path: None,
         progress: None,
+        phase: None,
         message: None,
         error_kind: None,
         created_at: now_rfc3339(),
