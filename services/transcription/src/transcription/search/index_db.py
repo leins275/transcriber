@@ -33,6 +33,11 @@ logger = logging.getLogger("transcription")
 
 INDEX_SCHEMA_VERSION = 1
 
+_INDEX_FILENAME = "index.sqlite3"
+
+# The SQLite file plus its WAL sidecars -- the unit of index deletion.
+_DB_FILE_SUFFIXES = ("", "-wal", "-shm")
+
 DOC_KINDS = ("transcript", "summary", "note")
 
 _SCHEMA = """
@@ -148,6 +153,35 @@ def _unpack(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(blob) // 4}f", blob))
 
 
+def remove_legacy_app_dir_index(app_dir: Path, index_db_path: str | Path) -> bool:
+    """Delete the orphaned pre-0.18 index at ``<app_dir>/data/index.sqlite3``.
+
+    Before 0.18 the index lived in the app folder; it now travels with the
+    vault it describes, so an upgraded install keeps a file nobody reads.
+    The app-dir path is still the legitimate vault-less fallback, hence the
+    resolve-equality guard: an index that is the configured one is never
+    touched. Returns ``True`` only when a stale file was actually removed.
+    A failed unlink (locked by another process) degrades to a warning --
+    the service must still start.
+    """
+    legacy = app_dir / "data" / _INDEX_FILENAME
+    if Path(index_db_path).resolve() == legacy.resolve():
+        return False
+    if not legacy.exists():
+        return False
+    try:
+        for suffix in _DB_FILE_SUFFIXES:
+            Path(f"{legacy}{suffix}").unlink(missing_ok=True)
+    except OSError:
+        logger.warning(
+            "could not remove the legacy app-dir search index",
+            exc_info=True,
+            extra={"event": "legacy_index_remove_failed", "path": str(legacy)},
+        )
+        return False
+    return True
+
+
 class IndexDb:
     """One connection to the index database.
 
@@ -234,7 +268,7 @@ class IndexDb:
                 extra={"event": "index_recreated"},
             )
             self._conn.close()
-            for suffix in ("", "-wal", "-shm"):
+            for suffix in _DB_FILE_SUFFIXES:
                 Path(f"{self._path}{suffix}").unlink(missing_ok=True)
             self._conn = self._open()
             self.vec_available = self._setup_vec()

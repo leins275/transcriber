@@ -50,6 +50,7 @@ from transcription.ledger import Ledger
 from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
 from transcription.schema import DiarizationStatus, JobCreate, JobStatus
+from transcription.search.index_db import remove_legacy_app_dir_index
 from transcription.search.service import SearchService
 
 _logger = logging.getLogger("transcription")
@@ -149,6 +150,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if remove_legacy_app_dir_index(config.app_dir, config.index_db_path):
+            _logger.info(
+                "removed the orphaned pre-0.18 app-dir search index",
+                extra={"event": "legacy_index_removed"},
+            )
         ledger.reconcile_interrupted()
         await job_manager.start()
         try:

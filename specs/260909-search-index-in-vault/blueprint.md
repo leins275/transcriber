@@ -2,7 +2,7 @@
 slug: 260909-search-index-in-vault
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Search index lives in the vault (residual: retire the app-dir copy)
@@ -121,7 +121,7 @@ contract — T1 uses the existing `transcription` logger only (FR-1).
 
 ## Tasks
 
-### [ ] T1: Delete the orphaned app-dir search index at service startup  [deps: —]
+### [x] T1: Delete the orphaned app-dir search index at service startup  [deps: —]
 
 - **Files**: `services/transcription/src/transcription/search/index_db.py`, `services/transcription/src/transcription/app.py`, `services/transcription/README.md`
 - **Test first**: `services/transcription/tests/test_legacy_index_cleanup.py` — cases (all model-free, network-free, real tmp filesystem; build `Config` the way `tests/test_api_search.py`/`test_jobs_index.py` do, with `provider="fake"`):
