@@ -41,6 +41,21 @@ const SENTENCES = [
 const ALL_MAXIM = { "0": "Maxim", "1": "Maxim", "2": "Maxim", "3": "Maxim", "4": "Maxim" };
 
 /**
+ * Speaker 2, an unattributed line, Speaker 2 again -- over `SENTENCES`.
+ * Consecutive segments carrying the same name are one turn however long the
+ * pause between them, so only another voice (or nobody) puts a boundary
+ * between two turns of the same person.
+ */
+const SPEAKER_2_TWICE = { "0": "Speaker 2", "2": "Speaker 2" };
+
+/**
+ * Maxim on a two-segment turn, then again on a one-segment turn -- over
+ * `SENTENCES`. Three segments, two turns: the shape that says what the
+ * number in the scope chooser counts.
+ */
+const MAXIM_TWICE = { "0": "Maxim", "1": "Maxim", "3": "Maxim" };
+
+/**
  * Two unattributed turns two minutes apart: the shape needed to say anything
  * about a selection crossing a turn boundary, or about a search that hides
  * one of them.
@@ -176,22 +191,143 @@ describe("TranscriptViewer", () => {
     expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Maxim" });
   });
 
-  it("renaming a speaker renames every segment they hold", async () => {
+  it("renames a speaker everywhere when the operator picks the wider scope", async () => {
     const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
       <TranscriptViewer
-        transcript={buildTranscript({ speakers: { "0": "Speaker 2", "1": "Speaker 2" } })}
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...SPEAKER_2_TWICE } })}
         onSaveSpeakers={onSaveSpeakers}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Speaker 2" }));
-    const input = screen.getByLabelText(/rename speaker 2/i);
+    await user.click(screen.getAllByRole("button", { name: "Speaker 2" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Anna{Enter}");
+    await user.click(screen.getByRole("button", { name: "All 2 turns of Speaker 2" }));
+
+    expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Anna", "2": "Anna" });
+  });
+
+  it("gives one turn away and leaves the speaker's other turns as they were", async () => {
+    const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...SPEAKER_2_TWICE } })}
+        onSaveSpeakers={onSaveSpeakers}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Speaker 2" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Anna{Enter}");
+    await user.click(screen.getByRole("button", { name: "Only this turn" }));
+
+    expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Anna", "2": "Speaker 2" });
+    expect(screen.getByRole("button", { name: "Anna" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Speaker 2" })).toBeInTheDocument();
+  });
+
+  it("hands a whole multi-segment turn to a name the transcript has never seen", async () => {
+    const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...MAXIM_TWICE } })}
+        onSaveSpeakers={onSaveSpeakers}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Maxim" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Anna{Enter}");
+    await user.click(screen.getByRole("button", { name: "Only this turn" }));
+
+    // Both segments of the turn change hands; Maxim keeps the turn further
+    // down, and the list re-groups around an Anna who did not exist before.
+    expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Anna", "1": "Anna", "3": "Maxim" });
+    expect(screen.getByRole("button", { name: "Anna" })).toBeInTheDocument();
+  });
+
+  it("offers the wider scope in turns, not in segments", async () => {
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...MAXIM_TWICE } })}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Maxim" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
     await user.clear(input);
     await user.type(input, "Anna{Enter}");
 
-    expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Anna", "1": "Anna" });
+    // Three Maxim segments, but only two turns of Maxim.
+    expect(screen.getByRole("button", { name: "All 2 turns of Maxim" })).toBeInTheDocument();
+  });
+
+  it("renames a speaker held by a single turn without asking about scope", async () => {
+    const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ speakers: { "0": "Maxim", "1": "Anna" } })}
+        onSaveSpeakers={onSaveSpeakers}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Maxim" }));
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Max{Enter}");
+
+    // Both scopes would write the same map, so there is nothing to ask.
+    expect(onSaveSpeakers).toHaveBeenCalledWith({ "0": "Max", "1": "Anna" });
+    expect(screen.queryByRole("button", { name: /^All \d+ turns of/ })).toBeNull();
+  });
+
+  it("writes nothing when the scope choice is abandoned with Escape", async () => {
+    const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...SPEAKER_2_TWICE } })}
+        onSaveSpeakers={onSaveSpeakers}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Speaker 2" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Anna{Enter}");
+    await user.keyboard("{Escape}");
+
+    expect(onSaveSpeakers).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Speaker 2" })).toHaveLength(2);
+  });
+
+  it("writes nothing when the operator clicks away from an open scope choice", async () => {
+    const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(
+      <TranscriptViewer
+        transcript={buildTranscript({ segments: SENTENCES, speakers: { ...SPEAKER_2_TWICE } })}
+        onSaveSpeakers={onSaveSpeakers}
+      />,
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Speaker 2" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
+    await user.clear(input);
+    await user.type(input, "Anna{Enter}");
+    await user.click(screen.getByLabelText(/find in transcript/i));
+
+    expect(onSaveSpeakers).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("button", { name: "Speaker 2" })).toHaveLength(2);
   });
 
   it("surfaces a failed save without discarding the label on screen", async () => {
@@ -507,7 +643,7 @@ describe("TranscriptViewer", () => {
     expect(screen.getByRole("button", { name: "Anna" })).toBeInTheDocument();
   });
 
-  it("renaming a speaker after a sub-turn assignment renames the new segments too", async () => {
+  it("renaming a speaker after sub-turn assignments renames the new segments too", async () => {
     const onSaveSpeakers = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(
@@ -517,19 +653,24 @@ describe("TranscriptViewer", () => {
       />,
     );
 
-    selectText({ segment: "1" }, { segment: "2" });
+    // Two corrected sentences, apart from each other: Anna ends up holding
+    // two turns that exist only because the selections split Maxim's.
+    selectText({ segment: "1" }, { segment: "1" });
+    await user.type(screen.getByRole("textbox", { name: /new speaker/i }), "Anna{Enter}");
+    selectText({ segment: "3" }, { segment: "3" });
     await user.type(screen.getByRole("textbox", { name: /new speaker/i }), "Anna{Enter}");
 
-    await user.click(screen.getByRole("button", { name: "Anna" }));
-    const input = screen.getByLabelText(/rename anna/i);
+    await user.click(screen.getAllByRole("button", { name: "Anna" })[0]);
+    const input = screen.getByLabelText(/edit speaker for this turn/i);
     await user.clear(input);
     await user.type(input, "Anya{Enter}");
+    await user.click(screen.getByRole("button", { name: "All 2 turns of Anna" }));
 
     expect(onSaveSpeakers).toHaveBeenLastCalledWith({
       "0": "Maxim",
       "1": "Anya",
-      "2": "Anya",
-      "3": "Maxim",
+      "2": "Maxim",
+      "3": "Anya",
       "4": "Maxim",
     });
   });

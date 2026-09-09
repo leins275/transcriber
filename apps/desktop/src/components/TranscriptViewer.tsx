@@ -11,6 +11,7 @@ import {
   groupIntoTurns,
   renameSpeaker,
   speakerNames,
+  speakerTurnCounts,
 } from "../lib/turns";
 import type { TranscriptView } from "../types";
 
@@ -83,6 +84,9 @@ export function TranscriptViewer({
   );
   const visible = useMemo(() => filterTurns(turns, query), [turns, query]);
   const known = useMemo(() => speakerNames(turns), [turns]);
+  // The scope question a tag asks ("All N turns of ...") is counted in turns,
+  // and counted once for the whole transcript rather than scanned per tag.
+  const turnCounts = useMemo(() => speakerTurnCounts(turns), [turns]);
   // One lookup built per transcript rather than a scan per turn: an hour of
   // speech is thousands of segments, and the paragraphs re-render on every
   // keystroke in the search box.
@@ -249,6 +253,7 @@ export function TranscriptViewer({
                     <SpeakerTag
                       speaker={turn.speaker}
                       known={known}
+                      turnsHeld={turn.speaker === null ? 0 : (turnCounts[turn.speaker] ?? 0)}
                       suggestions={suggestedSpeakers}
                       onAssign={(name) => persist(assignSpeaker(speakers, turn, name))}
                       onRename={(from, to) => persist(renameSpeaker(speakers, from, to))}

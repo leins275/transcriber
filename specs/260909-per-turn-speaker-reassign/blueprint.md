@@ -2,7 +2,7 @@
 slug: 260909-per-turn-speaker-reassign
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Per-turn speaker reassignment vs. rename-everywhere, made explicit
@@ -141,7 +141,7 @@ All changes live in the React layer under `apps/desktop/src/`. Data flow is unch
 
 ## Tasks
 
-### [ ] T1: `speakerTurnCounts` in the turns library  [deps: —]
+### [x] T1: `speakerTurnCounts` in the turns library  [deps: —]
 
 - **Files**: `apps/desktop/src/lib/turns.ts`
 - **Test first**: `apps/desktop/src/lib/turns.test.ts` — add a `describe("speakerTurnCounts")` block (existing cases stay): counts one entry per attributed name equal to the number of *turns* (not segments) holding it — e.g. Maxim on turns of 3 and 2 segments → `{ Maxim: 2 }` (FR-7); unattributed (`null`) turns contribute nothing and appear under no key (FR-7); returns `{}` for no turns and for only-unattributed turns (FR-7); does not mutate the turns array (FR-7). Build turns through `groupIntoTurns` with the existing `seg` helper so the test states behaviour, not the `Turn` shape.
@@ -149,7 +149,7 @@ All changes live in the React layer under `apps/desktop/src/`. Data flow is unch
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: new cases pass via `npm --prefix apps/desktop run test -- src/lib/turns.test.ts`; `make lint`, `make type`, `make test` green.
 
-### [ ] T2: Scope chooser in `SpeakerTag`  [deps: —]
+### [x] T2: Scope chooser in `SpeakerTag`  [deps: —]
 
 - **Files**: `apps/desktop/src/components/SpeakerTag.tsx`, `apps/desktop/src/components/SpeakerTag.module.css`
 - **Test first**: `apps/desktop/src/components/SpeakerTag.test.tsx` (new file; render `SpeakerTag` directly with `vi.fn()` callbacks, `known`, `turnsHeld`) — cases:
@@ -170,7 +170,7 @@ All changes live in the React layer under `apps/desktop/src/`. Data flow is unch
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/SpeakerTag.test.tsx` green; `make format`, `make lint`, `make type` green; `git diff` of the idle-branch JSX in `SpeakerTag.tsx` is empty apart from the doc comment.
 
-### [ ] T3: Wire the count through `TranscriptViewer` and update its speaker-flow tests  [deps: T1, T2]
+### [x] T3: Wire the count through `TranscriptViewer` and update its speaker-flow tests  [deps: T1, T2]
 
 - **Files**: `apps/desktop/src/components/TranscriptViewer.tsx`
 - **Test first**: `apps/desktop/src/components/TranscriptViewer.test.tsx` — modify the two existing rename cases and add end-to-end (viewer + tag + turns) cases; all selection cases stay untouched:

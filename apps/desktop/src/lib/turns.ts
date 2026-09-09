@@ -118,6 +118,27 @@ export function speakerNames(turns: Turn[]): string[] {
 }
 
 /**
+ * How many turns each attributed name currently holds, as
+ * `{ name -> count }`.
+ *
+ * Turns, not segments — the count is what the tag reads back to the operator
+ * ("All 3 turns of Speaker 2"), and a person's single minute of speech is one
+ * turn however many segments whisper cut it into. Unattributed turns belong to
+ * nobody and appear under no key, so a name absent from the result holds none.
+ *
+ * Pure: one pass, the turns are left untouched.
+ */
+export function speakerTurnCounts(turns: Turn[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const turn of turns) {
+    if (turn.speaker !== null) {
+      counts[turn.speaker] = (counts[turn.speaker] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+/**
  * Assigns `speaker` to exactly `segmentIds`, returning the new map.
  *
  * The segment-granular form of attribution: the operator selects a stretch of
