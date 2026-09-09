@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.24.0 — 2026-09-09
+
+### Features
+
+- **project-speaker-roster**: A strict roster bounds speaker identification
+
 ## 0.23.0 — 2026-09-09
 
 ### Bug fixes
