@@ -3,6 +3,7 @@ import styles from "./TranscriptViewer.module.css";
 import { SelectionSpeakerMenu } from "./SelectionSpeakerMenu";
 import { SpeakerTag } from "./SpeakerTag";
 import { formatTimecode } from "../lib/format";
+import { pickerSource } from "../lib/roster";
 import { segmentIdsFromRange } from "../lib/selection";
 import {
   assignSpeaker,
@@ -12,7 +13,7 @@ import {
   renameSpeaker,
   speakerNames,
 } from "../lib/turns";
-import type { TranscriptView } from "../types";
+import type { ProjectRosterView, TranscriptView } from "../types";
 
 /**
  * What the operator has dragged over, resolved the moment the pointer comes
@@ -34,6 +35,11 @@ export type TranscriptViewerProps = {
   /** Project-level speaker memory: names assigned across this meeting's
    * project siblings, offered while typing a name. */
   suggestedSpeakers?: string[];
+  /** The project's roster, when this meeting belongs to a project whose
+   * roster has loaded. In `roster` mode it becomes the only source of names
+   * for both name controls; in `open` mode -- and when it is absent -- naming
+   * stays free text with `suggestedSpeakers` as hints. */
+  roster?: ProjectRosterView;
 };
 
 function messageOf(error: unknown): string {
@@ -63,6 +69,7 @@ export function TranscriptViewer({
   transcript,
   onSaveSpeakers,
   suggestedSpeakers = [],
+  roster,
 }: TranscriptViewerProps) {
   const [view, setView] = useState<"timeline" | "text">("timeline");
   const [query, setQuery] = useState("");
@@ -83,6 +90,12 @@ export function TranscriptViewer({
   );
   const visible = useMemo(() => filterTurns(turns, query), [turns, query]);
   const known = useMemo(() => speakerNames(turns), [turns]);
+  // Resolved once for the whole view so the turn tags and the selection
+  // popover can never disagree about where a name may come from.
+  const picker = useMemo(
+    () => pickerSource(roster, suggestedSpeakers),
+    [roster, suggestedSpeakers],
+  );
   // One lookup built per transcript rather than a scan per turn: an hour of
   // speech is thousands of segments, and the paragraphs re-render on every
   // keystroke in the search box.
@@ -249,7 +262,8 @@ export function TranscriptViewer({
                     <SpeakerTag
                       speaker={turn.speaker}
                       known={known}
-                      suggestions={suggestedSpeakers}
+                      suggestions={picker.suggestions}
+                      roster={picker.roster}
                       onAssign={(name) => persist(assignSpeaker(speakers, turn, name))}
                       onRename={(from, to) => persist(renameSpeaker(speakers, from, to))}
                     />
@@ -281,7 +295,8 @@ export function TranscriptViewer({
             {pending !== null && (
               <SelectionSpeakerMenu
                 known={known}
-                suggestions={suggestedSpeakers}
+                suggestions={picker.suggestions}
+                roster={picker.roster}
                 anchor={pending.anchor}
                 onAssign={assignSelection}
                 onDismiss={dismissSelection}

@@ -2,16 +2,19 @@ import { useCallback, useEffect, useState } from "react";
 import styles from "./RecordingPage.module.css";
 import { MeetingEditor } from "./MeetingEditor";
 import { NotePanel } from "./NotePanel";
+import { ProjectRosterPanel } from "./ProjectRosterPanel";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
 import { formatDuration } from "../lib/format";
 import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
+import { EMPTY_ROSTER } from "../lib/roster";
 import { speakerNames } from "../lib/turns";
 import { groupIntoTurns } from "../lib/turns";
 import type {
   JobType,
   MeetingUpdate,
   NoteView,
+  ProjectRosterView,
   SummaryView,
   TranscriptLanguage,
   TranscriptView,
@@ -24,6 +27,13 @@ export type RecordingPageProps = {
   /** Project-level speaker memory: names assigned across this meeting's
    * project siblings, suggested while typing a speaker name. */
   projectSpeakers: string[];
+  /** The roster of the project this meeting is filed under, as loaded by
+   * the app. Absent while it loads — and meaningless for an unfiled
+   * recording, which is why it never reaches the transcript in that case. */
+  projectRoster?: ProjectRosterView;
+  /** Persists the roster edited in the panel. The project is passed back
+   * explicitly: the page owns which project the open meeting belongs to. */
+  onSaveRoster?: (project: string, roster: ProjectRosterView) => Promise<void>;
   onBack: () => void;
   onReveal: (entryId: string) => void;
   onReadTranscript: (entryId: string) => Promise<TranscriptView>;
@@ -53,7 +63,7 @@ export type RecordingPageProps = {
 };
 
 type Tab = "transcript" | "summary" | "note";
-type Panel = "none" | "edit" | "delete";
+type Panel = "none" | "edit" | "delete" | "roster";
 
 /** The languages the app can name. A transcript written before this feature —
  * or in anything outside the operator's universe — carries a code we do not
@@ -97,6 +107,8 @@ export function RecordingPage({
   entry,
   projects,
   projectSpeakers,
+  projectRoster,
+  onSaveRoster,
   onBack,
   onReveal,
   onReadTranscript,
@@ -166,6 +178,18 @@ export function RecordingPage({
   const saveSpeakers = useCallback(
     (assignments: Record<string, string>) => onSaveSpeakers(entry.id, assignments),
     [entry.id, onSaveSpeakers],
+  );
+
+  // The roster belongs to the project, not to the recording: an unfiled
+  // meeting has none, and naming a speaker there stays free text however the
+  // last opened project was configured.
+  const project = entry.project;
+  const saveRoster = useCallback(
+    async (roster: ProjectRosterView) => {
+      if (project === null) return;
+      await onSaveRoster?.(project, roster);
+    },
+    [project, onSaveRoster],
   );
 
   // Copy acts on the visible tab; a tab with nothing loaded copies nothing.
@@ -265,6 +289,16 @@ export function RecordingPage({
           </button>
           <span className={styles.crumbSeparator}>/</span>
           <span className="pill">{entry.project ?? "unsorted"}</span>
+          {project !== null && (
+            <button
+              type="button"
+              className={`btn btn-ghost ${styles.rosterToggle}`}
+              aria-pressed={panel === "roster"}
+              onClick={() => setPanel((p) => (p === "roster" ? "none" : "roster"))}
+            >
+              Project speakers
+            </button>
+          )}
         </div>
 
         <div className={styles.titleBlock}>
@@ -457,6 +491,15 @@ export function RecordingPage({
         />
       )}
 
+      {panel === "roster" && project !== null && (
+        <ProjectRosterPanel
+          roster={projectRoster ?? EMPTY_ROSTER}
+          siblingNames={projectSpeakers}
+          onSave={saveRoster}
+          onClose={() => setPanel("none")}
+        />
+      )}
+
       {panel === "delete" && (
         <div className={styles.confirm}>
           <p className={styles.confirmText}>
@@ -495,6 +538,7 @@ export function RecordingPage({
                 transcript={transcript}
                 onSaveSpeakers={saveSpeakers}
                 suggestedSpeakers={projectSpeakers}
+                roster={project === null ? undefined : projectRoster}
               />
             ) : (
               <div className={styles.emptyPanel}>

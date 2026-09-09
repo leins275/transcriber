@@ -152,12 +152,14 @@ fn validate_chat_id(chat_id: &str) -> Result<(), AppError> {
     }
 }
 
-/// The project's `chats/` directory, from the validated root + project.
+/// One project's directory under the meetings root, validated.
 ///
 /// `project` is untrusted IPC input: it must name an existing directory
 /// directly under the meetings root that the listing would treat as a
-/// project (not `unsorted`, not a reserved name, no path syntax).
-async fn chats_dir(state: &AppState, project: &str) -> Result<PathBuf, AppError> {
+/// project (not `unsorted`, not a reserved name, no path syntax). Shared
+/// with [`super::roster`] so both project-scoped features agree on what a
+/// project is, byte for byte, and neither ever creates one.
+pub(super) async fn project_dir(state: &AppState, project: &str) -> Result<PathBuf, AppError> {
     let root = state
         .settings
         .read()
@@ -184,16 +186,29 @@ async fn chats_dir(state: &AppState, project: &str) -> Result<PathBuf, AppError>
             "not a project: {project:?}"
         )));
     }
-    // Containment as defense in depth, existence because the project must
-    // already be real -- chats never create one.
-    let canonical = paths::ensure_inside(&root, &root.join(project))?;
-    let project_dir = paths::strip_verbatim(&canonical);
-    if !project_dir.is_dir() {
+    // Existence first, because the project must already be real -- neither
+    // chats nor rosters ever create one, and a name that is simply not
+    // there is a bad argument, not an I/O failure (canonicalizing it would
+    // report the missing path instead). The lexical rules above already
+    // guarantee a single plain component, so this join cannot escape.
+    let candidate = root.join(project);
+    if !candidate.is_dir() {
         return Err(AppError::invalid_argument(format!(
             "unknown project {project:?}"
         )));
     }
-    Ok(project_dir.join(vault::CHATS_DIR_NAME))
+    // Containment as defense in depth: a junction or symlink under the
+    // root is the one way an existing single component can still resolve
+    // outside the vault.
+    let canonical = paths::ensure_inside(&root, &candidate)?;
+    Ok(paths::strip_verbatim(&canonical))
+}
+
+/// The project's `chats/` directory, from the validated project directory.
+async fn chats_dir(state: &AppState, project: &str) -> Result<PathBuf, AppError> {
+    Ok(project_dir(state, project)
+        .await?
+        .join(vault::CHATS_DIR_NAME))
 }
 
 fn read_chat_file(path: &PathBuf) -> Option<ChatFile> {

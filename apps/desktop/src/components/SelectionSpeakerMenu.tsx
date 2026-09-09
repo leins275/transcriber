@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { SpeakerNameField } from "./SpeakerNameField";
 import styles from "./SelectionSpeakerMenu.module.css";
 
 export type SelectionSpeakerMenuProps = {
@@ -7,6 +8,9 @@ export type SelectionSpeakerMenuProps = {
   /** Names remembered across the whole project — offered while typing (a
    * datalist), never as buttons; same split as `SpeakerTag`. */
   suggestions?: string[];
+  /** Present ⇒ the project runs a strict roster: the free-text box becomes a
+   * picker over exactly these names. Undefined ⇒ open mode, free text. */
+  roster?: string[];
   /** Viewport point the popover hangs from — the selection's rectangle. */
   anchor: { x: number; y: number };
   /** Attribute the current selection to `name`. */
@@ -34,13 +38,13 @@ export type SelectionSpeakerMenuProps = {
 export function SelectionSpeakerMenu({
   known,
   suggestions = [],
+  roster,
   anchor,
   onAssign,
   onDismiss,
 }: SelectionSpeakerMenuProps) {
   const [draft, setDraft] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
-  const suggestionsId = useId();
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -70,10 +74,12 @@ export function SelectionSpeakerMenu({
     };
   }, [onDismiss]);
 
-  function commitDraft() {
-    const trimmed = draft.trim();
+  function commitDraft(value: string) {
+    const trimmed = value.trim();
     // A blank box is an operator who changed their mind, not a nameless
-    // speaker worth storing.
+    // speaker worth storing — and under a roster with nothing on it yet, the
+    // placeholder is the only thing there is to choose, so the same guard is
+    // what keeps it from attributing the selection to no one.
     if (trimmed.length === 0) return;
     onAssign(trimmed);
   }
@@ -104,27 +110,24 @@ export function SelectionSpeakerMenu({
         </button>
       ))}
       <span className={styles.new}>
-        <input
+        <SpeakerNameField
           className={styles.input}
           value={draft}
-          aria-label="Attribute selection to a new speaker"
-          list={suggestions.length > 0 ? suggestionsId : undefined}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commitDraft();
-            }
-          }}
+          onChange={setDraft}
+          onCommit={commitDraft}
+          // No onCancel: Escape is heard at the document above, for the whole
+          // popover, and handing this control its own would dismiss twice.
+          ariaLabel={
+            roster === undefined
+              ? "Attribute selection to a new speaker"
+              : "Attribute selection to a speaker"
+          }
+          suggestions={suggestions}
+          roster={roster}
         />
-        {suggestions.length > 0 && (
-          <datalist id={suggestionsId}>
-            {suggestions.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        )}
-        <span className={styles.hint}>Enter to assign</span>
+        {/* Picking from the roster attributes on the spot, so the hint only
+            has something to say where a name has to be typed out first. */}
+        {roster === undefined && <span className={styles.hint}>Enter to assign</span>}
       </span>
     </div>
   );

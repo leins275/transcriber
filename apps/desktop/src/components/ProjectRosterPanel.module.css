@@ -1,0 +1,104 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 640px;
+}
+
+/* the two modes read as one question, so the fieldset keeps its legend and
+   drops the browser's box */
+.modes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.legend {
+  padding: 0;
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.lead {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.names {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-sm);
+}
+
+.empty {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.addRow {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 200px;
+}
+
+.label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.input {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-sm) / 1.5 var(--font-body);
+}
+
+.input:focus-visible {
+  border-color: var(--accent);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}

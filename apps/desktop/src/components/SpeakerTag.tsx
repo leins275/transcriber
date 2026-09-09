@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useState } from "react";
+import { SpeakerNameField } from "./SpeakerNameField";
 import styles from "./SpeakerTag.module.css";
 
 export type SpeakerTagProps = {
@@ -10,6 +11,10 @@ export type SpeakerTagProps = {
    * datalist), never as buttons: a project can hold many more people than
    * this call does. */
   suggestions?: string[];
+  /** Present ⇒ the project keeps a roster and only these names may be given
+   * to a turn, so the editor becomes a picker over them. Undefined ⇒ the
+   * project names freely and the editor stays a text box. */
+  roster?: string[];
   /** Attribute this turn to `name`, or clear it with `null`. */
   onAssign: (name: string | null) => void;
   /** Rename `from` to `to` everywhere in the transcript. */
@@ -24,7 +29,9 @@ export type SpeakerTagProps = {
  * actually called Anna*. The design resolves it as the latter — "renames
  * every segment" — so editing an existing name renames that speaker
  * throughout, and attributing this turn to someone else is a separate act:
- * picking from the names already in use, or adding a new one.
+ * picking from the names already in use, or adding a new one. A roster
+ * changes only where a name may come from, never which of the two acts an
+ * edit is.
  *
  * Presentational only: no invoke, no listen, no fetch.
  */
@@ -32,20 +39,15 @@ export function SpeakerTag({
   speaker,
   known,
   suggestions = [],
+  roster,
   onAssign,
   onRename,
 }: SpeakerTagProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(speaker ?? "");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const suggestionsId = useId();
 
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
-  function commit() {
-    const trimmed = draft.trim();
+  function commit(value: string) {
+    const trimmed = value.trim();
     setEditing(false);
     if (trimmed.length === 0) {
       // Clearing the box unattributes this turn rather than storing a
@@ -70,33 +72,30 @@ export function SpeakerTag({
   if (editing) {
     return (
       <span className={styles.tag}>
-        <input
-          ref={inputRef}
-          className={styles.input}
+        <SpeakerNameField
           value={draft}
-          aria-label={speaker === null ? "Name this speaker" : `Rename ${speaker}`}
-          list={suggestions.length > 0 ? suggestionsId : undefined}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commit();
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              cancel();
-            }
-          }}
+          onChange={setDraft}
+          onCommit={commit}
+          onCancel={cancel}
+          // Only the text box needs a blur to commit: it has no other way
+          // out. A picker commits the moment a name is chosen, and reading
+          // its blur as a commit would turn abandoning the edit — Escape,
+          // which unmounts the focused control — into an assignment.
+          commitOnBlur={roster === undefined}
+          ariaLabel={speaker === null ? "Name this speaker" : `Rename ${speaker}`}
+          className={styles.input}
+          suggestions={suggestions}
+          roster={roster}
+          autoFocus
         />
-        {suggestions.length > 0 && (
-          <datalist id={suggestionsId}>
-            {suggestions.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        )}
         <span className={styles.hint}>
-          {speaker === null ? "Enter to name" : "renames every segment · Enter to save"}
+          {roster === undefined
+            ? speaker === null
+              ? "Enter to name"
+              : "renames every segment · Enter to save"
+            : speaker === null
+              ? "from the project roster"
+              : "renames every segment · from the project roster"}
         </span>
       </span>
     );
