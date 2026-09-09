@@ -7,7 +7,8 @@ its whole document (chunks + embeddings) -- doc-granular replace, KISS.
 
 Chunk text carries a breadcrumb line (project / meeting / time range /
 speakers) so both BM25 and the embedding see the context a bare excerpt
-lacks.
+lacks; every transcript chunk is additionally tagged with the speakers who
+have a line in it, so retrieval can be scoped to one person.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,9 @@ class _Line:
     text: str
     start_sec: float | None = None
     end_sec: float | None = None
+    # Operator name (speakers.json) or diarization label; None when the
+    # segment names nobody.
+    speaker: str | None = None
 
 
 def _meeting_title(meeting_name: str) -> str:
@@ -111,22 +115,36 @@ def _transcript_lines(meeting_dir: Path, transcript: dict[str, Any]) -> tuple[li
         rendered = render_transcript_lines([segment], overrides)
         if not rendered:
             continue
+        # The same override-or-label resolution the renderer applies to the
+        # line itself, so a tag never disagrees with the text it stands for.
+        raw_name = overrides.get(str(segment.get("id", ""))) or segment.get("speaker")
+        name = str(raw_name).strip() if raw_name else ""
         lines.append(
             _Line(
                 text=rendered[0],
                 start_sec=float(segment.get("start", 0.0)),
                 end_sec=float(segment.get("end", 0.0)),
+                speaker=name or None,
             )
         )
-        name = overrides.get(str(segment.get("id", ""))) or segment.get("speaker")
-        if name and str(name).strip() and str(name) not in names:
-            names.append(str(name))
+        if name and name not in names:
+            names.append(name)
     return lines, " ".join(names)
+
+
+def _speakers_in(lines: list[_Line]) -> tuple[str, ...]:
+    """The distinct speakers of the given lines, in order of first
+    appearance -- the order the breadcrumb names them in."""
+    seen: list[str] = []
+    for line in lines:
+        if line.speaker and line.speaker not in seen:
+            seen.append(line.speaker)
+    return tuple(seen)
 
 
 def _chunks_from_lines(
     lines: list[_Line],
-    breadcrumb_of: Callable[[_Line, _Line], str],
+    breadcrumb_of: Callable[[_Line, _Line, tuple[str, ...]], str],
     count_tokens: TokenCounter,
 ) -> list[ChunkRecord]:
     texts = [line.text for line in lines]
@@ -139,11 +157,13 @@ def _chunks_from_lines(
         if len(body.strip()) < MIN_CHUNK_BODY_CHARS:
             continue
         first, last = lines[start], lines[end - 1]
+        speakers = _speakers_in(lines[start:end])
         chunks.append(
             ChunkRecord(
-                text=f"{breadcrumb_of(first, last)}\n{body}",
+                text=f"{breadcrumb_of(first, last, speakers)}\n{body}",
                 start_sec=first.start_sec,
                 end_sec=last.end_sec,
+                speakers=speakers,
             )
         )
     return chunks
@@ -172,14 +192,8 @@ def _embed_chunks(
             out.extend(batch)
             continue
         for chunk, vector in zip(batch, vectors, strict=True):
-            out.append(
-                ChunkRecord(
-                    text=chunk.text,
-                    start_sec=chunk.start_sec,
-                    end_sec=chunk.end_sec,
-                    embedding=vector,
-                )
-            )
+            # `replace` keeps the speaker tags attached to the embedded copy.
+            out.append(replace(chunk, embedding=vector))
     return out
 
 
@@ -310,19 +324,22 @@ def index_vault(
                 continue
             lines, speakers = _transcript_lines(meeting_dir, transcript)
 
-            def transcript_breadcrumb(first: _Line, last: _Line) -> str:
+            def transcript_breadcrumb(
+                first: _Line, last: _Line, chunk_speakers: tuple[str, ...]
+            ) -> str:
                 window = (
                     f"{format_timestamp(first.start_sec or 0.0)}"
                     f"–{format_timestamp(last.end_sec or 0.0)}"
                 )
-                return f"[{project} / {meeting_dir.name} / {window}]"  # noqa: B023
+                who = f" / {', '.join(chunk_speakers)}" if chunk_speakers else ""
+                return f"[{project} / {meeting_dir.name} / {window}{who}]"  # noqa: B023
 
             chunks = _chunks_from_lines(lines, transcript_breadcrumb, count_tokens)
         else:
             text = raw.decode("utf-8", errors="replace")
             lines = [_Line(text=line) for line in text.splitlines() if line.strip()]
 
-            def flat_breadcrumb(_first: _Line, _last: _Line) -> str:
+            def flat_breadcrumb(_first: _Line, _last: _Line, _speakers: tuple[str, ...]) -> str:
                 return f"[{project} / {meeting_dir.name} / {kind}]"  # noqa: B023
 
             chunks = _chunks_from_lines(lines, flat_breadcrumb, count_tokens)

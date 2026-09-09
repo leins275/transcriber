@@ -16,7 +16,6 @@ unload still applies.
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -42,7 +41,8 @@ from transcription.schema import (
 )
 from transcription.search.chat import RetrievedChunk, build_chat_messages
 from transcription.search.dates import extract_query_dates, normalize_date_param
-from transcription.search.service import SearchService
+from transcription.search.service import SearchResult, SearchService
+from transcription.search.speakers import extract_query_speakers, normalize_speaker_param
 
 _logger = logging.getLogger("transcription")
 
@@ -68,9 +68,18 @@ def build_search_router(require_token: Callable[..., None]) -> APIRouter:
         service = _search_service(request)
         normalized = normalize_date_param(payload.date)
         dates = {normalized} if normalized else None
+        # One explicit name here (unlike the chat, which infers them from
+        # the question); the filter set stays plural so both callers share
+        # the same OR semantics downstream.
+        speaker_key = normalize_speaker_param(payload.speaker)
+        speakers = {speaker_key} if speaker_key else None
         results = await _job_manager(request).run_serial(
             lambda: service.search(
-                payload.query, project=payload.project, top_k=payload.top_k, dates=dates
+                payload.query,
+                project=payload.project,
+                top_k=payload.top_k,
+                dates=dates,
+                speakers=speakers,
             )
         )
         return SearchResponse(results=[SearchResultModel(**result.as_dict()) for result in results])
@@ -159,15 +168,26 @@ def build_search_router(require_token: Callable[..., None]) -> APIRouter:
         # tag every doc carries becomes a hard filter, so "summarize
         # today's meetings" can never cite last month's.
         question_dates = extract_query_dates(question) or None
-        pairs = await manager.run_serial(
-            functools.partial(
-                service.retrieve,
+
+        def retrieve() -> list[tuple[SearchResult, str]]:
+            # A question that names somebody the index has actually heard
+            # ("что говорил Иван про дедлайн") retrieves that person's
+            # chunks and nothing else -- the same hard scope the dates get,
+            # and the two compose. The roster is read here, on the serial
+            # executor, because the index handle is only ever touched
+            # there; it is scoped to the request's project, so a name known
+            # only in another project stays an ordinary word.
+            known = manager.index_db().known_speakers(payload.project)
+            question_speakers = extract_query_speakers(question, known) or None
+            return service.retrieve(
                 question,
                 project=payload.project,
                 top_k=config.search_top_k,
                 dates=question_dates,
+                speakers=question_speakers,
             )
-        )
+
+        pairs = await manager.run_serial(retrieve)
         chunks = [RetrievedChunk(result=result, text=text) for result, text in pairs]
         messages, sources = build_chat_messages(
             history=history,
