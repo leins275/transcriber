@@ -181,15 +181,17 @@ def remove_legacy_app_dir_index(app_dir: Path, index_db_path: str | Path) -> boo
     vault it describes, so an upgraded install keeps a file nobody reads.
     The app-dir path is still the legitimate vault-less fallback, hence the
     resolve-equality guard: an index that is the configured one is never
-    touched. Returns ``True`` only when a stale file was actually removed.
+    touched. The database and its ``-wal``/``-shm`` sidecars are one unit,
+    so all three are swept even when only the sidecars survive a crash
+    mid-checkpoint; ``True`` is returned only when the main file itself
+    existed and was removed.
     A failed unlink (locked by another process) degrades to a warning --
     the service must still start.
     """
     legacy = app_dir / "data" / _INDEX_FILENAME
     if Path(index_db_path).resolve() == legacy.resolve():
         return False
-    if not legacy.exists():
-        return False
+    existed = legacy.exists()
     try:
         for suffix in _DB_FILE_SUFFIXES:
             Path(f"{legacy}{suffix}").unlink(missing_ok=True)
@@ -200,7 +202,7 @@ def remove_legacy_app_dir_index(app_dir: Path, index_db_path: str | Path) -> boo
             extra={"event": "legacy_index_remove_failed", "path": str(legacy)},
         )
         return False
-    return True
+    return existed
 
 
 def _holders(values: list[str]) -> str:

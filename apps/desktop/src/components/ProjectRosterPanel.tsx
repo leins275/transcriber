@@ -18,6 +18,14 @@ export type ProjectRosterPanelProps = {
   onClose: () => void;
 };
 
+/** A roster's contents as one comparable string, so "is this still the roster
+ * the draft was seeded from?" survives the loading hook handing us a fresh
+ * object for an unchanged roster. NUL separates because a name cannot hold one.
+ */
+function identityOf(roster: ProjectRosterView): string {
+  return [roster.mode, ...roster.names].join("\u0000");
+}
+
 function messageOf(error: unknown): string {
   if (typeof error === "object" && error !== null && "message" in error) {
     return String((error as { message: unknown }).message);
@@ -51,10 +59,23 @@ export function ProjectRosterPanel({
   onClose,
 }: ProjectRosterPanelProps) {
   const [draft, setDraft] = useState<ProjectRosterView>(roster);
+  const [seededFrom, setSeededFrom] = useState<string>(() => identityOf(roster));
   const [typed, setTyped] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modeName = useId();
+
+  // The panel can be opened before `useProjectRoster` has answered — the hook
+  // shows `EMPTY_ROSTER` while the read is in flight. A draft frozen at mount
+  // would let an untouched Save write that empty roster over the persisted
+  // file, so while the draft is still exactly what we seeded it with, the
+  // persisted roster keeps replacing it. Once the operator has changed
+  // anything, their draft wins and a late read never overwrites it.
+  const persisted = identityOf(roster);
+  if (persisted !== seededFrom) {
+    setSeededFrom(persisted);
+    if (identityOf(draft) === seededFrom) setDraft(roster);
+  }
 
   const seeded = mergeRosterNames(draft, siblingNames);
   const nothingToSeed = seeded.names.length === draft.names.length;
@@ -116,7 +137,7 @@ export function ProjectRosterPanel({
       {draft.names.length > 0 ? (
         <ul className={styles.names}>
           {draft.names.map((name) => (
-            <li key={name.toLocaleLowerCase()} className={styles.name}>
+            <li key={name.toLowerCase()} className={styles.name}>
               <span>{name}</span>
               <button
                 type="button"

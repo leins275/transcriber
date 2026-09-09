@@ -9,7 +9,10 @@
  *      duplicates onto the first spelling, keep the operator's order. The
  *      editor applies exactly these rules while the operator types, so the
  *      list it shows is the list `save_project_roster` will store -- a name
- *      never changes shape on save.
+ *      never changes shape on save. Case folding is `toLowerCase()`, never
+ *      `toLocaleLowerCase()`: the locale-independent Unicode default mapping
+ *      is what Rust's `str::to_lowercase` implements, and a Turkish-locale
+ *      host would otherwise fold "Ilya" to "ılya" here and "ilya" there.
  *   2. **`pickerSource`** -- the single place that turns a roster's mode into
  *      what the two speaker name controls offer: a pick-list over the roster
  *      (`roster` mode) or free text with the sibling-scan names as datalist
@@ -35,7 +38,7 @@ export function normalizeRosterNames(names: string[]): string[] {
   for (const candidate of names) {
     const name = candidate.trim();
     if (name === "") continue;
-    const key = name.toLocaleLowerCase();
+    const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     normalized.push(name);
@@ -52,10 +55,10 @@ export function addRosterName(roster: ProjectRosterView, name: string): ProjectR
 /** Drops that name from the roster, matched the way the roster itself
  * deduplicates -- case-insensitively -- and leaves the rest in order. */
 export function removeRosterName(roster: ProjectRosterView, name: string): ProjectRosterView {
-  const target = name.trim().toLocaleLowerCase();
+  const target = name.trim().toLowerCase();
   return {
     mode: roster.mode,
-    names: roster.names.filter((listed) => listed.trim().toLocaleLowerCase() !== target),
+    names: roster.names.filter((listed) => listed.trim().toLowerCase() !== target),
   };
 }
 

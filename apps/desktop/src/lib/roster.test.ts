@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EMPTY_ROSTER,
   addRosterName,
@@ -115,5 +115,37 @@ describe("pickerSource", () => {
 describe("EMPTY_ROSTER", () => {
   it("is the open roster with no names — what a project without a roster file reads as", () => {
     expect(EMPTY_ROSTER).toEqual({ mode: "open", names: [] });
+  });
+});
+
+/**
+ * FR-2 b3: the helpers fold case exactly like the Rust side
+ * (`commands/roster.rs`, `str::to_lowercase`) — the locale-independent
+ * Unicode default case mapping. The host's locale is not ours to choose:
+ * Turkish is one of the three decode languages, and under `tr-TR` a
+ * locale-sensitive fold maps "I" to "ı", so `["Ilya", "ilya"]` would be two
+ * names in the editor and one after save — exactly the drift FR-2 b3 forbids.
+ * The spy plays such a host: any helper that reaches for the locale-sensitive
+ * fold sees Turkish rules and diverges from the backend.
+ */
+describe("case folding on a Turkish-locale host", () => {
+  beforeEach(() => {
+    vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (this: string) {
+      return this.replace(/I/g, "ı").replace(/İ/g, "i").toLowerCase();
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("collapses names that differ only in the casing of an I, as the backend would", () => {
+    expect(normalizeRosterNames(["Ilya", "ilya"])).toEqual(["Ilya"]);
+  });
+
+  it("removes a name typed with the other casing of an I", () => {
+    expect(removeRosterName(roster("roster", ["Ilya", "Anna"]), "ilya")).toEqual(
+      roster("roster", ["Anna"]),
+    );
   });
 });

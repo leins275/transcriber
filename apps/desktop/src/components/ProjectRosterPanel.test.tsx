@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectRosterPanel } from "./ProjectRosterPanel";
+import { EMPTY_ROSTER } from "../lib/roster";
 import type { ProjectRosterView } from "../types";
 
 function buildRoster(overrides: Partial<ProjectRosterView> = {}): ProjectRosterView {
@@ -156,5 +157,53 @@ describe("ProjectRosterPanel", () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The panel is opened from the recording page before `useProjectRoster` has
+ * necessarily answered: the hook resets to `EMPTY_ROSTER` on every project
+ * change and reads asynchronously. A draft frozen at mount would let an
+ * untouched Save write `{open, []}` over the project's persisted roster
+ * (FR-6 b4, FR-7 b1) — so the draft follows the prop until the operator
+ * takes it over.
+ */
+describe("ProjectRosterPanel while the persisted roster is still loading", () => {
+  const stable = {
+    siblingNames: [] as string[],
+    onClose: () => {},
+  };
+
+  it("adopts the roster that settles after the panel was opened", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ProjectRosterPanel roster={EMPTY_ROSTER} onSave={onSave} {...stable} />,
+    );
+
+    rerender(
+      <ProjectRosterPanel roster={buildRoster({ mode: "roster" })} onSave={onSave} {...stable} />,
+    );
+
+    expect(screen.getByRole("radio", { name: ONLY_THE_ROSTER })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Remove Anna" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(onSave).toHaveBeenCalledWith({ mode: "roster", names: ["Anna", "Maxim"] });
+  });
+
+  it("keeps the names the operator already typed when the roster lands late", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ProjectRosterPanel roster={EMPTY_ROSTER} onSave={onSave} {...stable} />,
+    );
+
+    await user.type(screen.getByRole("textbox", { name: "Add a name" }), "Olga{Enter}");
+    rerender(<ProjectRosterPanel roster={buildRoster()} onSave={onSave} {...stable} />);
+
+    expect(screen.getByRole("button", { name: "Remove Olga" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove Anna" })).not.toBeInTheDocument();
   });
 });

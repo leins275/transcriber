@@ -149,6 +149,25 @@ def test_an_app_dir_index_that_is_still_the_configured_one_is_kept(
     assert legacy.read_bytes() == LEGACY_BYTES
 
 
+def test_sidecars_orphaned_without_their_main_file_are_swept_too(
+    tmp_app_dir: Path, vault_index_path: Path
+) -> None:
+    # A crash mid-checkpoint on the pre-0.18 build can leave the WAL pair
+    # behind without the database itself; the three files are one unit.
+    wal = tmp_app_dir / "data" / "index.sqlite3-wal"
+    shm = tmp_app_dir / "data" / "index.sqlite3-shm"
+    wal.write_bytes(b"wal")
+    shm.write_bytes(b"shm")
+
+    removed = index_db.remove_legacy_app_dir_index(tmp_app_dir, vault_index_path)
+
+    # No main file existed, so there is nothing to report as removed...
+    assert removed is False
+    # ...but the orphaned sidecars are gone all the same.
+    assert not wal.exists()
+    assert not shm.exists()
+
+
 def test_nothing_to_clean_up_is_reported_as_no_removal(
     tmp_app_dir: Path, vault_index_path: Path
 ) -> None:

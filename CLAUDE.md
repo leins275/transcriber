@@ -11,7 +11,7 @@ Transcriber: a local-first, single-user desktop app that turns dropped meeting r
 | Path | Payload | Toolchain |
 |---|---|---|
 | `apps/desktop/` | Tauri 2 + React UI; `src-tauri/` is the Rust shell | npm + cargo |
-| `services/transcription/` | Python transcription/LLM service (FastAPI + CLI) | `uv` only â€” never system `python` |
+| `services/transcription/` | Python transcription/LLM service (FastAPI + CLI) | `uv` only — never system `python` |
 | `crates/vault/` | Rust library: vault naming/routing rules | cargo |
 
 Supporting: `installer/` (NSIS hooks), `scripts/` (bootstrap, build, version sync — has its own pytest suite in `scripts/tests/`), `docs/` (setup, config contract, releasing, smoke checklists), `specs/` (per-feature spec/plan/verification documents — the design history).
