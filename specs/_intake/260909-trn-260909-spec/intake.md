@@ -13,7 +13,7 @@ A plain-markdown operator note (`local/TRN - 260909 - spec.md`, Russian) listing
 
 ## Features
 
-### [p] F1: Store search indexes in the vault, not the app folder  (slug: search-index-in-vault)
+### [x] F1: Store search indexes in the vault, not the app folder  (slug: search-index-in-vault)
 
 **Task text** (verbatim from the source):
 
@@ -23,7 +23,7 @@ A plain-markdown operator note (`local/TRN - 260909 - spec.md`, Russian) listing
 
 Notes for the gate: **possibly already implemented on main.** `services/transcription/src/transcription/config.py:421-428` already defaults `index_db_path` to `<vault_root>/.transcriber/index.sqlite3`, with the `<app_dir>/data/index.sqlite3` fallback used only when no vault root is configured. Candidate kept so the operator can drop it explicitly, or narrow it to a residual (e.g. migrating an existing app-dir index into the vault, or removing the app-dir fallback).
 
-### [p] F2: Tag embeddings with speakers  (slug: speaker-tagged-embeddings)
+### [x] F2: Tag embeddings with speakers  (slug: speaker-tagged-embeddings)
 
 **Task text** (verbatim from the source):
 
@@ -33,7 +33,7 @@ Notes for the gate: **possibly already implemented on main.** `services/transcri
 
 Scope hint: the chunk breadcrumb built in `services/transcription/src/transcription/search/indexer.py` (`_chunks_from_lines`, `transcript_breadcrumb`) and the doc-level `speakers` column in `search/index_db.py` are the existing surfaces; the ask is that speaker identity travels with the embedded chunk, not only with the document row.
 
-### [p] F3: Make job progress percentages honest for non-transcribe jobs  (slug: job-progress-accuracy)
+### [x] F3: Make job progress percentages honest for non-transcribe jobs  (slug: job-progress-accuracy)
 
 **Task text** (verbatim from the source):
 
@@ -44,7 +44,7 @@ Scope hint: the chunk breadcrumb built in `services/transcription/src/transcript
 
 Scope hint: summarize/export/index/diarize progress is currently set from coarse hand-picked fractions in `services/transcription/src/transcription/jobs.py` (`job.progress = 0.05 / 0.1 / 0.5 / 0.9`, plus the 0.9 diarization scale), while transcription drives a real per-second fraction.
 
-### [p] F4: Keep the selection speaker popover inside the window  (slug: selection-menu-viewport-clamp)
+### [x] F4: Keep the selection speaker popover inside the window  (slug: selection-menu-viewport-clamp)
 
 **Task text** (verbatim from the source):
 
@@ -55,7 +55,7 @@ Scope hint: summarize/export/index/diarize progress is currently set from coarse
 
 Scope hint: `apps/desktop/src/components/SelectionSpeakerMenu.tsx` positions the popover with raw `left: anchor.x; top: anchor.y` viewport coordinates and never measures itself against the viewport, so a selection near the right or bottom edge pushes it off-screen.
 
-### [p] F5: Rename one turn's speaker without renaming every turn  (slug: per-turn-speaker-reassign)
+### [x] F5: Rename one turn's speaker without renaming every turn  (slug: per-turn-speaker-reassign)
 
 **Task text** (verbatim from the source):
 
@@ -66,7 +66,7 @@ Scope hint: `apps/desktop/src/components/SelectionSpeakerMenu.tsx` positions the
 
 Scope hint: `apps/desktop/src/components/SpeakerTag.tsx` deliberately resolves "edit an existing name" as rename-everywhere (`onRename`), leaving reassign-this-turn (`onAssign`) reachable only by clicking an already-known name. The ask is to make both intents explicit and reachable.
 
-### [p] F6: Constrain speaker choice to a per-project roster  (slug: project-speaker-roster)
+### [x] F6: Constrain speaker choice to a per-project roster  (slug: project-speaker-roster)
 
 **Task text** (verbatim from the source):
 
@@ -94,3 +94,4 @@ None — every heading and sub-bullet in the source is carried by a candidate ab
 - 2026-09-09 — F6 roster strictness → Strict; F6 seeding → Manual button; F6 blueprint gate → Approved
 - 2026-09-09 — Operator: stop after blueprints (usage limit); factory not started. Resume with `/sdd:ship 260909-trn-260909-spec`.
 - 2026-09-09 — Operator stopped mid-factory (F1/F4/F5 committed; F2/F3/F6 last tasks in flight). Resume with `/sdd:ship 260909-trn-260909-spec` — see factory-notes.md RESUME POINT.
+- 2026-09-09 — C.4 merged all six (F2 and F6 via merge fixers); C.5 quality gate: QA 4/4 PASS, evaluator round 2 → 0 open (E1–E4, E6 fixed; E5, E7–E9 accepted); C.6 UI validation skipped — browser-toolkit:ui-test and browse CLI not installed; F6 T11 manual verification therefore not run.

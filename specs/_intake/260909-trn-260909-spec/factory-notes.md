@@ -34,3 +34,8 @@ Known still-red tests after implementation, and test defects implementers were n
 
 ## UPDATE after session restart
 - F3 T4 (jobs.py summarize/export phases) and F6 T10 (App.tsx + CLAUDE.md + docs/setup.md) implementers were STOPPED mid-task when the previous Claude Code process exited. Their partial edits may be on disk in the worktrees. On resume: run the task's test file first; if red or the heading is still [~], re-run the task from scratch per the resume table (an implementer prompt as before; it may build on the partial edits).
+
+## C.4 integration (done)
+- Merged in order: F1 014e673, F2 db026ff (fixer: index_db.py union; +1 blank line in test_search_speakers.py for I001), F3 93d4c62, F4 fa6632e, F5 2552561, F6 430ad50 (fixer: union of F4/F5/F6 in SelectionSpeakerMenu/SpeakerTag/TranscriptViewer; F5 wins the `Edit speaker for this turn` label and assign-vs-rename semantics).
+- Desktop suite on merged tree: 550/558; 8 red, all stale tests (see below). Python 740 passed post-F2; re-verify on the full merged tree in C.5.
+- Known stale tests to fix in C.5 (fixers may edit tests): (a) SpeakerTag.test.tsx Tab+Enter focus assertion order; (b) RecordingPage.test.tsx `/rename maxim/i` → `/edit speaker for this turn/i`; (c) activeJob.test.ts two toEqual need `phase: null`; (d) SpeakerTag.roster.test.tsx: 3 cases query `Rename <name>` → `Edit speaker for this turn`; case "renames the speaker throughout when another roster name is picked" must pass `turnsHeld: 3` and click `All 3 turns of Maxim` (or expect onAssign) — F5 semantics win.

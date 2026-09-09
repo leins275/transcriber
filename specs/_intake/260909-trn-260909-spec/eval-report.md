@@ -1,7 +1,7 @@
 ---
 slug: 260909-trn-260909-spec (consolidated batch: search-index-in-vault, speaker-tagged-embeddings, job-progress-accuracy, selection-menu-viewport-clamp, per-turn-speaker-reassign, project-speaker-roster)
 base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
-round: 1
+round: 2
 ---
 
 # Evaluation report: TRN 260909 batch (six merged features)
@@ -16,7 +16,7 @@ Evidence gathered: full diff and every touched source file read; `uv run pytest`
 |---|---|---|---|
 | blocker | 0 | 0 | 0 |
 | major | 0 | 0 | 0 |
-| minor | 9 | 0 | 0 |
+| minor | 0 | 5 | 4 |
 
 The diff implements all six blueprints. Every must-FR maps to code and to a behaviour-level test authored before implementation; the four security lenses turn up nothing exploitable (all new SQL is bound with `?` placeholders, the two new Tauri commands go through the shared `project_dir` validation and never create a project, the roster read is capped, `/v1/search`'s `speaker` is length-bound and normalised). What remains is a set of small edges: one documentation byte-corruption introduced by the batch (E2), a locale-dependent divergence between the TS and Rust roster normalisation that FR-2 explicitly forbids (E3), a few deliberate implementer deviations that should be recorded as accepted rather than silently kept (E5, E6), and the fact that HEAD itself still carries the eight stale tests whose fixes sit uncommitted in the working tree (E1).
 
@@ -39,7 +39,7 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 
 ## Findings
 
-### E1 [minor] [correctness] [status: open] — F3 / F5 / F6
+### E1 [minor] [correctness] [status: fixed] — F3 / F5 / F6
 
 - **Where**: HEAD `apps/desktop/src/components/SpeakerTag.test.tsx:151-156`, `apps/desktop/src/lib/activeJob.test.ts:38,68`, `apps/desktop/src/components/RecordingPage.test.tsx:228`, `apps/desktop/src/components/SpeakerTag.roster.test.tsx` (three `Rename <name>` queries + the "renames throughout" case)
 - **Spec ref**: F3 T7 / F5 T2, T3 / F6 T4 "Done when" (suites green); CLAUDE.md release rule (merge to `main` is the ship decision)
@@ -71,7 +71,7 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 - **Actual**: the draft is seeded from the prop once, at mount. `useProjectRoster` resets to `EMPTY_ROSTER` on every project change and then reads asynchronously; if the panel is opened before that read settles (or after a read that degraded to `EMPTY_ROSTER`), Save writes `{open, []}` over the persisted file. The window is one local IPC round-trip, so it is hard to hit by hand, but the panel silently diverging from a prop it was handed is the kind of thing that later features trip over.
 - **Suggested fix**: render the panel with `key={\`${roster.mode}:${roster.names.join("")}\`}` in `RecordingPage`, or sync the draft from the prop while the draft is still untouched.
 
-### E5 [minor] [spec-drift] [status: open] — F3
+### E5 [minor] [spec-drift] [status: accepted] — F3
 
 - **Where**: `apps/desktop/src/types.ts:80` (`phase?: string | null`)
 - **Spec ref**: F3 FR-7 b2 / T6 ("`JobSnapshot.phase: string | null` in `types.ts`")
@@ -87,7 +87,7 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 - **Actual**: when only sidecars survive (a crash mid-checkpoint on the old build), the early return leaves `index.sqlite3-wal` / `-shm` in the app dir forever — the literal "orphan in the app folder" the operator asked not to have. The factory notes record this as deliberate; nothing in the blueprint asks for it.
 - **Suggested fix**: replace the `exists()` early-return with `existed = legacy.exists()` before the loop and `return existed` after it (the log record still fires only when the main file was there). Test 1/3 of `test_legacy_index_cleanup.py` keep their meaning.
 
-### E7 [minor] [correctness] [status: open] — F2
+### E7 [minor] [correctness] [status: accepted] — F2
 
 - **Where**: `services/transcription/src/transcription/search/speakers.py:97-103` (`extract_query_speakers`), `:74-77` (`_full_name_pattern`)
 - **Spec ref**: F2 FR-5 b1 (pure logic; "returns the subset of `known` the text mentions")
@@ -95,7 +95,7 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 - **Actual**: a whitespace-only key is truthy, survives the `if not key` guard, and `_full_name_pattern("   ")` compiles to `(?<!\w)(?!\w)`, which matches at every position — every question would be scoped to that key. Unreachable through the index today (`upsert_doc` strips and drops blanks before storing), so this is a robustness hole in a public pure function, not a live bug; `_first_name_pattern` would also `IndexError` on `key.split()[0]` for the same input if reached first.
 - **Suggested fix**: `key = name.strip().casefold()` and `if not key or GENERIC_LABEL.match(key): continue`.
 
-### E8 [minor] [improvement] [status: open] — F5 (shared with F6)
+### E8 [minor] [improvement] [status: accepted] — F5 (shared with F6)
 
 - **Where**: `apps/desktop/src/components/SpeakerTag.tsx:147-160` (the `SpeakerNameField` stays fully editable while `mode === "choosing"`), `:88-98` (`assignThisTurn` / `renameEverywhere` read `draft` at click time)
 - **Spec ref**: F5 T2 Implement — "the input stays visible (read-only or disabled is fine; keep the draft on screen)"
@@ -103,7 +103,7 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 - **Actual**: the box is still live, so the operator can click back into it, change the text, and then press "All 3 turns of Speaker 2" — the label promises one thing, the write uses whatever is in the box now, without re-running `commit`'s guards (same-name → no-op, blank → `onAssign("")`/`renameSpeaker` no-op, so nothing corrupting, but the chooser's contract is bypassed). The blueprint explicitly allowed read-only/disabled here.
 - **Suggested fix**: pass `readOnly` (input) / `disabled` (select) to `SpeakerNameField` while choosing, or re-enter `editing` on any change so a fresh Enter is required.
 
-### E9 [minor] [improvement] [status: open] — F6 / F3 (coverage gaps)
+### E9 [minor] [improvement] [status: accepted] — F6 / F3 (coverage gaps)
 
 - **Where**: `apps/desktop/src-tauri/tests/roster.rs`, `apps/desktop/src/lib/roster.test.ts`, `apps/desktop/src-tauri/tests/job_phase.rs`
 - **Spec ref**: F6 FR-2 b2 (limits: "longer than 200 characters" / "more than 500 names"); F3 FR-7 b1 (`HttpService::status` decodes a body with no `phase` key — and, by the Architecture's `#[serde(default)]` on both fields, no `progress` key either)
@@ -219,3 +219,23 @@ The diff implements all six blueprints. Every must-FR maps to code and to a beha
 - **F4's placement maths is a pure function with hardcoded expectations**, the hook measures exactly once per anchor/resize, and removing the CSS transform is documented in the rule itself so nobody re-adds a double shift.
 - **F1's helper guards the vault-less fallback by `resolve()` equality**, so a hand-written `index_db_path` pointing at the app-dir file is never deleted, and the `OSError` branch is provoked with a real directory-in-place-of-file rather than a patched `unlink`.
 - **F2 keeps the no-filter path byte-identical** (`_speaker_keys(None)` short-circuits before any SQL changes), scopes `known_speakers` to the chat's project so a name known only elsewhere stays an ordinary word, and reads the known set inside the same `run_serial` callable as retrieval — the index handle is still touched only on the serial executor.
+
+## Round 2 — verification of the round-1 fixes
+
+Scope: the `<fix-scope>` files only — commits `4e91bc1` (E1: four stale desktop test files) and `6e7e58e` (E2/E3/E4/E6: `CLAUDE.md`, `lib/roster.ts` + test, `ProjectRosterPanel.tsx` + test, `search/index_db.py` + `tests/test_legacy_index_cleanup.py`). `git show --stat` confirms neither commit touches anything outside that list; `git status` shows no working-tree edits left under `apps/`, `services/` or `crates/` (only `specs/` state files). Evidence this round: `uv run pytest tests/test_legacy_index_cleanup.py` (12 cases, exit 0); `vitest run` over the six touched desktop files (106/106 green at HEAD, no working-tree edits needed); `eslint` over the four changed TS files (exit 0 — the setState-during-render pattern in the panel trips no rule). The round-1 narrative above is left as written; only the status tags and the verdict table were updated.
+
+| Finding | Claim | Verdict | Evidence |
+|---|---|---|---|
+| E1 | fixed | **fixed** | `4e91bc1` commits exactly the four adjudicated edits: `SpeakerTag.test.tsx` asserts focus *before* the Enter that fires the wide choice; `activeJob.test.ts` adds `phase: null` to both whole-view `toEqual`s; `RecordingPage.test.tsx` and `SpeakerTag.roster.test.tsx` query `Edit speaker for this turn` and, for the wide-scope roster pick, pass `turnsHeld: 3` and click `All 3 turns of Maxim` (the F5-over-F6 ruling from round 1). All six files green at HEAD. |
+| E2 | fixed | **fixed** | `diff` of `CLAUDE.md` lines 10–18 against `0cdd13d` is empty; `od -c` on line 14 shows the em dash back as `E2 80 94`. The remaining `CLAUDE.md` delta is the two intended F6 paragraphs (plus prettier's `*created*` → `_created_`, already present and not flagged in round 1). |
+| E3 | fixed | **fixed** | `roster.ts:41,58,61` use `toLowerCase()`; `ProjectRosterPanel.tsx:140` (the React key) follows. No `toLocaleLowerCase` call remains under `apps/desktop/src` outside the new test's spy. The regression case plays a Turkish host by mocking `String.prototype.toLocaleLowerCase` (`I`→`ı`) and asserts `["Ilya","ilya"]` collapses to `["Ilya"]` and that `removeRosterName` matches across the casing; the spy is restored in `afterEach`. With the old code the first assertion yields two names, so the test discriminates. |
+| E4 | fixed | **fixed** | `ProjectRosterPanel.tsx:61-78`: the draft is seeded from the prop, `seededFrom` remembers the prop's identity (`mode` + names joined on NUL), and on a prop change the draft is re-seeded only while `identityOf(draft) === seededFrom`. This is React's documented "adjust state on prop change during render" form — the guard makes the second render converge, and once the operator has touched the draft a late read no longer overwrites it. Both new cases (`adopts the roster that settles after the panel was opened` — Save then sends the persisted `{roster, [Anna, Maxim]}`; `keeps the names the operator already typed when the roster lands late`) pin exactly the two branches. `RecordingPage.tsx:496` still passes `projectRoster ?? EMPTY_ROSTER`, so the hook's in-flight `EMPTY_ROSTER` is what the panel now safely outgrows. |
+| E5 | accepted | **accepted** | `types.ts:80` still `phase?: string \| null`. Round 1 recommended accepting: the wire always carries the key and every reader is defensive. |
+| E6 | fixed | **fixed** | `index_db.py:194-205`: `existed = legacy.exists()` precedes the three-suffix unlink loop; `return existed` after it; the `OSError` branch still returns `False` with the warning; `app.py:153` therefore still logs `legacy_index_removed` only when the main file was there. New case `test_sidecars_orphaned_without_their_main_file_are_swept_too` seeds only `-wal`/`-shm`, asserts `removed is False` and both gone. Docstring updated to describe the three-file unit. Tests 1/3 keep their meaning as predicted. |
+| E7 | accepted | **accepted** | Unreachable through the index (`upsert_doc` strips blanks); robustness only. |
+| E8 | accepted | **accepted** | Blueprint permits the live input; guards make the bypass non-corrupting. |
+| E9 | accepted | **accepted** | Boundary/default-decoding coverage gaps; no code defect. |
+
+**New findings introduced by the fixes: none.** Checked specifically: the panel's render-time `setState` pair cannot loop (the `persisted !== seededFrom` guard is satisfied after one re-render) and passes lint; `identityOf`'s NUL separator cannot collide with a name the Rust side would accept; `roster.test.ts`'s prototype spy is scoped to its `describe` and restored; the E6 helper's behaviour on a directory-in-place-of-file (the round-1 OSError case) is unchanged (`exists()` is `True`, unlink raises, `False` returned, warning logged).
+
+Round-2 verdict: 0 blockers, 0 majors, 0 open minors — 5 fixed, 4 accepted.
