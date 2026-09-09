@@ -1,3 +1,3 @@
-{"phase": "blueprint", "approved": false, "base_ref": null,
+{"phase": "test", "approved": true, "base_ref": "0cdd13df2dc6ac7a4d1254bbd35e632feac954f3",
  "tier": "ultra", "strict_skills": {"planning": ["testing-toolkit:testing-best-practices"], "development": ["testing-toolkit:testing-best-practices", "frontend-toolkit:internal-ui"]},
- "asked": false, "deferred_qa": []}
+ "asked": false, "deferred_qa": [], "worktree_path": "specs/_intake/260909-trn-260909-spec/worktrees/260909-speaker-tagged-embeddings", "branch": "sdd/260909-speaker-tagged-embeddings", "factory_status": "impl_done"}

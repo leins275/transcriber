@@ -93,3 +93,4 @@ None — every heading and sub-bullet in the source is carried by a candidate ab
 - 2026-09-09 — F5 intent shape: chooser after Enter / separate icon / confirm → Scope chooser after Enter; F5 blueprint gate → Approved
 - 2026-09-09 — F6 roster strictness → Strict; F6 seeding → Manual button; F6 blueprint gate → Approved
 - 2026-09-09 — Operator: stop after blueprints (usage limit); factory not started. Resume with `/sdd:ship 260909-trn-260909-spec`.
+- 2026-09-09 — Operator stopped mid-factory (F1/F4/F5 committed; F2/F3/F6 last tasks in flight). Resume with `/sdd:ship 260909-trn-260909-spec` — see factory-notes.md RESUME POINT.
