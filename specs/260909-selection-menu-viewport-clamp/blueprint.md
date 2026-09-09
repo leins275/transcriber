@@ -2,7 +2,7 @@
 slug: 260909-selection-menu-viewport-clamp
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Keep the selection speaker popover inside the window
@@ -129,7 +129,7 @@ Data flow: `TranscriptViewer` still passes `anchor = { clientX, clientY }` of th
 
 ## Tasks
 
-### [ ] T1: Pure viewport placement function  [deps: —]
+### [x] T1: Pure viewport placement function  [deps: —]
 
 - **Files**: `apps/desktop/src/lib/viewportPosition.ts`
 - **Test first**: `apps/desktop/src/lib/viewportPosition.test.ts` — plain vitest (`describe/it/expect`, no DOM) like `lib/selection.test.ts`. Fixtures: box 200x40, viewport 1000x800, `{ gap: 8, margin: 8 }` unless stated. Cases: (1) FR-1 centred below — anchor (500,300) → `{ left: 400, top: 308 }`; (2) FR-1 right edge — anchor (950,300) → `left: 792`, `top: 308`; (3) FR-1 left edge — anchor (50,300) → `left: 8`; (4) FR-1 flip above — anchor (500,780) → `top: 732`; (5) FR-1 no room either side — viewport 1000x60, anchor (500,50) → `top: 12`; (6) FR-1 top never below margin — viewport 1000x60, anchor (500,4), box 200x40 → `top: 12` (would-be 12 anyway; assert `>= 8` and equal to 12); (7) FR-1 wider than viewport — box 1200x40 → `left: 8`; (8) FR-1 zero size — box 0x0, anchor (500,300) → `{ left: 500, top: 308 }`; (9) FR-1 defaults — call without `options` for case (1) → same result. Hardcode every expected number; do not recompute them in the test.
@@ -137,7 +137,7 @@ Data flow: `TranscriptViewer` still passes `anchor = { clientX, clientY }` of th
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: `viewportPosition.test.ts` green; `npm --prefix apps/desktop run lint`, `run type`, `run format:check` clean for the new file.
 
-### [ ] T2: Hook + wire the popover to the clamped position  [deps: T1]
+### [x] T2: Hook + wire the popover to the clamped position  [deps: T1]
 
 - **Files**: `apps/desktop/src/state/useClampedPosition.ts`, `apps/desktop/src/components/SelectionSpeakerMenu.tsx`, `apps/desktop/src/components/SelectionSpeakerMenu.module.css`
 - **Test first**: `apps/desktop/src/components/SelectionSpeakerMenu.position.test.tsx` — a new file (the existing `SelectionSpeakerMenu.test.tsx` stays untouched). Render `SelectionSpeakerMenu` via Testing Library as the sibling test does; in `beforeEach` set `window.innerWidth = 1000; window.innerHeight = 800` and `vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 200, height: 40, ... } as DOMRect)`; restore in `afterEach`. Locate the popover with `screen.getByRole("group", { name: /attribute the selected text/i })` and assert `element.style.left` / `.top` strings. Cases: (1) FR-2 right edge — anchor (950,300) → `left "792px"`, `top "308px"`; (2) FR-2 bottom flip — anchor (500,780) → `top "732px"`; (3) FR-2 centred — anchor (500,300) → `left "400px"`; (4) FR-3 anchor change — `rerender` with anchor (950,300) after (500,300) → `left "792px"`; (5) FR-3 resize — after render at (500,300) set `window.innerWidth = 600` then `fireEvent(window, new Event("resize"))` → `left "392px"`; (6) FR-3 unmount — `unmount()`, then resize: no error thrown and no further `getBoundingClientRect` call (spy call count unchanged). Assert only the rendered style, never hook internals.

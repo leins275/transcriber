@@ -13,8 +13,10 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   /* Sits just below the selection and centred on it, clear of the
-     highlighted text the operator is still reading. */
-  transform: translate(-50%, var(--space-2));
+     highlighted text the operator is still reading -- but both the centring
+     and that gap are computed by `useClampedPosition` and applied as inline
+     left/top, so the popover can be kept inside the window. A transform here
+     would shift it a second time, away from the measured coordinates. */
   white-space: nowrap;
 }
 
