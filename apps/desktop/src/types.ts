@@ -153,6 +153,23 @@ export type TranscriptView = {
   transcript_path: string;
 };
 
+/** How a project governs speaker naming: `open` is the historical
+ * behaviour -- free text with the sibling-meeting names as hints -- while
+ * `roster` restricts the name controls to the project's listed names. */
+export type RosterMode = "open" | "roster";
+
+/** A project's speaker roster, as `read_project_roster` and
+ * `save_project_roster` return it (`<PROJECT>/roster.json`). Names only:
+ * no ids and no voice embeddings, so this is not the rejected per-project
+ * voice store -- recognition stays the on-demand sibling scan. A project
+ * with no roster file reads as `{ mode: "open", names: [] }`. */
+export type ProjectRosterView = {
+  mode: RosterMode;
+  /** Normalized on the Rust side: trimmed, no blanks, no case-insensitive
+   * duplicates, in the operator's order. */
+  names: string[];
+};
+
 /** A meeting's `summary.md`, if anything has written one. Nothing in this
  * app generates summaries -- that needs a language model -- but the vault
  * has reserved the name since F1's first spec, so one written by hand is

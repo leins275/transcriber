@@ -1,0 +1,15 @@
+/* The picker wears whatever class its parent already gives the free-text
+   box -- the tag's name box, the popover's -- so both modes sit in the
+   layout identically. What follows is only the handful of things a <select>
+   needs on top of that, and it is scoped by element so it wins over the
+   parent's class without depending on the order the two stylesheets happen
+   to load in. */
+select.select {
+  /* Names are longer than the 12ch a typed name gets, and a select cannot
+     scroll its own text: it has to grow to the widest option instead, up to
+     a width that still reads as a label rather than a form field. */
+  width: auto;
+  min-width: 12ch;
+  max-width: 22ch;
+  cursor: pointer;
+}

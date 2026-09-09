@@ -245,6 +245,8 @@ pub fn run() {
             commands::speakers::cancel_diarization_model_download,
             commands::speakers::diarize_vault_entry,
             commands::speakers::diarize_labelled_meetings,
+            commands::roster::read_project_roster,
+            commands::roster::save_project_roster,
             commands::cancel_job,
             commands::prepare_update,
             commands::list_service_jobs,

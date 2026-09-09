@@ -31,6 +31,7 @@ import { projectCodes } from "./lib/vaultGroups";
 import { useChat } from "./state/useChat";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
+import { useProjectRoster } from "./state/useProjectRoster";
 import { useVault } from "./state/useVault";
 import type {
   AppError,
@@ -640,6 +641,13 @@ function App() {
     setSettingsOpen(false);
   }, []);
 
+  // The speaker roster of the open recording's project: what the transcript's
+  // name controls are allowed to offer. An unfiled recording has no project
+  // and therefore no roster, so the hook is handed `null` and reads nothing.
+  const { roster: projectRoster, save: saveProjectRoster } = useProjectRoster(
+    openEntry?.project ?? null,
+  );
+
   // The chat's project: the picked one while it still exists, else the
   // first project (the same fall-back rule the vault filter follows).
   const projects = projectCodes(vaultEntries);
@@ -745,6 +753,11 @@ function App() {
                   entry={openEntry}
                   projects={projectCodes(vaultEntries)}
                   projectSpeakers={projectSpeakers}
+                  projectRoster={projectRoster}
+                  // The hook is already bound to the open recording's
+                  // project; the page passes it back only so it never has to
+                  // guess which project it is editing.
+                  onSaveRoster={(_project, draft) => saveProjectRoster(draft)}
                   onBack={() => setOpenEntryId(null)}
                   onReveal={handleRevealVaultEntry}
                   onReadTranscript={readTranscript}

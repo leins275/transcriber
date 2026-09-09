@@ -109,6 +109,18 @@ pub const EXPORTS_DIR_NAME: &str = "exports";
 /// string as [`ACTION_ITEMS_DIR_NAME`].
 pub const CHATS_DIR_NAME: &str = "chats";
 
+/// Reserved project-level *file* holding the project's speaker roster
+/// (`<PROJECT>/roster.json`): a mode (`open`/`roster`) plus the list of
+/// names the app's speaker pickers offer. Names only -- no voice data, no
+/// segment ids -- so it is a different artifact from a per-project voice
+/// store.
+///
+/// Deliberately a file, not a directory: the listing considers only
+/// directories at the project level, so a file needs no listing exclusion
+/// and never surfaces as a bogus meeting. For the same reason it is absent
+/// from [`RESERVED_PROJECT_DIR_NAMES`], which names directories.
+pub const ROSTER_FILE_NAME: &str = "roster.json";
+
 /// Every project-level directory name that is *not* a meeting and must be
 /// skipped by the vault listing.
 ///

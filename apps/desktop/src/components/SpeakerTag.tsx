@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type FocusEvent } from "react";
+import { useEffect, useRef, useState, type FocusEvent } from "react";
+import { SpeakerNameField } from "./SpeakerNameField";
 import styles from "./SpeakerTag.module.css";
 
 export type SpeakerTagProps = {
@@ -14,6 +15,10 @@ export type SpeakerTagProps = {
    * datalist), never as buttons: a project can hold many more people than
    * this call does. */
   suggestions?: string[];
+  /** Present ⇒ the project keeps a roster and only these names may be given
+   * to a turn, so the editor becomes a picker over them. Undefined ⇒ the
+   * project names freely and the editor stays a text box. */
+  roster?: string[];
   /** Attribute this turn to `name`, or clear it with `null`. */
   onAssign: (name: string | null) => void;
   /** Rename `from` to `to` everywhere in the transcript. */
@@ -36,6 +41,10 @@ export type SpeakerTagProps = {
  * turn nobody has claimed — there is no ambiguity and nothing to lose, so a
  * typed name still commits on blur.
  *
+ * A project roster changes only where a name may come from — the editor
+ * becomes a picker over the project's names instead of a text box — never
+ * which of the two acts an edit is, nor the scope question it raises.
+ *
  * Presentational only: no invoke, no listen, no fetch.
  */
 export function SpeakerTag({
@@ -43,22 +52,22 @@ export function SpeakerTag({
   known,
   turnsHeld = 1,
   suggestions = [],
+  roster,
   onAssign,
   onRename,
 }: SpeakerTagProps) {
   const [mode, setMode] = useState<"idle" | "editing" | "choosing">("idle");
   const [draft, setDraft] = useState(speaker ?? "");
-  const inputRef = useRef<HTMLInputElement>(null);
   const narrowChoiceRef = useRef<HTMLButtonElement>(null);
-  const suggestionsId = useId();
 
   useEffect(() => {
-    if (mode === "editing") inputRef.current?.focus();
-    else if (mode === "choosing") narrowChoiceRef.current?.focus();
+    // The editor focuses itself on mount (`SpeakerNameField autoFocus`); only
+    // the hand-off to the scope question is this component's to make.
+    if (mode === "choosing") narrowChoiceRef.current?.focus();
   }, [mode]);
 
-  function commit() {
-    const trimmed = draft.trim();
+  function commit(value: string) {
+    const trimmed = value.trim();
     if (trimmed.length === 0) {
       // Clearing the box unattributes this turn rather than storing a
       // nameless speaker.
@@ -106,11 +115,15 @@ export function SpeakerTag({
     // Focus moving between the input and the chooser stays inside the tag and
     // decides nothing.
     if (event.currentTarget.contains(event.relatedTarget)) return;
-    if (mode === "choosing" || speaker !== null) {
+    // Only the free-text box needs a blur to commit: it has no other way
+    // out. A picker commits the moment a name is chosen, and reading its blur
+    // as a commit would turn abandoning the edit — Escape, which unmounts the
+    // focused select — into an assignment.
+    if (mode === "choosing" || speaker !== null || roster !== undefined) {
       cancel();
       return;
     }
-    commit();
+    commit(draft);
   }
 
   if (mode !== "idle") {
@@ -119,36 +132,28 @@ export function SpeakerTag({
         className={styles.tag}
         onBlur={handleBlur}
         onKeyDown={(event) => {
-          // On the wrapper, not the input, so Escape abandons from the
-          // chooser too.
+          // On the wrapper, not the editor, so Escape abandons from the
+          // chooser too — and so a picker, which is handed no Escape of its
+          // own here, abandons the same way.
           if (event.key === "Escape") {
             event.preventDefault();
             cancel();
           }
         }}
       >
-        <input
-          ref={inputRef}
-          className={styles.input}
+        <SpeakerNameField
           value={draft}
-          readOnly={mode === "choosing"}
-          aria-label={speaker === null ? "Name this speaker" : "Edit speaker for this turn"}
-          list={suggestions.length > 0 ? suggestionsId : undefined}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              commit();
-            }
-          }}
+          onChange={setDraft}
+          onCommit={commit}
+          // No onCancel and no commitOnBlur: Escape and what leaving the
+          // editor means are both decided on the wrapper above, the only
+          // place that can see the scope chooser as well.
+          ariaLabel={speaker === null ? "Name this speaker" : "Edit speaker for this turn"}
+          className={styles.input}
+          suggestions={suggestions}
+          roster={roster}
+          autoFocus
         />
-        {suggestions.length > 0 && (
-          <datalist id={suggestionsId}>
-            {suggestions.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        )}
         {mode === "choosing" && speaker !== null ? (
           <span className={styles.scope}>
             <button
@@ -165,11 +170,17 @@ export function SpeakerTag({
           </span>
         ) : (
           <span className={styles.hint}>
-            {speaker === null
-              ? "Enter to name"
-              : turnsHeld <= 1
-                ? "this turn only · Enter to save"
-                : "Enter, then choose the scope"}
+            {roster === undefined
+              ? speaker === null
+                ? "Enter to name"
+                : turnsHeld <= 1
+                  ? "this turn only · Enter to save"
+                  : "Enter, then choose the scope"
+              : speaker === null
+                ? "from the project roster"
+                : turnsHeld <= 1
+                  ? "this turn only · from the project roster"
+                  : "choose a name, then the scope · from the project roster"}
           </span>
         )}
       </span>

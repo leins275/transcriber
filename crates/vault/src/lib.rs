@@ -49,6 +49,8 @@
 //!     reports/<YYMMDD>/                 (project-level, F2's LLM jobs)
 //!     chats/<id>.json                   (project-level, saved project-chat
 //!                                        conversations)
+//!     roster.json                       (project-level, the speaker roster:
+//!                                        mode + allowed names, no voice data)
 //!   unsorted/
 //!     <YYMMDD of ingest> - <original stem>/
 //!       source.<ext>
@@ -62,11 +64,13 @@
 //! extraction job's tree, still reserved), `facts` (legacy — the retired
 //! facts job's tree, still reserved), `exports` (legacy — the old dated
 //! export tree; exports now land in the meeting folder itself) (all inside
-//! a meeting folder), `reports` (project-level) and `unsorted` are
-//! reserved names owned by the vault contract.
+//! a meeting folder), `reports` and `roster.json` (project-level) and
+//! `unsorted` are reserved names owned by the vault contract.
 //!
-//! Only the project *level* needs a listing exclusion, since [`list`] never
-//! recurses into a meeting folder: `<PROJECT>/reports/`, plus the legacy
+//! Only project-level *directories* need a listing exclusion, since
+//! [`list`] never recurses into a meeting folder and considers only
+//! directories (so the project-level `roster.json` file is skipped for
+//! free): `<PROJECT>/reports/`, plus the legacy
 //! `<PROJECT>/action items/` and `<PROJECT>/facts/` trees an older build
 //! wrote before the per-meeting anchor (kept on disk, no longer read or
 //! written).
@@ -150,6 +154,6 @@ pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting}
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{
     ACTION_ITEMS_DIR_NAME, CHATS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME,
-    REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, SUMMARY_FILE_NAME,
+    REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES, ROSTER_FILE_NAME, SOURCE_STEM, SUMMARY_FILE_NAME,
     TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };

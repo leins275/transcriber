@@ -32,6 +32,7 @@ import type {
   LlmModelsView,
   MeetingUpdate,
   NoteView,
+  ProjectRosterView,
   SearchResultView,
   ServiceStatusView,
   SettingsView,
@@ -183,6 +184,16 @@ export const api = {
     call<void>("rename_chat", { project, chatId, title }),
   deleteChat: (project: string, chatId: string): Promise<void> =>
     call<void>("delete_chat", { project, chatId }),
+  // A project's speaker roster, stored as `<PROJECT>/roster.json`. A project
+  // without the file reads as the open roster with no names -- absence is the
+  // normal state, not an error.
+  readProjectRoster: (project: string): Promise<ProjectRosterView> =>
+    call<ProjectRosterView>("read_project_roster", { project }),
+  /** Writes the roster and answers with the normalized view actually stored
+   * (trimmed, blanks dropped, case-insensitive duplicates collapsed), which
+   * is what the editor should keep. */
+  saveProjectRoster: (project: string, roster: ProjectRosterView): Promise<ProjectRosterView> =>
+    call<ProjectRosterView>("save_project_roster", { project, roster }),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

@@ -258,6 +258,28 @@ through the rest, top to bottom; every step is skipped once done:
 Per meeting, the overflow menu's **Identify speakers** runs the same job on
 demand (disabled, pointing here, until step 1 is done).
 
+**Project speaker roster.** Independent of the above -- it needs no
+download and no GPU. Naming a voice normally offers a free-text box, which
+is how "Anna", "anna" and "Ana" end up as three people in one project. Open
+any meeting in a project and click **Project speakers** beside the project
+code to keep a list of who can be named there:
+
+- **Anyone -- type any name** (the default) leaves naming as it is: free
+  text, with the names already used in the project offered as hints.
+- **Only the roster below** turns every speaker control in that project's
+  transcripts into a drop-down over the roster -- no free text, no typos.
+  Adding a new person means coming back to this panel.
+
+Add names one at a time, or press **Add names already used in this
+project** to pull in every name you have assigned in its other meetings;
+**Remove** drops one. The list is saved as `roster.json` in the project
+folder of your meetings vault, so it travels with the vault and can be
+edited by hand. It is a list of names only -- no voice data -- and it
+changes nothing about existing labels: a name assigned before the roster
+existed (or pre-named by speaker recognition) stays as it is and is still
+shown as the chosen name. Unfiled recordings (`unsorted`) have no project,
+so they always take free text.
+
 **How the models get into the installer.** The three pinned pyannote
 snapshots (~32 MB; MIT and CC BY 4.0, attribution in the service README)
 are **committed** under `apps/desktop/src-tauri/resources/models/diarization/`

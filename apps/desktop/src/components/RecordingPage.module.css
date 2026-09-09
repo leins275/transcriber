@@ -25,6 +25,13 @@
   color: var(--text-faint);
 }
 
+/* The project's roster editor opens from the crumb, beside the project pill
+   it governs: it is a project-level setting, not one of this recording's
+   actions, so it stays out of the toolbar and the overflow menu. */
+.rosterToggle {
+  color: var(--text-muted);
+}
+
 .titleBlock {
   min-width: 0;
   display: flex;

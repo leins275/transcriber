@@ -70,6 +70,10 @@ pub mod chats;
 /// switch, and the per-meeting and vault-wide "Identify speakers" jobs.
 pub mod speakers;
 
+/// The per-project speaker roster (`<PROJECT>/roster.json`): the mode and
+/// the names the app's speaker pickers offer.
+pub mod roster;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever

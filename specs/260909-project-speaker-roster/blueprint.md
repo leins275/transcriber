@@ -2,7 +2,7 @@
 slug: 260909-project-speaker-roster
 created: 2026-09-09
 status: approved
-base_ref: <git sha, recorded at blueprint approval>
+base_ref: 0cdd13df2dc6ac7a4d1254bbd35e632feac954f3
 ---
 
 # Blueprint: Project speaker roster
@@ -136,7 +136,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 
 ## Tasks
 
-### [ ] T1: Roster file contract and the two Tauri commands  [deps: —]
+### [x] T1: Roster file contract and the two Tauri commands  [deps: —]
 
 - **Files**: `crates/vault/src/paths.rs`, `crates/vault/src/lib.rs`, `apps/desktop/src-tauri/src/commands/roster.rs`, `apps/desktop/src-tauri/src/commands/chats.rs`, `apps/desktop/src-tauri/src/commands.rs`, `apps/desktop/src-tauri/src/lib.rs`
 - **Test first**: `apps/desktop/src-tauri/tests/roster.rs` (uses `tests/common/mod.rs`'s `build_state`, `new_tempdir`, `run`; a project is a directory created under the temp root; handlers reached as `transcriber_desktop_lib::commands::roster::{read_project_roster_handler, save_project_roster_handler}`) — cases: reading a project with no file returns open mode and no names (FR-1); save then read round-trips mode `roster` and names, and `<root>/ACME/roster.json` exists with `schema_version` 1 (FR-1); a garbage `roster.json` and a 65 KiB one read as open/empty (FR-1); saving `["  Anna ", "anna", "", "Maxim", "Maxim"]` returns and stores `["Anna", "Maxim"]` (FR-2); a 201-char name and a 501-name list are refused with `invalid_argument` and no file appears (FR-2); `unsorted`, `chats`, `""`, `..`, `A/B`, `A:B` and an unknown project are refused with `invalid_argument` and nothing is created (FR-3); with `meetings_root: None` the read fails `not_configured` (FR-3); `list_chats` on the same project still works after the `chats_dir` split (FR-3, regression guard).
@@ -144,7 +144,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: `cargo test -p transcriber-desktop --test roster` and `cargo test -p vault` pass; `make lint` and `make type` pass (clippy `-D warnings`).
 
-### [ ] T2: TS roster types, API wrappers and pure roster helpers  [deps: —]
+### [x] T2: TS roster types, API wrappers and pure roster helpers  [deps: —]
 
 - **Files**: `apps/desktop/src/types.ts`, `apps/desktop/src/api.ts`, `apps/desktop/src/lib/roster.ts`
 - **Test first**: `apps/desktop/src/lib/roster.test.ts` — cases: `normalizeRosterNames(["  Anna ", "anna", "", "Maxim", "Maxim"])` is `["Anna", "Maxim"]` — the same fixture as T1 (FR-2); `addRosterName` appends a trimmed new name, ignores a blank one and a case-insensitive duplicate, and never mutates its input (FR-2, FR-6); `removeRosterName` drops exactly that name (FR-6); `mergeRosterNames(roster, ["maxim", "Olga"])` appends only `"Olga"` (FR-6); `pickerSource(undefined, sib)` and `pickerSource({mode:"open"}, sib)` give `{ roster: undefined, suggestions: sib }` (FR-5); `pickerSource({mode:"roster", names}, sib)` gives `{ roster: names, suggestions: [] }` (FR-4); `EMPTY_ROSTER` is open with no names (FR-1).
@@ -152,7 +152,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: `npm --prefix apps/desktop run test -- src/lib/roster.test.ts` passes; `make type` and `make lint` pass.
 
-### [ ] T3: `SpeakerNameField` — the shared free-text-or-select name control  [deps: —]
+### [x] T3: `SpeakerNameField` — the shared free-text-or-select name control  [deps: —]
 
 - **Files**: `apps/desktop/src/components/SpeakerNameField.tsx`, `apps/desktop/src/components/SpeakerNameField.module.css`
 - **Test first**: `apps/desktop/src/components/SpeakerNameField.test.tsx` — cases: without `roster`, renders a textbox with the given accessible name whose `list` points at a datalist holding every suggestion, and no datalist when suggestions are empty (FR-5); typing then Enter calls `onCommit` with the typed value, Escape calls `onCancel`, blur commits only when `commitOnBlur` (FR-5); with `roster: ["Anna", "Maxim"]`, renders a combobox with the same accessible name, a placeholder option and exactly those names, and no textbox (FR-4); selecting "Anna" calls `onCommit("Anna")` once (FR-4); with `value: "Olga"` not in the roster, "Olga" is the selected option and the roster names are still offered (FR-4); Escape on the select calls `onCancel` and never `onCommit` (FR-4); with `roster: []` the select has one disabled option and changing it never calls `onCommit` (FR-4); `autoFocus` focuses the rendered control in either mode.
@@ -160,7 +160,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/SpeakerNameField.test.tsx` passes; `make type`, `make lint`, `make format` pass.
 
-### [ ] T4: `SpeakerTag` takes a roster  [deps: T3]
+### [x] T4: `SpeakerTag` takes a roster  [deps: T3]
 
 - **Files**: `apps/desktop/src/components/SpeakerTag.tsx`
 - **Test first**: `apps/desktop/src/components/SpeakerTag.roster.test.tsx` — cases: with no `roster`, an unattributed turn opens a textbox "Name this speaker" with the suggestions datalist, typing "Olga" + Enter calls `onAssign("Olga")` (FR-5, guards today's flow); with `roster: ["Anna", "Maxim"]`, an unattributed turn opens a combobox "Name this speaker", choosing "Anna" calls `onAssign("Anna")` and the tag returns to its button state (FR-4); with `speaker: "Maxim"` and the same roster, the combobox is "Rename Maxim" preselected to "Maxim", choosing "Anna" calls `onRename("Maxim", "Anna")` and never `onAssign` (FR-4); with `speaker: "Olga"` (off-roster) the combobox shows "Olga" selected (FR-4); Escape closes the editor with neither callback called (FR-4); the `known` "Attribute this turn to …" buttons still call `onAssign(name)` in roster mode (FR-4); roster mode hint reads that names come from the project roster.
@@ -168,7 +168,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/SpeakerTag.roster.test.tsx src/components/TranscriptViewer.test.tsx` passes (the existing viewer suite is the open-mode regression guard); `make type`, `make lint` pass.
 
-### [ ] T5: `SelectionSpeakerMenu` takes a roster  [deps: T3]
+### [x] T5: `SelectionSpeakerMenu` takes a roster  [deps: T3]
 
 - **Files**: `apps/desktop/src/components/SelectionSpeakerMenu.tsx`
 - **Test first**: `apps/desktop/src/components/SelectionSpeakerMenu.roster.test.tsx` — cases: with `roster: ["Anna", "Maxim"]` the menu renders the `known` buttons plus a combobox "Attribute selection to a speaker" listing the roster, and no textbox (FR-4); choosing "Maxim" calls `onAssign("Maxim")` (FR-4); with `roster: []` the combobox has one disabled option and nothing can fire (FR-4); with no `roster` the textbox "Attribute selection to a new speaker" and its datalist render as before (FR-5).
@@ -176,7 +176,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/SelectionSpeakerMenu.roster.test.tsx src/components/SelectionSpeakerMenu.test.tsx` passes; `make type`, `make lint` pass.
 
-### [ ] T6: `TranscriptViewer` threads the roster to both controls  [deps: T2, T4, T5]
+### [x] T6: `TranscriptViewer` threads the roster to both controls  [deps: T2, T4, T5]
 
 - **Files**: `apps/desktop/src/components/TranscriptViewer.tsx`
 - **Test first**: `apps/desktop/src/components/TranscriptViewer.roster.test.tsx` — cases: with `roster: { mode: "roster", names: ["Anna", "Maxim"] }`, clicking an unattributed turn's "Add speaker" opens a combobox and choosing "Anna" calls `onSaveSpeakers` with that turn's segment ids mapped to "Anna" (FR-4); with the same roster, selecting text and choosing "Maxim" from the selection menu's combobox saves exactly the selected ids (FR-4, selection built as in `TranscriptViewer.test.tsx`); with `roster: { mode: "open", names: [...] }` and `suggestedSpeakers: ["Olga"]`, the textbox with an "Olga" datalist renders and no combobox exists (FR-5); with `roster` undefined the behaviour is identical to open mode (FR-5).
@@ -184,7 +184,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/TranscriptViewer.roster.test.tsx src/components/TranscriptViewer.test.tsx` passes; `make type`, `make lint` pass.
 
-### [ ] T7: `ProjectRosterPanel` — the roster editor  [deps: T2]
+### [x] T7: `ProjectRosterPanel` — the roster editor  [deps: T2]
 
 - **Files**: `apps/desktop/src/components/ProjectRosterPanel.tsx`, `apps/desktop/src/components/ProjectRosterPanel.module.css`
 - **Test first**: `apps/desktop/src/components/ProjectRosterPanel.test.tsx` — cases: renders the radio group "Who can be named in this project" with the persisted mode checked, one "Remove <name>" button per name, the "Add a name" textbox, the seed button and Save/Cancel (FR-6); typing "  Olga " + Enter adds "Olga" to the list once, typing "olga" again adds nothing (FR-6, FR-2); "Remove Anna" drops Anna (FR-6); "Add names already used in this project" with `siblingNames: ["Maxim", "Olga"]` and roster `["Maxim"]` appends only "Olga", and the button is disabled when every sibling name is already listed (FR-6); switching the radio to "Only the roster below" and pressing Save calls `onSave` with `{ mode: "roster", names }` and then `onClose` (FR-6); when `onSave` rejects with `{ message: "boom" }`, an alert shows "boom" and `onClose` is not called (FR-6); Cancel calls `onClose` without `onSave` (FR-6).
@@ -192,7 +192,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/ProjectRosterPanel.test.tsx` passes; `make type`, `make lint`, `make format` pass.
 
-### [ ] T8: `useProjectRoster` hook  [deps: T2]
+### [x] T8: `useProjectRoster` hook  [deps: T2]
 
 - **Files**: `apps/desktop/src/state/useProjectRoster.ts`
 - **Test first**: `apps/desktop/src/state/useProjectRoster.test.ts` (`vi.mock("../api")` exactly as `useChat.test.ts` does; `renderHook`) — cases: with project `"ACME"` the hook calls `readProjectRoster("ACME")` once and exposes the returned roster (FR-7); with `null` it never calls the API and exposes `EMPTY_ROSTER` (FR-7); when the read rejects, the roster is `EMPTY_ROSTER` and nothing throws (FR-7); changing the project re-reads and a stale late response for the previous project is ignored (FR-7); `save(roster)` calls `saveProjectRoster("ACME", roster)` and stores the normalized view it returns; a rejected save propagates to the caller and leaves the roster unchanged (FR-6, FR-7).
@@ -200,7 +200,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`
 - **Done when**: `npm --prefix apps/desktop run test -- src/state/useProjectRoster.test.ts` passes; `make type`, `make lint` pass.
 
-### [ ] T9: `RecordingPage` — trigger, panel and roster pass-through  [deps: T6, T7]
+### [x] T9: `RecordingPage` — trigger, panel and roster pass-through  [deps: T6, T7]
 
 - **Files**: `apps/desktop/src/components/RecordingPage.tsx`, `apps/desktop/src/components/RecordingPage.module.css`
 - **Test first**: `apps/desktop/src/components/RecordingPage.roster.test.tsx` (the `renderPage` harness from `RecordingPage.test.tsx`, plus `projectRoster` and `onSaveRoster` defaults) — cases: a "Project speakers" button renders beside the project pill for a project entry and not for `project: null` (FR-6); clicking it shows the roster panel, clicking again hides it (FR-6); saving from the panel calls `onSaveRoster("RDDM", roster)` and the panel closes (FR-6); with `projectRoster: { mode: "roster", names: ["Anna"] }` and a transcript, "Add speaker" on a turn opens a combobox listing "Anna" (FR-4 end to end through the page); with `project: null` and the same roster, the textbox renders instead (FR-5); the panel's seed button receives `projectSpeakers` as sibling names (FR-6).
@@ -208,7 +208,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/components/RecordingPage.roster.test.tsx src/components/RecordingPage.test.tsx` passes; `make type`, `make lint`, `make format` pass.
 
-### [ ] T10: `App` wiring and documentation  [deps: T1, T8, T9]
+### [x] T10: `App` wiring and documentation  [deps: T1, T8, T9]
 
 - **Files**: `apps/desktop/src/App.tsx`, `CLAUDE.md`, `docs/setup.md`
 - **Test first**: `apps/desktop/src/App.roster.test.tsx` (the `mockIPC` harness from `App.test.tsx`: `get_settings` with a meetings root, `service_status` ready, `list_vault` returning one `RDDM` entry and one `unsorted` entry, `read_transcript` returning a one-segment transcript) — cases: opening the `RDDM` recording invokes `read_project_roster` with `{ project: "RDDM" }` exactly once, and when it answers `{ mode: "roster", names: ["Anna"] }` the transcript's "Add speaker" opens a combobox listing "Anna" (FR-7, FR-4); opening the `unsorted` recording never invokes `read_project_roster` and "Add speaker" opens a textbox (FR-7, FR-5); saving from the roster panel invokes `save_project_roster` with `{ project: "RDDM", roster }` and the combobox then lists the names the command returned (FR-7); when `read_project_roster` throws, the page still opens in open mode (FR-7).
@@ -216,7 +216,7 @@ Shape: `{"schema_version": 1, "mode": "open" | "roster", "names": ["Anna", "Maxi
 - **Skills**: `testing-toolkit:testing-best-practices`, `frontend-toolkit:internal-ui`
 - **Done when**: `npm --prefix apps/desktop run test -- src/App.roster.test.tsx src/App.test.tsx` passes; `make format`, `make lint`, `make type`, `make test` all pass.
 
-### [ ] T11: Verification — drive the flow in the running app  [deps: T10]
+### [ ] T11: Verification — drive the flow in the running app (deferred to the batch's consolidated UI validation, C.6)  [deps: T10]
 
 - **Files**: —
 - **Test first**: not applicable (verification task); evidence is the checks below, mapped to FR-1, FR-4, FR-5, FR-6 and the `desktop` profile's Verification section.
