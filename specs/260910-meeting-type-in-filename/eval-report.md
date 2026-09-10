@@ -1,7 +1,7 @@
 ---
 slug: 260910-meeting-type-in-filename
 base_ref: dd69f260d62c0b856a148ce3b1699ee0e95603e2
-round: 1
+round: 2
 ---
 
 # Evaluation report: Meeting type as an optional fourth section of the filename
@@ -12,9 +12,11 @@ round: 1
 |---|---|---|---|
 | blocker | 0 | 0 | 0 |
 | major | 0 | 0 | 0 |
-| minor | 4 | 0 | 0 |
+| minor | 0 | 4 | 0 |
 
 The diff implements the blueprint. `crates/vault` remains the single authority: `classify_filename` splits on every `-`, trims ASCII spaces only, gates on section count before the validators (extension → count → code → date → title → type), and routes 5+ sections to `unsorted` with `TooManySeparators` — never an error. The four `Rejection` variants, `validate_kind`, the three-argument `meeting_folder_name`, its inverse `parse_meeting_folder_name`, the `MeetingUpdate.kind` seam with the `ReservedSeparator` guard placed before `ensure_project_dir`, and the app/UI pass-through are all present and each is pinned by tests written against the public API. The three parsers (`vault::parse_meeting_folder_name`, `lib/meetingName.ts`, `lib/fileName.ts`) agree on grammar, trimming and section counts; I found no path on which a type is lost or corrupted through the folder-name round trip. Verified locally on Windows: `cargo test -p vault --test acceptance --test parse_filename --test paths --test error_vocabulary --test parse_fuzz --test ingest --test title` (all green, 140 cases), `cargo test -p transcriber-desktop --test meeting_type` (8/8), and vitest on the seven affected files (116/116). Nothing under `services/` is touched. The remaining findings are two documentation/coverage gaps and two behavioural consequences worth an explicit decision — none blocks shipping.
+
+**Round 2 (commit `d0c5cc7`)**: all four minors verified fixed against the current code; the `paths.rs` recovery incident checked independently and found clean (see the Round 2 section at the end). No new findings.
 
 ## Test-mismatch adjudication (from test-wave.md)
 
@@ -68,12 +70,12 @@ The diff implements the blueprint. `crates/vault` remains the single authority: 
 |---|---|---|---|
 | FR-1 grammar, order, trimming, `ParsedName.kind` | `crates/vault/src/parse.rs:74-136` | `tests/parse_filename.rs` (34 cases incl. order, tab, empty type, verbatim stem); `tests/acceptance.rs::fr02_fr03_pure_parser_splits_on_every_separator…`, `fr05_calendar_rejections…` | ✓ |
 | FR-2 four variants, Display, `all()==13`, `validate_kind` | `error.rs:251-272,288-295,326-337,369-373`; `title.rs:75-99` | `tests/error_vocabulary.rs` (13 count, pairwise distinct, 5 Display cases, 8 `validate_kind` cases); `VaultError::all_kinds()==12` retained | ✓ |
-| FR-3 typed folder name + inverse, re-exports, crate docs | `paths.rs:277-334`; `lib.rs:11-52,178`; `README.md:22-57` | `tests/paths.rs` (build, parse, compact, 6-row round trip, 7 non-parsing names, unsorted hyphens kept); `acceptance.rs::fr03_…reads_back_through_the_crate_root_api` | ✓ (tab-trim unpinned → E4) |
+| FR-3 typed folder name + inverse, re-exports, crate docs | `paths.rs:277-334`; `lib.rs:11-52,178`; `README.md:22-57` | `tests/paths.rs` (build, parse, compact, 6-row round trip, 7 non-parsing names, unsorted hyphens kept, tab pin added in round 2); `acceptance.rs::fr03_…reads_back_through_the_crate_root_api` | ✓ |
 | FR-4 ingest lands typed folder; 5+ → unsorted; collisions | `ingest.rs:298-309` | `acceptance.rs::fr04_*` (4 cases, exact tree via `list_files`) | ✓ |
 | FR-5 path cap incl. type, at ingest and rename | pre-existing `check_len` / `check_move_length` (no new code, as planned) | `tests/paths.rs::check_len_accepts_a_typed_destination_of_exactly_260…`, `…pushes_a_fitting_destination_past_the_cap…`; `acceptance.rs::fr05_a_type_that_overruns…creates_nothing`, `fr05_a_rename_whose_typed_target…moves_nothing` | ✓ |
 | FR-6 rename edits/strips type, `ReservedSeparator` before any move | `manage.rs:76-87,197-208,222-225,237-238` | `acceptance.rs::fr06_*` (10 cases); inline `manage.rs` tests (trim, refusal creates no project dir) | ✓ |
-| FR-7 IPC pass-through, unsorted reason in job message, CLAUDE.md | `commands.rs:1127-1129`; `commands/meetings.rs:357,378`; `jobs.rs:607,943-953`; `CLAUDE.md:69` | `apps/desktop/src-tauri/tests/meeting_type.rs` (8 cases); c4 by inspection | ✓ code; doc ordinal wrong → E1 |
-| FR-8 TS mirrors, `MeetingUpdate.kind`, `api.ts`, editor, page pill, row tag | `fileName.ts:37-46`; `meetingName.ts:46-67`; `types.ts:283-287`; `api.ts:97`; `MeetingEditor.tsx` (Type field, guard, preview, payload); `RecordingPage.tsx:307`; `VaultRow.tsx:74-77` | `fileName.test.ts` (10), `meetingName.test.ts` (16), `MeetingType.test.tsx` (16); untouched `MeetingEditor.test.tsx` / `RecordingPage.test.tsx` / `VaultRow.test.tsx` still green | ✓ except `api.ts` → E2 |
+| FR-7 IPC pass-through, unsorted reason in job message, CLAUDE.md | `commands.rs:1127-1129`; `commands/meetings.rs:357,378`; `jobs.rs:607,943-953`; `CLAUDE.md:69` | `apps/desktop/src-tauri/tests/meeting_type.rs` (8 cases); c4 by inspection | ✓ (ordinal corrected in round 2) |
+| FR-8 TS mirrors, `MeetingUpdate.kind`, `api.ts`, editor, page pill, row tag | `fileName.ts:37-46`; `meetingName.ts:46-112`; `types.ts:283-287`; `api.ts:97`; `MeetingEditor.tsx` (Type field, guard, preview, payload); `RecordingPage.tsx:258,307`; `VaultRow.tsx:41,66,76` | `fileName.test.ts` (11), `meetingName.test.ts` (23), `MeetingType.test.tsx` (18), `api.test.ts::api.updateVaultEntry` (2); untouched `MeetingEditor.test.tsx` / `RecordingPage.test.tsx` / `VaultRow.test.tsx` still green | ✓ |
 | FR-9 no migration; consequences listed; probe re-run | — (documentation) | Probe re-run 2026-09-10 over `D:\SynologyDrive\PARA\03-Resources\Call Recordings`: 54 folders, exactly the six predicted (list below) | ✓ |
 | FR-10 service untouched | — | `git diff --stat` touches nothing under `services/` | ✓ |
 | NFR-1 purity, no panic, fuzz green | `parse.rs`, `paths.rs` (no fs, no clock) | `tests/parse_fuzz.rs` green unchanged (2 cases / 10,000 names) | ✓ |
@@ -125,3 +127,53 @@ Nothing new to report. The only new IPC input, `kind`, is trimmed and validated 
 - Tests are behaviour-first throughout: exact on-disk trees via `list_files`, hardcoded expected strings in the round-trip table (not recomputed), `FakeService` as the only double and only for the out-of-process service, `getByLabelText` / `getByRole` queries in the React tests, and the editor payload asserted with `toStrictEqual` so the "no `kind` key when blank" contract is real.
 - `parse_meeting_folder_name` is documented as display-side (six-digit check, no calendar validation) with `date::validate` named as the authority — the split of responsibilities is explicit, not accidental.
 - The MeetingEditor hint is a single shared `<p>` bound through `aria-describedby` to whichever field is invalid; the NUL sentinels survived the edit.
+
+---
+
+## Round 2 — fix verification (commit `d0c5cc7`)
+
+Scope: the four round-1 minors and the `paths.rs` recovery incident. Only the files in the fix scope were re-read; nothing else was re-reviewed. The whole feature landed as the single commit `d0c5cc7`, so every claim below is verified against that commit's content, not against a round-1 → round-2 delta.
+
+### Per-finding verdicts
+
+| Finding | Claim | Verdict | Evidence |
+|---|---|---|---|
+| E1 | fixed | **fixed** | `CLAUDE.md:69` now reads "the meeting folder's own third section"; `commands/meetings.rs:342` reads "the folder name's third section". Both agree with `types.ts:283`. No other "fourth" remains in those files. |
+| E2 | fixed | **fixed** | `api.test.ts:203-268`, `describe("api.updateVaultEntry")`: case 1 sends `kind: "Retro"` and asserts the invoke payload with `toContainEqual` including `kind: "Retro"`; case 2 omits `kind` and asserts the payload contains `kind: null`. The mutation claim holds: `toContainEqual` uses `toEqual` semantics, under which a payload `kind: undefined` (from dropping `?? null`) or a missing `kind` key does **not** equal `null`, so either mutation fails the second case. 20/20 in the file. |
+| E3 | fixed | **fixed** (design decision recorded in code, see analysis below) | `meetingName.ts:65-98`: private `parseUnsortedName` (first hyphen only, `kind` always `null`, date must be six digits) and exported `parseEntryName(meetingName, project)` routing `project === null` to it. `RecordingPage.tsx:258` and `VaultRow.tsx:41,66` call `parseEntryName(entry.meeting_name, entry.project)`. `parseMeetingName` (`:46-53`) and `meetingEditDefaults` (`:110-112`) unchanged from round 1. Pinned by `meetingName.test.ts::parseEntryName` (5 cases) and `MeetingType.test.tsx` (page + row with `project: null`). |
+| E4 | fixed | **fixed** | `crates/vault/tests/paths.rs:276-285` (`260812\t- Security issue`, typed variant → `None`); `meetingName.test.ts:62-69` (same two → `null`) and `:58-60` (`260812 - - K` → `null`); `fileName.test.ts:79-85` (`ELS -\t260812 - T.mp4` → `null`). `cargo test -p vault --test paths`: 23/23. |
+
+### E3 — is the asymmetry sound?
+
+The question was whether routing display through `parseEntryName` while leaving `meetingEditDefaults` on the full grammar breaks either of two flows. Checked against the code:
+
+1. **A typed meeting under a project still displays correctly.** `parseEntryName(name, "ELS")` is exactly `parseMeetingName(name)`; the pill/tag path is unchanged. `MeetingType.test.tsx` keeps its typed-entry page and row cases (default `buildEntry` has `project: "ELS"`) and they pass; `RecordingPage.test.tsx` 36/36, `VaultRow.test.tsx` 9/9. The `VaultMeetingView.project` field is `Option<String>` in Rust (`commands.rs:156`) and `string | null` in `types.ts:116`, so an unsorted entry always arrives as `null`, never `undefined` — the `=== null` test in `parseEntryName` cannot misroute.
+2. **An unsorted meeting can still be re-filed in one step.** `meetingEditDefaults("260910 - ELS - 260812")` seeds date `260910`, title `ELS`, type `260812` — all three hyphen-free, so the editor's separator guard stays off and Save is enabled as soon as a project is chosen; the result `ELS/260910 - ELS - 260812` is accepted by `rename_meeting`. Had the form used the unsorted reader instead, the seeded title `ELS - 260812` would trip the `-` guard and force a manual edit first. A 2-section unsorted name seeds identically under both readers. A 5+-section unsorted name seeds `{ date: "", title: <whole name> }` exactly as FR-8 c2 requires — that criterion is what pins `meetingEditDefaults` to the full grammar, so the fixer was right not to touch it.
+3. **The Rust contract is untouched.** `parse_meeting_folder_name` remains the exact mirror of `parseMeetingName`; `unsorted_folder_name` still keeps every hyphen (FR-3 c4). The decision lives only in the display layer, where the blueprint is silent about unsorted entries.
+
+Verdict: sound. One residual worth knowing, not a finding: for an unsorted folder whose stem holds exactly one hyphen, the page heading reads `ELS - 260812` while the Rename form it opens seeds Title `ELS` / Type `260812`. Both are defensible (the heading is the verbatim stem; the form is the one-click re-file), and the doc comment at `meetingName.ts:88-91` records why. If that ever bothers the operator, the alternative is a project-aware `meetingEditDefaults`, at the cost of the one-step re-file. The blueprint's Assumptions section was not amended; the decision is recorded in the module doc instead, which is where the next reader of the code will look.
+
+### E4 — the fixer's correction of the round-1 suggestion
+
+The round-1 suggestion named `260812 -\tTitle` as a failing input. That was wrong, and the fixer's reasoning is right: splitting on `-` and trimming ASCII spaces gives `["260812", "\tTitle"]`; the date is six digits and the title is non-empty (it merely begins with a tab), so all three parsers return a parsed result with the tab inside the title. Only a tab on the date side (`260812\t- Title` → date `260812\t`, seven characters, not all digits) makes the name fail. The committed pins use the date-side form in all three files, which is the form a `.trim()` / `str::trim` swap would silently flip from `None` to `Some` — so the pins do guard the invariant they were asked to guard.
+
+### `crates/vault/src/paths.rs` integrity (the recovery incident)
+
+The file at `d0c5cc7` was recovered from `target/doc/src/vault/paths.rs.html` after a `git checkout --` discarded the uncommitted implementation. Verified independently:
+
+- **Diff against base is exactly the feature.** `git diff dd69f260 d0c5cc7 -- crates/vault/src/paths.rs` contains two hunks only: the module-doc header gains the "including the meeting folder name's optional type section and its reader (FR-3)" clause, and the block at lines 264-334 replaces the two-argument `meeting_folder_name` with the three-argument one plus `MeetingFolderName` and `parse_meeting_folder_name`. Every other line — all constants, `contained_child`, `simplify_extended_prefix`, `is_plain_drive_path`, `is_safe_component`, `check_len`, `unsorted_folder_name`, `sanitize_unsorted_stem`, `is_illegal`, `suffixed`, both inline tests — is byte-identical to base by construction of the diff. Nothing was truncated: the file is 416 lines (base 353 + the 63 added), ends with `}\n`, is LF-only (`cat -A` shows no `^M`), and contains no HTML entities (the only `&…` match is Rust's `&str`).
+- **Line-for-line the same file round 1 reviewed.** Round 1 cited `paths.rs:277-334` for FR-3, `:314` for `trim_matches(' ')` and `:339` for `unsorted_folder_name`; all three land on those exact lines at `d0c5cc7`.
+- **Doc comments intact.** Every `pub` item carries its doc (the crate denies `missing_docs`, and `cargo doc -p vault --no-deps` builds). The seven doc warnings it emits are all pre-existing at base — five in the untouched `list.rs`, two unresolved intra-doc links at `manage.rs:15` and `title.rs:25` that exist verbatim in base — none in `paths.rs`.
+- **Logic matches the blueprint.** FR-3: split on every `-`, `trim_matches(' ')` per section, `[date, title]` → untyped, `[date, title, kind]` → typed, anything else `None`; date exactly six ASCII digits; empty title or empty `Some(kind)` → `None`; pure, no clock, no fs, no panic path (slice pattern match, no indexing). FR-5 needs no code in this file (pre-existing `check_len` measures the full destination, unchanged). `cargo test -p vault --test paths` 23/23 and `cargo clippy -p vault --all-targets -- -D warnings` clean.
+
+Verdict: **correct and complete**. Nothing missing, nothing altered beyond the feature hunks.
+
+### Tests run this round
+
+- `cargo test -p vault --test paths` — 23 passed.
+- `cargo clippy -p vault --all-targets -- -D warnings` — clean; `cargo doc -p vault --no-deps` — builds (7 pre-existing warnings, none in fix-scope files).
+- `npx vitest run src/lib/meetingName.test.ts src/lib/fileName.test.ts src/api.test.ts src/components/MeetingType.test.tsx src/components/RecordingPage.test.tsx src/components/VaultRow.test.tsx` — 6 files, 117 passed.
+
+### New findings introduced by the fixes
+
+None. `parseEntryName` adds one pure function with one boolean branch; no new IPC surface, no new I/O, no new dependency. Strict-skill check: the new tests query by role/label (`getByRole("heading", …)`), hardcode expected values, and use no in-process doubles; the UI change reuses the existing `.pill` class and adds no styling.
