@@ -3,6 +3,16 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.25.0 — 2026-09-10
+
+### Bug fixes
+
+- **vault**: An unsorted meeting is never read as carrying a type
+
+### Features
+
+- **vault**: An optional meeting type as the last section of the name
+
 ## 0.24.0 — 2026-09-09
 
 ### Features
