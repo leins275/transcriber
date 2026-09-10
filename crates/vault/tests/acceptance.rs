@@ -17,15 +17,25 @@
 //! tree) and `fr05_260229_is_rejected_2026_is_not_a_leap_year` (R3: the
 //! spec's own acceptance bullet is factually wrong about 2026, and that
 //! deviation is recorded as a passing test rather than buried in prose).
+//!
+//! The `specs/260910-meeting-type-in-filename` block at the bottom of this
+//! file extends the same traceability to the optional fourth section of a
+//! dropped file name — the meeting **type** — covering its ingest,
+//! collision, path-length and rename behaviour end to end (FR-3 … FR-6 of
+//! that blueprint). The per-rule matrices stay in `tests/parse_filename.rs`,
+//! `tests/paths.rs` and `tests/error_vocabulary.rs`.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use tempfile::tempdir;
-use vault::{Classification, Classified, CollisionOutcome, Rejection, Vault, VaultError};
+use vault::{
+    Classification, Classified, CollisionOutcome, Ingested, MeetingUpdate, Rejection, Vault,
+    VaultError,
+};
 
 fn write_file(path: &Path, bytes: &[u8]) {
     if let Some(parent) = path.parent() {
@@ -92,7 +102,7 @@ fn fr01_init_is_idempotent_and_a_file_root_is_a_typed_error_not_a_panic() {
 /// Deep matrix in `tests/parse_filename.rs` (every listed case plus the
 /// "first failing rule wins" and timing bullets).
 #[test]
-fn fr02_fr03_pure_parser_splits_on_first_two_separators_with_no_filesystem() {
+fn fr02_fr03_pure_parser_splits_on_every_separator_with_no_filesystem() {
     // No tempdir anywhere in this test — the parser touches no filesystem
     // at all (FR-2's own acceptance bullet).
     match vault::classify_filename("ELS - 260812 - Security issue.mp4").unwrap() {
@@ -114,13 +124,23 @@ fn fr02_fr03_pure_parser_splits_on_first_two_separators_with_no_filesystem() {
         other => panic!("expected Sorted, got {other:?}"),
     }
 
-    // Split on the first two separators only: the title may itself contain
-    // " - ".
-    match vault::classify_filename("ELS - 260812 - Security - issue - part 2.mp4").unwrap() {
+    // A fourth section is the meeting type, not part of the title.
+    match vault::classify_filename("ELS - 260812 - Security issue - Standup.mp4").unwrap() {
         Classified::Sorted(parsed) => {
-            assert_eq!(parsed.title, "Security - issue - part 2");
+            assert_eq!(parsed.title, "Security issue");
+            assert_eq!(parsed.kind.as_deref(), Some("Standup"));
         }
         other => panic!("expected Sorted, got {other:?}"),
+    }
+
+    // `-` is reserved as the separator, so a fifth section is a name the
+    // grammar cannot read — it is routed, never rejected.
+    match vault::classify_filename("ELS - 260812 - Security - issue - part 2.mp4").unwrap() {
+        Classified::Unsorted { reason, stem, .. } => {
+            assert_eq!(reason, Rejection::TooManySeparators);
+            assert_eq!(stem, "ELS - 260812 - Security - issue - part 2");
+        }
+        other => panic!("expected Unsorted, got {other:?}"),
     }
 
     for name in ["recording_final(1).mp4", "just one - separator.mp4"] {
@@ -185,8 +205,10 @@ fn fr05_calendar_rejections_and_verbatim_date_in_the_folder_name() {
     for (name, expected) in [
         ("ELS - 260230 - x.mp4", Rejection::DateNotACalendarDate), // Feb 30
         ("ELS - 991345 - x.mp4", Rejection::DateNotACalendarDate),
-        ("ELS - 2026-08-12 - x.mp4", Rejection::DateNotSixDigits),
         ("ELS - 26081 - x.mp4", Rejection::DateNotSixDigits),
+        // A four-digit-year date carries two hyphens of its own, so the
+        // name has five sections and never reaches the date rule at all.
+        ("ELS - 2026-08-12 - x.mp4", Rejection::TooManySeparators),
     ] {
         match vault::classify_filename(name).unwrap() {
             Classified::Unsorted { reason, .. } => assert_eq!(reason, expected, "for {name:?}"),
@@ -670,5 +692,560 @@ fn full_session_sorted_then_unsorted_then_duplicate_redrop_produces_exact_tree()
         fs::read(&sorted.source_path).unwrap(),
         b"sorted recording bytes",
         "the duplicate re-drop must not have touched the original bytes"
+    );
+}
+
+// =====================================================================
+// specs/260910-meeting-type-in-filename — the optional fourth section
+// =====================================================================
+
+/// Drops `dropped_name` into `staging` and ingests it on the fixed
+/// [`today`] date, so every test below states only the name it cares about.
+fn ingest_dropped(vault: &Vault, staging: &Path, dropped_name: &str, bytes: &[u8]) -> Ingested {
+    let source = staging.join(dropped_name);
+    write_file(&source, bytes);
+    vault.ingest_on(&source, today()).expect("ingest")
+}
+
+/// A complete rename request, spelled out the way `rename_meeting` takes it.
+fn update(project: Option<&str>, date: &str, title: &str, kind: Option<&str>) -> MeetingUpdate {
+    MeetingUpdate {
+        project: project.map(str::to_string),
+        date: date.to_string(),
+        title: title.to_string(),
+        kind: kind.map(str::to_string),
+    }
+}
+
+/// A meeting type just long enough to make
+/// `<root>\ELS\260812 - Security issue - <type>\source.mp4` 261 characters —
+/// one character over the 260-character cap, with the type as the only
+/// reason it overruns.
+fn type_overrunning_the_cap(root: &Path) -> String {
+    let everything_but_the_type = root.as_os_str().to_string_lossy().chars().count()
+        + "\\ELS\\260812 - Security issue - ".chars().count()
+        + "\\source.mp4".chars().count();
+    "S".repeat(261 - everything_but_the_type)
+}
+
+/// FR-3: the folder name is the type's storage, and the crate root exposes
+/// the parser that reads it back — the seam the app's UI mirrors.
+#[test]
+fn fr03_the_typed_folder_ingest_created_reads_back_through_the_crate_root_api() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let ingested = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+    let folder_name = ingested.meeting_dir.file_name().unwrap().to_str().unwrap();
+
+    let read_back = vault::parse_meeting_folder_name(folder_name).expect("a typed folder name");
+
+    assert_eq!(read_back.date, "260812");
+    assert_eq!(read_back.title, "Security issue");
+    assert_eq!(read_back.kind.as_deref(), Some("Standup"));
+}
+
+/// FR-4: a typed recording lands in a typed folder and creates nothing else.
+#[test]
+fn fr04_a_typed_recording_lands_in_a_typed_meeting_folder_and_nothing_else() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+
+    ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
+    );
+}
+
+/// FR-4: the recorder-default names on the real vault carry a hyphen inside
+/// their title, so they now route to `unsorted/` — with the stem kept
+/// verbatim, hyphens included, and never as an error.
+#[test]
+fn fr04_a_five_section_name_lands_under_unsorted_with_its_verbatim_stem() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+
+    let ingested = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "TBOT - 260731 - Запись встречи 31.07.2026 11-04-56 - запись.mp4",
+        b"video",
+    );
+
+    assert_eq!(
+        ingested.meeting_dir,
+        vault
+            .root()
+            .join("unsorted")
+            .join("260821 - TBOT - 260731 - Запись встречи 31.07.2026 11-04-56 - запись")
+    );
+    assert_eq!(
+        ingested.classification,
+        Classification::Unsorted {
+            reason: Rejection::TooManySeparators
+        }
+    );
+}
+
+/// FR-4: the type is part of the folder's identity, so a typed and an
+/// untyped recording of the same date and title are two meetings.
+#[test]
+fn fr04_a_typed_and_an_untyped_recording_of_one_date_are_separate_folders() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"the untyped recording",
+    );
+
+    let typed = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"the typed recording",
+    );
+
+    assert_eq!(typed.collision, CollisionOutcome::Fresh);
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from([
+            "ELS/260812 - Security issue/source.mp4".to_string(),
+            "ELS/260812 - Security issue - Standup/source.mp4".to_string(),
+        ])
+    );
+}
+
+/// FR-4: collision suffixing measures the whole typed name.
+#[test]
+fn fr04_a_second_distinct_typed_recording_gets_a_suffixed_folder() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"the first recording",
+    );
+
+    let second = ingest_dropped(
+        &vault,
+        &staging_dir.path().join("retake"),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"a completely different, longer recording",
+    );
+
+    assert_eq!(second.collision, CollisionOutcome::SuffixedFolder(2));
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from([
+            "ELS/260812 - Security issue - Standup/source.mp4".to_string(),
+            "ELS/260812 - Security issue - Standup (2)/source.mp4".to_string(),
+        ])
+    );
+}
+
+/// FR-5: the type counts towards the 260-character cap, and overrunning it
+/// is a typed error — not an unsorted route, and not a partial ingest.
+#[test]
+fn fr05_a_type_that_overruns_the_path_cap_fails_the_ingest_and_creates_nothing() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let kind = type_overrunning_the_cap(vault.root());
+    let source = staging_dir
+        .path()
+        .join(format!("ELS - 260812 - Security issue - {kind}.mp4"));
+    write_file(&source, b"video");
+
+    let result = vault.ingest_on(&source, today());
+
+    assert_eq!(
+        result,
+        Err(VaultError::PathTooLong {
+            len: 261,
+            limit: 260
+        })
+    );
+    assert!(!vault.root().join("ELS").exists());
+    assert!(source.is_file(), "the dropped file stays where it was");
+}
+
+/// FR-5: the same cap applies to a rename, before anything moves.
+#[test]
+fn fr05_a_rename_whose_typed_target_overruns_the_path_cap_moves_nothing() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+    let kind = type_overrunning_the_cap(vault.root());
+
+    let result = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some(&kind)),
+    );
+
+    assert_eq!(
+        result,
+        Err(VaultError::PathTooLong {
+            len: 261,
+            limit: 260
+        })
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: the rename form is how an operator gives a meeting its type.
+#[test]
+fn fr06_rename_gives_an_untyped_meeting_a_type() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault
+            .root()
+            .join("ELS")
+            .join("260812 - Security issue - Standup")
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: a rename carrying no type removes the one the folder has.
+#[test]
+fn fr06_rename_without_a_type_strips_an_existing_one() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", None),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault.root().join("ELS").join("260812 - Security issue")
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: an emptied Type field arrives as whitespace, and means the same
+/// thing as no type at all.
+#[test]
+fn fr06_a_whitespace_only_type_is_read_as_no_type() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some("   ")),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault.root().join("ELS").join("260812 - Security issue")
+    );
+}
+
+/// FR-6: spaces the operator typed around the type never reach the disk.
+#[test]
+fn fr06_spaces_around_a_type_are_trimmed() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some(" Retro ")),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault
+            .root()
+            .join("ELS")
+            .join("260812 - Security issue - Retro")
+    );
+}
+
+/// FR-6: `-` is the separator, so a title carrying one would not survive the
+/// round trip through the folder name — the rename refuses it instead.
+#[test]
+fn fr06_a_hyphen_in_the_title_is_refused_as_the_reserved_separator() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+
+    let result = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Sync - part 2", None),
+    );
+
+    assert_eq!(
+        result,
+        Err(VaultError::InvalidMeetingName {
+            reason: Rejection::ReservedSeparator
+        })
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: the same rule guards the type.
+#[test]
+fn fr06_a_hyphen_in_the_type_is_refused_as_the_reserved_separator() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+
+    let result = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some("Re-tro")),
+    );
+
+    assert_eq!(
+        result,
+        Err(VaultError::InvalidMeetingName {
+            reason: Rejection::ReservedSeparator
+        })
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: the type is held to the title's character rules, reported in its
+/// own vocabulary.
+#[test]
+fn fr06_an_illegal_or_reserved_type_is_refused_and_nothing_moves() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue.mp4",
+        b"video",
+    );
+
+    for (kind, expected) in [
+        ("Q:A", Rejection::IllegalTypeCharacter(':')),
+        ("CON", Rejection::ReservedDeviceName),
+    ] {
+        let result = vault::rename_meeting(
+            vault.root(),
+            &meeting.meeting_dir,
+            &update(Some("ELS"), "260812", "Security issue", Some(kind)),
+        );
+
+        assert_eq!(
+            result,
+            Err(VaultError::InvalidMeetingName { reason: expected }),
+            "for type {kind:?}"
+        );
+    }
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: re-saving the rename form unchanged is not a collision.
+#[test]
+fn fr06_renaming_a_typed_meeting_to_its_own_name_is_a_no_op() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+    )
+    .expect("rename");
+
+    assert_eq!(renamed, meeting.meeting_dir);
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
+    );
+}
+
+/// FR-6: two genuinely different meetings may honestly share a date, title
+/// and type — the second one is suffixed rather than refused.
+#[test]
+fn fr06_a_taken_typed_destination_is_suffixed() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"the meeting already filed there",
+    );
+    let other = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260813 - Other meeting.mp4",
+        b"the meeting being renamed",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &other.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault
+            .root()
+            .join("ELS")
+            .join("260812 - Security issue - Standup (2)")
+    );
+}
+
+/// FR-6: the type travels with the meeting when it is re-filed, so an
+/// operator can park a typed meeting in `unsorted/` and put it back
+/// untouched.
+#[test]
+fn fr06_refiling_a_typed_meeting_through_unsorted_carries_its_type() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup.mp4",
+        b"video",
+    );
+
+    let parked: PathBuf = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(None, "260812", "Security issue", Some("Standup")),
+    )
+    .expect("re-file to unsorted");
+    let back = vault::rename_meeting(
+        vault.root(),
+        &parked,
+        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+    )
+    .expect("re-file back to the project");
+
+    assert_eq!(
+        parked,
+        vault
+            .root()
+            .join("unsorted")
+            .join("260812 - Security issue - Standup")
+    );
+    assert_eq!(
+        back,
+        vault
+            .root()
+            .join("ELS")
+            .join("260812 - Security issue - Standup")
+    );
+    assert_eq!(
+        list_files(vault.root()),
+        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
     );
 }

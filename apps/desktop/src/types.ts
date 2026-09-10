@@ -273,13 +273,18 @@ export type IndexStatusView = {
 };
 
 /** A meeting's requested new identity. `project: null` files it under
- * `unsorted/`; the Rust side validates all three parts against exactly the
+ * `unsorted/`; the Rust side validates all four parts against exactly the
  * rules ingest applies to a filename. */
 export type MeetingUpdate = {
   project: string | null;
   /** Six digits, `YYMMDD`. */
   date: string;
   title: string;
+  /** The optional meeting type — the folder name's third section. Absent
+   * means "no type", which also strips one the meeting already carries;
+   * `api.updateVaultEntry` spells that out as `null` for the Rust
+   * `Option<String>`. Never contains the reserved `-`. */
+  kind?: string;
 };
 
 // LLM-feature extension to the IPC contract (additive): the GGUF download.

@@ -1,5 +1,6 @@
 //! Path containment (FR-14), the 260-character cap (NFR-4), and vault name
-//! shaping (FR-8, FR-10, FR-11).
+//! shaping (FR-8, FR-10, FR-11) — including the meeting folder name's
+//! optional type section and its reader (FR-3).
 //!
 //! Owned by T5. Lexical rejection of `..`, absolute, drive-relative,
 //! `\\?\`, UNC and separator-bearing components happens here, before any
@@ -260,14 +261,76 @@ pub fn check_len(full_destination: &Path) -> Result<(), VaultError> {
     }
 }
 
-/// Builds a sorted meeting folder name: `<date> - <title>` (FR-8).
+/// Builds a sorted meeting folder name — `<date> - <title>`, or
+/// `<date> - <title> - <type>` when the meeting carries the optional type
+/// (FR-8, FR-3).
 ///
 /// `date` is the verbatim six-character `YYMMDD` string — never
 /// reformatted — and `title` is expected to already be a
 /// [`crate::title::ValidTitle`]'s content, since FR-6 rejects (rather than
-/// repairs) a sorted title that cannot be used verbatim.
-pub fn meeting_folder_name(date: &str, title: &str) -> String {
-    format!("{date} - {title}")
+/// repairs) a sorted title that cannot be used verbatim; `kind` likewise
+/// carries a [`crate::title::validate_kind`]'d type, or `None` for an
+/// untyped meeting. Neither may contain a `-`: the separator is reserved,
+/// and the folder name is the *only* place the type is persisted, so a
+/// hyphen inside either part would make the name unreadable by
+/// [`parse_meeting_folder_name`].
+pub fn meeting_folder_name(date: &str, title: &str, kind: Option<&str>) -> String {
+    match kind {
+        Some(kind) => format!("{date} - {title} - {kind}"),
+        None => format!("{date} - {title}"),
+    }
+}
+
+/// The three parts of a meeting folder name, as read back by
+/// [`parse_meeting_folder_name`] (FR-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeetingFolderName {
+    /// The verbatim six-digit `YYMMDD` date the folder name starts with.
+    pub date: String,
+    /// The meeting title — the second section, trimmed of ASCII spaces.
+    pub title: String,
+    /// The meeting type — the optional third section; `None` for a folder
+    /// name of only two sections.
+    pub kind: Option<String>,
+}
+
+/// Reads a sorted meeting folder name back into its parts — the inverse of
+/// [`meeting_folder_name`] (FR-3).
+///
+/// The name is split on **every** `-`, each section trimmed of ASCII
+/// spaces (so `260812-Title-Standup` parses like `260812 - Title -
+/// Standup`); two sections are an untyped meeting, three carry a type, and
+/// anything else is not a meeting folder name at all — `None`, which is
+/// also the answer for a six-digit-less date or an empty title or type.
+///
+/// Pure and total: no filesystem access, no clock, never panics (NFR-1).
+/// The date is checked for exactly six ASCII digits and nothing more — no
+/// calendar validation, so this stays a display-side reader that mirrors
+/// the app's TypeScript helper, while [`crate::date::validate`] remains
+/// the authority at ingest and rename time. A folder that predates the
+/// type (or whose name a human wrote by hand with extra hyphens) simply
+/// does not parse, and callers show its name verbatim.
+pub fn parse_meeting_folder_name(name: &str) -> Option<MeetingFolderName> {
+    let parts: Vec<&str> = name.split('-').map(|part| part.trim_matches(' ')).collect();
+
+    let (date, title, kind) = match parts.as_slice() {
+        [date, title] => (*date, *title, None),
+        [date, title, kind] => (*date, *title, Some(*kind)),
+        _ => return None,
+    };
+
+    if date.len() != 6 || !date.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if title.is_empty() || kind.is_some_and(str::is_empty) {
+        return None;
+    }
+
+    Some(MeetingFolderName {
+        date: date.to_string(),
+        title: title.to_string(),
+        kind: kind.map(str::to_string),
+    })
 }
 
 /// Builds an unsorted meeting folder name: `<date of ingest> - <stem>`

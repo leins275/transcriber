@@ -91,6 +91,10 @@ export const api = {
       project: update.project,
       date: update.date,
       title: update.title,
+      // An absent type travels as an explicit `null`, never a missing key:
+      // the command takes `Option<String>`, and spelling it out keeps a
+      // rename that clears the type from reading as "leave it as it was".
+      kind: update.kind ?? null,
     }),
   deleteVaultEntry: (entryId: string): Promise<void> =>
     call<void>("delete_vault_entry", { entryId }),

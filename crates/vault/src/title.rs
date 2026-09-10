@@ -72,6 +72,32 @@ pub fn validate(raw: &str) -> Result<ValidTitle, Rejection> {
     Ok(ValidTitle(trimmed.to_string()))
 }
 
+/// Validates a raw *type* component — the optional fourth section of a
+/// recording's name, `<PRJ>-<DATE>-<NAME>[-<TYPE>]` (FR-1, FR-2).
+///
+/// The type follows the title's rules exactly, so this delegates to
+/// [`validate`] and only re-labels the two rejections that name their
+/// subject: [`Rejection::EmptyTitle`] becomes [`Rejection::EmptyType`] and
+/// [`Rejection::IllegalTitleCharacter`] becomes
+/// [`Rejection::IllegalTypeCharacter`], so an operator is told which of the
+/// two sections was at fault. [`Rejection::ReservedDeviceName`] passes
+/// through unchanged — it names the rule, not the section.
+///
+/// A `-` inside the value is deliberately **not** checked here. The parser
+/// splits the stem on every `-` before validating, so a section it hands to
+/// this function can never contain one; an operator-supplied type reaches
+/// the vault only through [`crate::manage::rename_meeting`], which refuses a
+/// `-` in either the title or the type with [`Rejection::ReservedSeparator`]
+/// before anything moves. Keeping the check out of here also leaves
+/// [`validate`]'s own contract (a hyphenated title is accepted) untouched.
+pub fn validate_kind(raw: &str) -> Result<ValidTitle, Rejection> {
+    validate(raw).map_err(|reason| match reason {
+        Rejection::EmptyTitle => Rejection::EmptyType,
+        Rejection::IllegalTitleCharacter(c) => Rejection::IllegalTypeCharacter(c),
+        other => other,
+    })
+}
+
 fn first_illegal_char(s: &str) -> Option<char> {
     s.chars()
         .find(|c| ILLEGAL_CHARS.contains(c) || c.is_control())

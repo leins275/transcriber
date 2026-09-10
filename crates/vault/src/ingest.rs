@@ -234,7 +234,13 @@ pub struct Ingested {
 /// Whether an ingested recording matched the naming convention (FR-2/FR-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Classification {
-    /// The filename fully matched `<Project code> - <date> - <Title>.<ext>`.
+    /// The filename fully matched `<Project code> - <date> - <Title>[ -
+    /// <Type>].<ext>`.
+    ///
+    /// The optional meeting type deliberately has no field here: it lives
+    /// in the folder name ([`Ingested::meeting_dir`]) and is read back
+    /// with [`crate::paths::parse_meeting_folder_name`], so no consumer
+    /// has to keep the two in sync.
     Sorted {
         /// The normalized (uppercase) project code.
         project: String,
@@ -272,8 +278,10 @@ struct Destination {
     /// The single path component directly under the vault root: the
     /// project code, or the reserved `unsorted` name.
     parent_component: String,
-    /// The meeting folder's own name: `<date> - <title>` or `<date of
-    /// ingest> - <sanitized stem>`.
+    /// The meeting folder's own name: `<date> - <title>` — with the
+    /// optional type appended as a third section, `<date> - <title> -
+    /// <type>`, when the filename carried one (FR-3) — or `<date of
+    /// ingest> - <sanitized stem>` for an unsorted recording.
     base_name: String,
     /// The normalized (lowercase) media extension.
     ext: String,
@@ -290,7 +298,14 @@ fn compute_destination(classification: Classified, today: NaiveDate) -> Destinat
     match classification {
         Classified::Sorted(parsed) => Destination {
             parent_component: parsed.project.clone(),
-            base_name: paths::meeting_folder_name(&parsed.date, &parsed.title),
+            // The optional meeting type is persisted in the folder name
+            // and nowhere else, so it travels from the parsed filename
+            // straight into `base_name` (FR-3, FR-4).
+            base_name: paths::meeting_folder_name(
+                &parsed.date,
+                &parsed.title,
+                parsed.kind.as_deref(),
+            ),
             ext: parsed.ext,
             classification_out: Classification::Sorted {
                 project: parsed.project.clone(),

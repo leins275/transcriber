@@ -600,11 +600,11 @@ async fn process_one(shared: Arc<Shared>, pending: PendingJob) {
             match ingest::ingest(&root, &source_path).await {
                 Ok(outcome) => {
                     snapshot.classification = Some(classification_str(&outcome.classification));
-                    // FR-9 (E4): F1's collision outcome must be reported, not
-                    // silently dropped -- a re-drop that F1 treated as a no-op
-                    // duplicate, or one that landed in a numerically suffixed
-                    // folder, must not render identically to a fresh ingest.
-                    if let Some(message) = collision_message(&outcome.collision) {
+                    // FR-9 (E4) and FR-7 (260910): why the recording went
+                    // where it went must be reported, not silently dropped --
+                    // an unsorted route and a collision-resolved destination
+                    // must not render identically to a fresh sorted ingest.
+                    if let Some(message) = ingest_message(&outcome) {
                         snapshot.message = Some(message);
                     }
                     // A dropped file carries no language control (Q1), so
@@ -929,6 +929,27 @@ fn job_touches(job: &JobSnapshot, dir: &Path) -> bool {
     .into_iter()
     .flatten()
     .any(|recorded| paths::strip_verbatim(Path::new(recorded)).starts_with(dir))
+}
+
+/// The operator-facing note for one ingest: why the recording is not where
+/// a conforming name would have put it, and how a name collision (if any)
+/// was resolved.
+///
+/// Both halves are reported when both apply — a badly named recording that
+/// also collided is two independent facts, and dropping either would leave
+/// the operator guessing. The rejection reason comes first (it explains the
+/// `unsorted` classification the snapshot already carries) and is F1's own
+/// `Display` text, never re-worded here.
+fn ingest_message(outcome: &ingest::IngestOutcome) -> Option<String> {
+    let reason = match &outcome.classification {
+        Classification::Unsorted { reason } => Some(reason.to_string()),
+        Classification::Sorted { .. } => None,
+    };
+    match (reason, collision_message(&outcome.collision)) {
+        (Some(reason), Some(collision)) => Some(format!("{reason}; {collision}")),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
 }
 
 /// Renders F1's [`CollisionOutcome`] as the operator-facing note FR-9

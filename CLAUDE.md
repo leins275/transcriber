@@ -66,7 +66,7 @@ Installer build: `make installer` → `dist/Transcriber_<version>_x64-setup.exe`
 
 **Whisper weights are a prerequisite, not the service's job.** The local provider always loads with `local_files_only=True` and never downloads weights; a missing `large-v3` snapshot under `model_path` fails every job with `error_kind="model_load"`. Model/CUDA-runtime downloads happen through the app's first-run wizard and download endpoints, not inside the provider.
 
-**Vault rules live in Rust.** `crates/vault` owns naming/routing of recordings and artifacts into the meetings vault; the app consumes it. Don't reimplement path logic elsewhere.
+**Vault rules live in Rust.** `crates/vault` owns naming/routing of recordings and artifacts into the meetings vault; the app consumes it. A dropped recording is named `<PRJ> - <YYMMDD> - <Name>[ - <Type>]` — `-` is reserved as the section separator (spaces around it optional, spaces inside a section kept), so a name that splits into five or more sections goes to `unsorted/` verbatim, three sections file an untyped meeting and four carry the optional meeting **type**. The type persists as the meeting folder's own third section (`<YYMMDD> - <Name>[ - <Type>]`), is parsed back out of it for display, and is edited from the recording page's rename form (which refuses a `-` in either the name or the type). Don't reimplement path logic elsewhere.
 
 **Version.** `version.txt` is the single source of truth. Never hand-edit versions in the five manifests or `Cargo.lock` — use `uv run scripts/sync_version.py --set X.Y.Z`; `--check` (run by `make lint`) fails on drift.
 

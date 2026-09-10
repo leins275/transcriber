@@ -200,6 +200,71 @@ describe("api vault-browser trio", () => {
   });
 });
 
+describe("api.updateVaultEntry", () => {
+  const view = {
+    id: "v1",
+    project: "ELS",
+    meeting_name: "260812 - Security issue - Retro",
+    meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue - Retro",
+    has_source: true,
+    has_transcript: true,
+  };
+
+  it("sends the meeting type as the kind argument when the update carries one", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "update_vault_entry") return view;
+      return null;
+    });
+
+    const result = await api.updateVaultEntry("v1", {
+      project: "ELS",
+      date: "260812",
+      title: "Security issue",
+      kind: "Retro",
+    });
+
+    expect(result).toEqual(view);
+    expect(seen).toContainEqual({
+      cmd: "update_vault_entry",
+      payload: {
+        entryId: "v1",
+        project: "ELS",
+        date: "260812",
+        title: "Security issue",
+        kind: "Retro",
+      },
+    });
+  });
+
+  it("sends an explicit null kind when the update carries no type, so the rename strips one", async () => {
+    const seen: Array<{ cmd: string; payload: unknown }> = [];
+    mockIPC((cmd, payload) => {
+      seen.push({ cmd, payload });
+      if (cmd === "update_vault_entry") return { ...view, meeting_name: "260812 - Security issue" };
+      return null;
+    });
+
+    await api.updateVaultEntry("v1", {
+      project: "ELS",
+      date: "260812",
+      title: "Security issue",
+    });
+
+    expect(seen).toContainEqual({
+      cmd: "update_vault_entry",
+      payload: {
+        entryId: "v1",
+        project: "ELS",
+        date: "260812",
+        title: "Security issue",
+        kind: null,
+      },
+    });
+  });
+});
+
 describe("api model-download trio (T13)", () => {
   it("modelDownloadStatus invokes model_download_status with no arguments", async () => {
     const seen: Array<{ cmd: string; payload: unknown }> = [];

@@ -123,3 +123,13 @@
   display: flex;
   gap: var(--space-2);
 }
+
+/* The name and its optional type tag sit on one line, aligned on the text
+   baseline so the small tag hangs off the name rather than floating in the
+   middle of it. */
+.nameLine {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}

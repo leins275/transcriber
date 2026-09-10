@@ -6,7 +6,7 @@ import { ProjectRosterPanel } from "./ProjectRosterPanel";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
 import { formatDuration } from "../lib/format";
-import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
+import { formatMeetingDate, parseEntryName } from "../lib/meetingName";
 import { EMPTY_ROSTER } from "../lib/roster";
 import { speakerNames } from "../lib/turns";
 import { groupIntoTurns } from "../lib/turns";
@@ -255,7 +255,7 @@ export function RecordingPage({
     }
   }, [entry.id, onDelete]);
 
-  const parsed = parseMeetingName(entry.meeting_name);
+  const parsed = parseEntryName(entry.meeting_name, entry.project);
   const turns = transcript ? groupIntoTurns(transcript.segments, transcript.speakers) : [];
   const speakers = speakerNames(turns);
 
@@ -304,6 +304,7 @@ export function RecordingPage({
         <div className={styles.titleBlock}>
           <div className={styles.titleLine}>
             <h2 className={styles.title}>{parsed ? parsed.title : entry.meeting_name}</h2>
+            {parsed?.kind && <span className="pill">{parsed.kind}</span>}
             <button
               type="button"
               className={`btn btn-ghost ${styles.pencil}`}

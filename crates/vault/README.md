@@ -19,12 +19,29 @@ cargo test
 There is no repo-wide `Makefile` — this crate does not own one. Per the
 batch decision, repo-wide QA entry points belong to F4.
 
+## Naming convention
+
+A dropped recording is filed by its own filename:
+
+```text
+<Project code> - <date> - <Title>[ - <Type>].<ext>
+```
+
+`-` is reserved as the separator: the stem is split on **every** hyphen,
+the spaces around a separator are optional (`ELS-260812-Title.mp4` parses
+like `ELS - 260812 - Title.mp4`) and each section is trimmed of ASCII
+spaces, while spaces inside a section are kept. Three sections are an
+untyped meeting, four carry the optional meeting type (same character
+rules as the title), fewer than three are a missing separator, and five or
+more mean a section contained the reserved `-` — those go to `unsorted/`,
+never rejected. Only an unsupported extension is rejected outright.
+
 ## Vault layout
 
 ```text
 <vault root>/
   <PROJECT>/
-    <date> - <Title>/
+    <date> - <Title>[ - <Type>]/
       source.<ext>
   unsorted/
     <YYMMDD of ingest> - <original stem>/
@@ -33,7 +50,11 @@ batch decision, repo-wide QA entry points belong to F4.
 
 Every ingested recording — sorted or unsorted — gets its own folder, so
 later artifacts (a transcript, eventually a summary) can be written next to
-the source.
+the source. The meeting type is persisted in the folder name and nowhere
+else: `vault::paths::meeting_folder_name(date, title, kind)` writes it and
+`vault::parse_meeting_folder_name(name)` reads it back (two sections →
+untyped, three → typed, anything else → `None`). An unsorted folder name
+keeps the original stem verbatim, hyphens included.
 
 ## Reserved names
 
@@ -76,8 +97,8 @@ println!("{}", ingested.meeting_dir.display());
 
 The curated public surface (re-exported from the crate root): `Vault`,
 `Ingested`, `Classification`, `CollisionOutcome`, `VaultError`, `Rejection`,
-`classify_filename`, `Classified`, `ParsedName`, `app_data_dir`, and the
-reserved-name constants (`SOURCE_STEM`, `TRANSCRIPT_FILE_NAME`,
+`classify_filename`, `Classified`, `ParsedName`, `parse_meeting_folder_name`,
+`MeetingFolderName`, `app_data_dir`, and the reserved-name constants (`SOURCE_STEM`, `TRANSCRIPT_FILE_NAME`,
 `SUMMARY_FILE_NAME`, `UNSORTED_DIR_NAME`). Individual modules
 (`vault::paths`, `vault::date`, …) remain reachable directly for anything
 not curated at the crate root.

@@ -26,9 +26,18 @@
 //! recording is routed to `unsorted/` so that every media file lands
 //! somewhere (FR-10). A rename is different — there is an operator on the
 //! other end of it who asked for a specific name — so a bad project code,
-//! date or title comes back as [`VaultError::InvalidMeetingName`] carrying
-//! the offending [`crate::error::Rejection`], instead of quietly filing their meeting
-//! somewhere they did not choose.
+//! date, title or type comes back as [`VaultError::InvalidMeetingName`]
+//! carrying the offending [`crate::error::Rejection`], instead of quietly
+//! filing their meeting somewhere they did not choose.
+//!
+//! The same asymmetry covers the reserved separator. A dropped file whose
+//! name carries a `-` inside one of its sections is routed to `unsorted/`
+//! ([`crate::error::Rejection::TooManySeparators`]); an operator who types
+//! one into the rename form's title or type is refused with
+//! [`crate::error::Rejection::ReservedSeparator`] before anything moves,
+//! because the meeting folder name is the only place the type is persisted
+//! and a `-` inside either part would make that name unreadable by
+//! [`crate::paths::parse_meeting_folder_name`].
 
 use std::fs;
 use std::io;
@@ -36,7 +45,7 @@ use std::path::{Path, PathBuf};
 
 use crate::code;
 use crate::date;
-use crate::error::{IoFailure, VaultError};
+use crate::error::{IoFailure, Rejection, VaultError};
 use crate::layout;
 use crate::paths::{self, UNSORTED_DIR_NAME};
 use crate::title;
@@ -47,11 +56,13 @@ const MAX_SUFFIX: u32 = 999;
 
 /// A requested new identity for an existing meeting folder.
 ///
-/// All three fields are always supplied — a rename is expressed as the
-/// complete target name rather than a patch — so a caller that is only
-/// changing the project still passes the meeting's current date and title
-/// back. That keeps this type free of "unchanged" sentinels and makes the
-/// resulting folder name a pure function of the request.
+/// Every part is always supplied — a rename is expressed as the complete
+/// target name rather than a patch — so a caller that is only changing the
+/// project still passes the meeting's current date, title and type back.
+/// That keeps this type free of "unchanged" sentinels and makes the
+/// resulting folder name a pure function of the request; in particular an
+/// absent [`MeetingUpdate::kind`] means "this meeting has no type", not
+/// "leave the type it has alone".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeetingUpdate {
     /// The target project code, or `None` to file the meeting under
@@ -62,8 +73,18 @@ pub struct MeetingUpdate {
     /// then used verbatim in the folder name (FR-5).
     pub date: String,
     /// The target title, held to the same rules a sorted filename's title
-    /// is (FR-6): never repaired, only accepted or reported.
+    /// is (FR-6): never repaired, only accepted or reported. A `-` in it is
+    /// [`crate::error::Rejection::ReservedSeparator`].
     pub title: String,
+    /// The target meeting type — the optional fourth section of the name
+    /// (FR-6), persisted as the third section of the folder name.
+    ///
+    /// `None` and a blank or whitespace-only `Some` mean the same thing:
+    /// the meeting has no type, which also **strips** the type a folder
+    /// currently carries. A present value is trimmed and held to the
+    /// title's character rules through [`crate::title::validate_kind`], and
+    /// a `-` in it is [`crate::error::Rejection::ReservedSeparator`].
+    pub kind: Option<String>,
 }
 
 /// A meeting folder that has passed [`resolve_meeting`]'s checks.
@@ -149,6 +170,10 @@ pub fn resolve_meeting(root: &Path, meeting_dir: &Path) -> Result<ResolvedMeetin
 ///   returns that path — renaming a meeting to the name it already has is
 ///   not an error, and in particular does not go through the collision
 ///   suffixing below.
+/// * The type is part of the target name, so a request carrying one gives
+///   the meeting its type, a request carrying none removes the type the
+///   folder has, and a `-` in the title or the type is refused outright
+///   (see the module docs) before anything else is checked.
 /// * A destination name that is already taken is suffixed `(2)`, `(3)`, …
 ///   exactly as ingest does (FR-11) rather than overwriting or refusing —
 ///   two genuinely different meetings may honestly share a date and title.
@@ -169,6 +194,18 @@ pub fn rename_meeting(
 ) -> Result<PathBuf, VaultError> {
     let resolved = resolve_meeting(root, meeting_dir)?;
 
+    // An emptied Type field arrives as whitespace and means "no type".
+    let requested_kind = update
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty());
+    if update.title.contains('-') || requested_kind.is_some_and(|kind| kind.contains('-')) {
+        return Err(VaultError::InvalidMeetingName {
+            reason: Rejection::ReservedSeparator,
+        });
+    }
+
     let project = match update.project.as_deref() {
         Some(raw) => Some(
             code::validate(raw)
@@ -182,6 +219,10 @@ pub fn rename_meeting(
         date::validate(&update.date).map_err(|reason| VaultError::InvalidMeetingName { reason })?;
     let valid_title = title::validate(&update.title)
         .map_err(|reason| VaultError::InvalidMeetingName { reason })?;
+    let valid_kind = requested_kind
+        .map(title::validate_kind)
+        .transpose()
+        .map_err(|reason| VaultError::InvalidMeetingName { reason })?;
 
     let parent = match project.as_deref() {
         Some(code) => layout::ensure_project_dir(&resolved.root, code)?,
@@ -193,7 +234,8 @@ pub fn rename_meeting(
     };
     let parent = paths::simplify_extended_prefix(parent);
 
-    let base_name = paths::meeting_folder_name(valid_date.as_str(), &valid_title);
+    let base_name =
+        paths::meeting_folder_name(valid_date.as_str(), &valid_title, valid_kind.as_deref());
     let target = free_destination(&parent, &base_name, &resolved.meeting_dir)?;
     if target == resolved.meeting_dir {
         return Ok(target);
@@ -322,7 +364,6 @@ pub use crate::error::Rejection as MeetingNameRejection;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Rejection;
     use tempfile::{tempdir, TempDir};
 
     fn vault_with_meeting(parent: &str, name: &str) -> (TempDir, PathBuf) {
@@ -338,6 +379,14 @@ mod tests {
             project: project.map(str::to_owned),
             date: date.to_string(),
             title: title.to_string(),
+            kind: None,
+        }
+    }
+
+    fn typed_update(project: Option<&str>, date: &str, title: &str, kind: &str) -> MeetingUpdate {
+        MeetingUpdate {
+            kind: Some(kind.to_string()),
+            ..update(project, date, title)
         }
     }
 
@@ -459,6 +508,45 @@ mod tests {
             "unsorted"
         );
         assert!(moved.join("source.mp4").is_file());
+    }
+
+    #[test]
+    fn a_rename_carrying_a_type_lands_in_a_typed_folder_with_the_type_trimmed() {
+        let (dir, meeting) = vault_with_meeting("unsorted", "260822 - source");
+
+        let moved = rename_meeting(
+            dir.path(),
+            &meeting,
+            &typed_update(Some("ELS"), "260814", "Weekly sync", " Retro "),
+        )
+        .expect("should rename");
+
+        assert!(moved.ends_with("260814 - Weekly sync - Retro"));
+        assert!(moved.join("source.mp4").is_file());
+    }
+
+    #[test]
+    fn a_hyphen_in_the_title_or_the_type_is_refused_before_any_folder_is_created() {
+        let (dir, meeting) = vault_with_meeting("unsorted", "260822 - source");
+
+        for request in [
+            update(Some("ELS"), "260814", "Weekly - sync"),
+            typed_update(Some("ELS"), "260814", "Weekly sync", "Re-tro"),
+        ] {
+            assert_eq!(
+                rename_meeting(dir.path(), &meeting, &request),
+                Err(VaultError::InvalidMeetingName {
+                    reason: Rejection::ReservedSeparator
+                }),
+                "for {request:?}"
+            );
+        }
+
+        assert!(meeting.join("source.mp4").is_file());
+        assert!(
+            !dir.path().join("ELS").exists(),
+            "the separator is refused before the destination project folder is created"
+        );
     }
 
     #[test]

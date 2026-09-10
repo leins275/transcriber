@@ -1,5 +1,5 @@
 import styles from "./VaultRow.module.css";
-import { formatMeetingDate, parseMeetingName } from "../lib/meetingName";
+import { formatMeetingDate, parseEntryName } from "../lib/meetingName";
 import type { VaultMeetingView } from "../types";
 
 export type VaultRowProps = {
@@ -38,7 +38,7 @@ function TranscriptIcon({ present }: { present: boolean }) {
 /** The recording's file extension, from the meeting folder's `source.*`.
  * Not known from the listing, so the row says what it can. */
 function statusLine(entry: VaultMeetingView): string {
-  const parsed = parseMeetingName(entry.meeting_name);
+  const parsed = parseEntryName(entry.meeting_name, entry.project);
   const parts = [parsed ? formatMeetingDate(parsed.date) : null];
   if (entry.has_transcript) {
     parts.push("transcript ready");
@@ -63,7 +63,7 @@ function statusLine(entry: VaultMeetingView): string {
  * Presentational only: no invoke, no listen, no fetch.
  */
 export function VaultRow({ entry, onOpen, showProject = true }: VaultRowProps) {
-  const parsed = parseMeetingName(entry.meeting_name);
+  const parsed = parseEntryName(entry.meeting_name, entry.project);
 
   return (
     <div className={styles.row}>
@@ -71,7 +71,10 @@ export function VaultRow({ entry, onOpen, showProject = true }: VaultRowProps) {
         <TranscriptIcon present={entry.has_transcript} />
       </span>
       <button type="button" className={styles.content} onClick={() => onOpen(entry.id)}>
-        <span className={styles.name}>{parsed ? parsed.title : entry.meeting_name}</span>
+        <span className={styles.nameLine}>
+          <span className={styles.name}>{parsed ? parsed.title : entry.meeting_name}</span>
+          {parsed?.kind && <span className="pill">{parsed.kind}</span>}
+        </span>
         <span className={styles.meta}>
           <span>{statusLine(entry)}</span>
           {showProject && entry.project && (

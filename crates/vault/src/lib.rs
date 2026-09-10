@@ -11,32 +11,50 @@
 //! A source filename is expected to match:
 //!
 //! ```text
-//! <Project code> - <date> - <Title>.<ext>
+//! <Project code> - <date> - <Title>[ - <Type>].<ext>
 //! ```
 //!
-//! split on the **first two** occurrences of the separator `-` — the
-//! spaces around it are optional, so `ELS-260812-Title.mp4` parses the
-//! same as `ELS - 260812 - Title.mp4` — and each part is trimmed of
-//! surrounding spaces. Only the first two hyphens act as separators, so a
-//! title may itself contain `-`. `<Project code>`
-//! matches `^[A-Za-z][A-Za-z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
+//! `-` is **reserved as the separator**: the stem is split on *every*
+//! occurrence of it, and the spaces around a separator are optional, so
+//! `ELS-260812-Title.mp4` parses the same as `ELS - 260812 - Title.mp4`
+//! and each section is trimmed of surrounding ASCII spaces. Spaces
+//! *inside* a section are kept verbatim. `<Project code>` matches
+//! `^[A-Za-z][A-Za-z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
 //! is exactly six digits in `YYMMDD` form denoting a real calendar date,
 //! `<Title>` is any non-empty, Windows-legal string that is not a reserved
-//! device name, and `<ext>` is one of the ten recording media extensions:
-//! `mp4`, `mkv`, `mov`, `webm`, `avi`, `m4a`, `mp3`, `wav`, `flac`, `ogg`.
+//! device name, `<Type>` — the optional fourth section, the meeting type —
+//! follows exactly the title's rules, and `<ext>` is one of the ten
+//! recording media extensions: `mp4`, `mkv`, `mov`, `webm`, `avi`, `m4a`,
+//! `mp3`, `wav`, `flac`, `ogg`.
+//!
+//! The number of sections is therefore part of the grammar:
+//!
+//! ```text
+//! ELS - 260812 - Security issue.mp4              → ELS / 260812 / "Security issue", no type
+//! ELS - 260812 - Security issue - Standup.mp4    → … with the type "Standup"
+//! ELS-260812-Security issue-Standup.mp4          → the same, compact
+//! ELS - 260812 - Security - issue - part 2.mp4   → unsorted (five sections)
+//! just one - separator.mp4                       → unsorted (two sections)
+//! ```
 //!
 //! A filename that matches the convention is a *sorted* recording. Any
 //! other reason for non-conformance (a bad code, a bad date, a bad title,
-//! too few separators) yields an *unsorted* recording — routed to
-//! `unsorted/`, never rejected outright, because every media file must
-//! land somewhere. Only an unsupported extension is rejected outright.
+//! a bad or empty type, too few separators, or five or more sections —
+//! meaning a section itself contained the reserved `-`) yields an
+//! *unsorted* recording — routed to `unsorted/`, never rejected outright,
+//! because every media file must land somewhere. Only an unsupported
+//! extension is rejected outright.
+//!
+//! The type is persisted in the meeting folder name and nowhere else:
+//! [`paths::meeting_folder_name`] writes it, and
+//! [`parse_meeting_folder_name`] reads it back.
 //!
 //! ## On-disk layout
 //!
 //! ```text
 //! <vault root>/
 //!   <PROJECT>/
-//!     <date> - <Title>/
+//!     <date> - <Title>[ - <Type>]/
 //!       source.<ext>
 //!       summary.md                      (F2's LLM summary; carries the
 //!                                        action items as a section)
@@ -59,7 +77,11 @@
 //! Every ingested recording — sorted or unsorted — gets its own folder, so
 //! that later artifacts (a transcript, a summary, a per-recording export)
 //! can be written next to the source; an unsorted meeting folder takes
-//! exactly the same contents as a filed one. `source.*`,
+//! exactly the same contents as a filed one. A sorted meeting folder name
+//! carries the meeting type as its third section when the recording had
+//! one (`260812 - Security issue - Standup`) and only date and title when
+//! it did not; an unsorted folder name keeps the original stem verbatim,
+//! hyphens included. `source.*`,
 //! `transcript.json`, `summary.md`, `note.md`, `action items` (legacy — the retired
 //! extraction job's tree, still reserved), `facts` (legacy — the retired
 //! facts job's tree, still reserved), `exports` (legacy — the old dated
@@ -153,7 +175,7 @@ pub use list::{list_meetings, MeetingEntry};
 pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{
-    ACTION_ITEMS_DIR_NAME, CHATS_DIR_NAME, EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME,
-    REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES, ROSTER_FILE_NAME, SOURCE_STEM, SUMMARY_FILE_NAME,
-    TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
+    parse_meeting_folder_name, MeetingFolderName, ACTION_ITEMS_DIR_NAME, CHATS_DIR_NAME,
+    EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME, REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES,
+    ROSTER_FILE_NAME, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };

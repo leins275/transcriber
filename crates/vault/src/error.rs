@@ -242,7 +242,33 @@ pub enum Rejection {
     IllegalTitleCharacter(char),
     /// The title component's stem matches a reserved Windows device name
     /// (FR-6).
+    ///
+    /// Shared by the title and the optional type: the type is validated
+    /// with the title's rules ([`crate::title::validate_kind`]) and a
+    /// reserved device name is reported unrelabelled, because the reason is
+    /// the same rule in both places.
     ReservedDeviceName,
+    /// The filename stem splits into more than the four sections the
+    /// grammar defines (`<PRJ>-<DATE>-<NAME>[-<TYPE>]`), which means a `-`
+    /// appears inside one of them (FR-1). The recording still lands, in
+    /// `unsorted/`, with its stem verbatim.
+    TooManySeparators,
+    /// The type component is present but empty after trimming (FR-1).
+    ///
+    /// Distinct from [`Rejection::EmptyTitle`] so an operator can tell
+    /// which of the two sections was blank.
+    EmptyType,
+    /// The type component contains a Windows-illegal or control character
+    /// (FR-1) — the title's rules applied to the fourth section.
+    IllegalTypeCharacter(char),
+    /// An operator-supplied title or type contains the reserved separator
+    /// `-` (FR-6).
+    ///
+    /// Only [`crate::manage`] produces this: the parser splits on every
+    /// `-`, so a section it hands to a validator can never contain one,
+    /// while a rename form hands its fields over verbatim and a `-` there
+    /// would break the round trip through the folder name.
+    ReservedSeparator,
 }
 
 impl Rejection {
@@ -262,6 +288,10 @@ impl Rejection {
             Rejection::EmptyTitle,
             Rejection::IllegalTitleCharacter(':'),
             Rejection::ReservedDeviceName,
+            Rejection::TooManySeparators,
+            Rejection::EmptyType,
+            Rejection::IllegalTypeCharacter(':'),
+            Rejection::ReservedSeparator,
         ]
     }
 }
@@ -293,6 +323,18 @@ impl std::fmt::Display for Rejection {
             Rejection::ReservedDeviceName => {
                 write!(f, "title matches a reserved Windows device name")
             }
+            Rejection::TooManySeparators => write!(
+                f,
+                "filename has more than three \"-\" separators; \"-\" cannot appear inside a section"
+            ),
+            Rejection::EmptyType => write!(f, "type is empty after trimming"),
+            Rejection::IllegalTypeCharacter(c) => {
+                write!(f, "type contains the illegal character '{c}'")
+            }
+            Rejection::ReservedSeparator => write!(
+                f,
+                "\"-\" is reserved as the separator and cannot appear inside the title or type"
+            ),
         }
     }
 }
@@ -324,7 +366,11 @@ mod exhaustiveness {
             | Rejection::DateNotACalendarDate
             | Rejection::EmptyTitle
             | Rejection::IllegalTitleCharacter(_)
-            | Rejection::ReservedDeviceName => {}
+            | Rejection::ReservedDeviceName
+            | Rejection::TooManySeparators
+            | Rejection::EmptyType
+            | Rejection::IllegalTypeCharacter(_)
+            | Rejection::ReservedSeparator => {}
         }
     }
 
