@@ -23,6 +23,10 @@ export type SettingsView = {
   /** Whether a Hugging Face token is stored; the token itself never
    * reaches the UI. Additive. */
   hf_token_present: boolean;
+  /** Whether a dropped video is compressed once its transcript, summary
+   * and export are done (the app's `compress_video` key, on when unset).
+   * Additive. */
+  compress_video: boolean;
 };
 
 /** `GET /v1/diarization/status` through the Rust shell: which of speaker
@@ -58,9 +62,11 @@ export type JobState =
 
 /** Which pipeline a job runs. `transcribe` is the original; the rest are
  * the derived jobs over an already-transcribed meeting (additive to the
- * frozen contract): the LLM feature's summary and export, and `diarize`,
- * speaker identification written into the existing transcript. */
-export type JobType = "transcribe" | "summarize" | "export" | "diarize";
+ * frozen contract): the LLM feature's summary and export, `diarize`,
+ * speaker identification written into the existing transcript, and
+ * `compress`, the chain's last stage re-encoding a video recording in its
+ * place. */
+export type JobType = "transcribe" | "summarize" | "export" | "diarize" | "compress";
 
 export type JobSnapshot = {
   id: string;

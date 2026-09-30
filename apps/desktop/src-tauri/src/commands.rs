@@ -107,6 +107,9 @@ pub struct SettingsResponse {
     /// Whether a Hugging Face token is stored (`hf_token`); the token
     /// itself never crosses the IPC boundary. Additive.
     pub hf_token_present: bool,
+    /// Whether a dropped video is compressed after the rest of the chain
+    /// (`config.rs`'s `compress_video`, on when unset). Additive.
+    pub compress_video: bool,
 }
 
 /// `%USERPROFILE%\Meetings` (E2/FR-10) -- outside the application folder by
@@ -130,6 +133,7 @@ fn build_settings_response(settings: &Settings, config_error: Option<String>) ->
         service_base_url: view.service_base_url,
         diarize: view.diarize,
         hf_token_present: view.hf_token_present,
+        compress_video: view.compress_video,
         supported_extensions: paths::supported_extensions()
             .iter()
             .map(|ext| ext.to_string())
@@ -458,6 +462,7 @@ impl AppState {
         // every strict-roster submission.
         registry
             .set_strict_speaker_match_threshold(config::strict_speaker_match_threshold(&settings));
+        registry.set_compress_video(config::compress_video_enabled(&settings));
         AppState {
             config_dir,
             app_dir,
@@ -736,6 +741,25 @@ pub async fn set_diarization_settings_handler(
         config::set_diarization(&state.config_dir, &mut settings, enabled, hf_token)?;
         settings.clone()
     };
+    // A successful save writes a fresh, valid `config.json` (E3).
+    *state.config_error.write().await = None;
+    Ok(build_settings_response(&updated, None))
+}
+
+/// `set_compress_video` -- persists the compress-video switch and hands it
+/// to the job registry, which consults it when a chain reaches its last
+/// stage. The key is the app's own (the service never reads it), so unlike
+/// `set_diarization_settings` no sidecar restart follows.
+pub async fn set_compress_video_handler(
+    state: &AppState,
+    enabled: bool,
+) -> Result<SettingsResponse, AppError> {
+    let updated = {
+        let mut settings = state.settings.write().await;
+        config::set_compress_video(&state.config_dir, &mut settings, enabled)?;
+        settings.clone()
+    };
+    state.registry.read().await.set_compress_video(enabled);
     // A successful save writes a fresh, valid `config.json` (E3).
     *state.config_error.write().await = None;
     Ok(build_settings_response(&updated, None))
@@ -1067,6 +1091,14 @@ pub async fn set_diarization_settings(
         resolve_and_apply_meetings_root_service(&state, &settings, root).await;
     });
     Ok(response)
+}
+
+#[tauri::command]
+pub async fn set_compress_video(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<SettingsResponse, AppError> {
+    set_compress_video_handler(&state, enabled).await
 }
 
 #[tauri::command]
@@ -2122,6 +2154,44 @@ mod tests {
                 sidecar.calls().is_empty(),
                 "set_meetings_root_handler must return before the sidecar is resolved"
             );
+        });
+    }
+
+    #[test]
+    fn set_compress_video_persists_the_key_and_flips_the_registry_without_a_restart() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let sidecar = Arc::new(RecordingSidecarController::default());
+            let state = state_with_full(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                sidecar.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            assert!(
+                state.registry.read().await.compress_video(),
+                "an untouched install compresses"
+            );
+
+            let response = set_compress_video_handler(&state, false)
+                .await
+                .expect("set_compress_video must succeed");
+
+            assert!(!response.compress_video);
+            assert!(!state.registry.read().await.compress_video());
+            let saved = config::load(root.path()).expect("config.json reloads");
+            assert_eq!(saved.compress_video, Some(false));
+            assert!(
+                sidecar.calls().is_empty(),
+                "the key is the app's own: no sidecar restart"
+            );
+
+            let response = set_compress_video_handler(&state, true)
+                .await
+                .expect("set_compress_video must succeed");
+            assert!(response.compress_video);
+            assert!(state.registry.read().await.compress_video());
         });
     }
 

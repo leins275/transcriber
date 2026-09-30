@@ -374,9 +374,16 @@ fn the_drop_chains_summarize_and_export_stages_carry_no_cap_and_no_threshold() {
 
         drop_and_wait(&state, downloads.path(), SORTED_DROP).await;
 
-        let chained = llm_submissions(&fake, 2, JOB_TIMEOUT).await;
+        let chained = llm_submissions(&fake, 3, JOB_TIMEOUT).await;
         let kinds: Vec<LlmJobKind> = chained.iter().map(|request| request.kind).collect();
-        assert_eq!(kinds, [LlmJobKind::Summarize, LlmJobKind::Export]);
+        assert_eq!(
+            kinds,
+            [
+                LlmJobKind::Summarize,
+                LlmJobKind::Export,
+                LlmJobKind::Compress
+            ]
+        );
         assert!(
             chained.iter().all(|request| request.max_speakers.is_none()
                 && request.speaker_match_threshold.is_none()),

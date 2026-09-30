@@ -168,6 +168,10 @@ export const api = {
    * and voice embeddings land in its existing transcript. */
   diarizeVaultEntry: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("diarize_vault_entry", { entryId }),
+  /** Persists whether a dropped video is compressed after the rest of the
+   * chain. The app's own key: no sidecar restart. */
+  setCompressVideo: (enabled: boolean): Promise<SettingsView> =>
+    call<SettingsView>("set_compress_video", { enabled }),
   /** Queues one such job per hand-labelled meeting that never had a
    * diarization pass; resolves to how many were queued. */
   diarizeLabelledMeetings: (): Promise<number> => call<number>("diarize_labelled_meetings"),

@@ -24,6 +24,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     default_meetings_root: null,
     diarize: false,
     hf_token_present: false,
+    compress_video: true,
     ...overrides,
   };
 }
@@ -145,6 +146,7 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onCancelDiarizationModelDownload: () => {},
     onSaveHfToken: () => Promise.resolve(),
     onSetDiarizeEnabled: () => Promise.resolve(),
+    onSetCompressVideo: () => Promise.resolve(),
     onDiarizeLabelledMeetings: () => Promise.resolve(0),
     ...overrides,
   };
@@ -354,6 +356,42 @@ describe("SettingsPage", () => {
   });
 });
 
+describe("SettingsPage recordings row", () => {
+  it("flips the video compression switch without touching speaker settings", async () => {
+    const user = userEvent.setup();
+    const onSetCompressVideo = vi.fn().mockResolvedValue(undefined);
+    const onSetDiarizeEnabled = vi.fn().mockResolvedValue(undefined);
+    renderPage({ onSetCompressVideo, onSetDiarizeEnabled });
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /compress video recordings after processing/i,
+    });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    expect(onSetCompressVideo).toHaveBeenCalledWith(false);
+    expect(onSetDiarizeEnabled).not.toHaveBeenCalled();
+  });
+
+  it("renders the compression switch off when the setting is off", () => {
+    renderPage({ settings: buildSettings({ compress_video: false }) });
+    expect(
+      screen.getByRole("checkbox", { name: /compress video recordings after processing/i }),
+    ).not.toBeChecked();
+  });
+
+  it("shows the save error under the switch and leaves the speakers row alone", async () => {
+    const user = userEvent.setup();
+    renderPage({ onSetCompressVideo: () => Promise.reject(new Error("disk is read-only")) });
+
+    await user.click(
+      screen.getByRole("checkbox", { name: /compress video recordings after processing/i }),
+    );
+
+    expect(await screen.findByText("disk is read-only")).toBeInTheDocument();
+  });
+});
+
 describe("SettingsPage speakers row", () => {
   it("offers the runtime fetch, sized, when speaker identification is not set up", async () => {
     const user = userEvent.setup();
@@ -439,6 +477,7 @@ describe("SettingsPage speakers row", () => {
           onCancelDiarizationModelDownload: () => {},
           onSaveHfToken,
           onSetDiarizeEnabled: () => Promise.resolve(),
+          onSetCompressVideo: () => Promise.resolve(),
           onDiarizeLabelledMeetings: () => Promise.resolve(0),
         }}
       />,

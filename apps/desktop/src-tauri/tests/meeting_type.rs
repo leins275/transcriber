@@ -37,21 +37,28 @@ const JOB_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// An `AppState` over `root`, wired the way `lib.rs` wires it.
 ///
-/// The fake reports **no LLM model installed** on purpose: with one, a
-/// finished transcription chains a `summarize` over the same meeting folder
+/// The fake reports **no LLM model installed** on purpose, and the
+/// compress stage is switched off: with either, a finished transcription
+/// chains another job over the same meeting folder
 /// (`jobs::queue_follow_up`), and `update_vault_entry` rightly refuses to
 /// rename a folder a queued job is about to read. These tests are about
-/// naming, not the chain, so they use the LLM-less install whose chain ends
-/// at transcription -- leaving the meeting genuinely idle.
+/// naming, not the chain, so they use an install whose chain ends at
+/// transcription -- leaving the meeting genuinely idle.
 fn state_over(root: &Path) -> AppState {
-    build_state(
+    let state = build_state(
         root.to_path_buf(),
         Arc::new(FakeService::with_llm_model_absent()),
-    )
+    );
+    state
+        .registry
+        .try_read()
+        .expect("nothing else holds the registry yet")
+        .set_compress_video(false);
+    state
 }
 
 /// Drops `file_name` into the app and waits for its transcription to
-/// finish. Because `state_over`'s service reports no LLM model, that
+/// finish. Because `state_over`'s chain ends at transcription, that
 /// terminal state is the whole chain: the meeting is filed and has no
 /// active job by the time a rename is attempted (`update_vault_entry`
 /// refuses a meeting with one).

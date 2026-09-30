@@ -139,6 +139,13 @@ pub struct Settings {
     /// never serialized as `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_match_threshold_strict: Option<f64>,
+    /// Whether a dropped video is compressed once its transcript, summary
+    /// and export are done (the drop-to-insights chain's last stage).
+    /// Read by the **app** only -- it gates whether the stage is queued;
+    /// the service sees the key as unknown and ignores it. Absent means
+    /// on (`compress_video_enabled`), and it is never serialized as `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compress_video: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, serde_json::Value>,
 }
@@ -157,6 +164,7 @@ impl Default for Settings {
             diarize: None,
             hf_token: None,
             speaker_match_threshold_strict: None,
+            compress_video: None,
             extra: Map::new(),
         }
     }
@@ -175,6 +183,8 @@ pub struct SettingsView {
     /// Whether an `hf_token` is stored -- the token itself never leaves
     /// the config file.
     pub hf_token_present: bool,
+    /// `compress_video`, resolved to its default (on) when unset.
+    pub compress_video: bool,
 }
 
 /// The path `config.json` lives at, inside `dir`.
@@ -243,7 +253,25 @@ pub fn settings_view(settings: &Settings) -> SettingsView {
             .hf_token
             .as_deref()
             .is_some_and(|token| !token.trim().is_empty()),
+        compress_video: compress_video_enabled(settings),
     }
+}
+
+/// Whether the chain's compress stage is on: `compress_video` when the
+/// key is present, else on -- an untouched install compresses.
+pub fn compress_video_enabled(settings: &Settings) -> bool {
+    settings.compress_video.unwrap_or(true)
+}
+
+/// Persists the compress-video switch. Atomic save, like every other
+/// write here; no service restart is owed, the key is the app's own.
+pub fn set_compress_video(
+    dir: &Path,
+    settings: &mut Settings,
+    enabled: bool,
+) -> Result<(), AppError> {
+    settings.compress_video = Some(enabled);
+    save(dir, settings)
 }
 
 /// Persists the speaker-identification settings: the `diarize` switch,
@@ -408,6 +436,42 @@ mod tests {
         assert_eq!(settings.service.base_url, None);
         assert_eq!(settings.model.id, None);
         assert_eq!(settings.model.path, None);
+    }
+
+    #[test]
+    fn compress_video_absent_reads_as_on() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            config_path(dir.path()),
+            json!({ "schema_version": 1, "meetings_root": "D:\\Meetings" }).to_string(),
+        )
+        .expect("write config");
+
+        let settings = load(dir.path()).expect("load must succeed");
+
+        assert_eq!(settings.compress_video, None);
+        assert!(compress_video_enabled(&settings));
+        assert!(settings_view(&settings).compress_video);
+        assert!(compress_video_enabled(&Settings::default()));
+    }
+
+    #[test]
+    fn set_compress_video_persists_false_and_round_trips() {
+        let dir = tempdir().expect("tempdir");
+        let mut settings = Settings::default();
+
+        set_compress_video(dir.path(), &mut settings, false).expect("save must succeed");
+
+        let raw = fs::read_to_string(config_path(dir.path())).expect("config written");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
+        assert_eq!(doc["compress_video"], json!(false));
+        let reloaded = load(dir.path()).expect("reload must succeed");
+        assert_eq!(reloaded.compress_video, Some(false));
+        assert!(!compress_video_enabled(&reloaded));
+        assert!(!settings_view(&reloaded).compress_video);
+
+        set_compress_video(dir.path(), &mut settings, true).expect("save must succeed");
+        assert_eq!(load(dir.path()).expect("reload").compress_video, Some(true));
     }
 
     #[test]

@@ -136,9 +136,13 @@ enum FollowUp {
     /// Summarize the meeting the finished transcription wrote (the summary
     /// carries the action items as a section); then chain the export.
     Summarize,
-    /// Assemble the share-ready export document (no LLM call); the chain
-    /// ends here.
+    /// Assemble the share-ready export document (no LLM call); then chain
+    /// the compress stage.
     Export,
+    /// Re-encode the meeting's video recording in its place (no LLM call);
+    /// the chain ends here. Only queued while the `compress_video` setting
+    /// is on and the recording is a video.
+    Compress,
 }
 
 /// What the worker has to do before it can submit a job.
@@ -193,6 +197,11 @@ struct Shared {
     /// the same reason `status_sink` is one -- the value is copied out
     /// before any `.await`, never held across one.
     strict_speaker_match_threshold: StdMutex<f64>,
+    /// Whether the chain's last stage -- compressing a dropped video --
+    /// runs (`config.json`'s app-only `compress_video`, on by default).
+    /// Set at startup and by the Settings switch; the same plain mutex
+    /// discipline as `strict_speaker_match_threshold`.
+    compress_video: StdMutex<bool>,
     jobs: RwLock<HashMap<String, JobSnapshot>>,
     /// `this app's job id -> F2's job id`, for jobs currently in flight.
     ///
@@ -217,6 +226,14 @@ impl Shared {
             .strict_speaker_match_threshold
             .lock()
             .expect("strict_speaker_match_threshold mutex poisoned")
+    }
+
+    /// Whether the chain's compress stage is switched on.
+    fn compress_video(&self) -> bool {
+        *self
+            .compress_video
+            .lock()
+            .expect("compress_video mutex poisoned")
     }
 
     /// The speaker cap the meeting's project roster imposes, and the
@@ -320,6 +337,7 @@ impl JobRegistry {
             strict_speaker_match_threshold: StdMutex::new(
                 crate::config::DEFAULT_STRICT_SPEAKER_MATCH_THRESHOLD,
             ),
+            compress_video: StdMutex::new(true),
             jobs: RwLock::new(HashMap::new()),
             service_job_ids: RwLock::new(HashMap::new()),
             poll_interval,
@@ -381,6 +399,25 @@ impl JobRegistry {
             .strict_speaker_match_threshold
             .lock()
             .expect("strict_speaker_match_threshold mutex poisoned") = value;
+    }
+
+    /// Switches the chain's compress stage on or off (`config.json`'s
+    /// `compress_video`). Synchronous and optional like
+    /// [`set_strict_speaker_match_threshold`]: a fresh registry has it on,
+    /// the key's default.
+    ///
+    /// [`set_strict_speaker_match_threshold`]: JobRegistry::set_strict_speaker_match_threshold
+    pub fn set_compress_video(&self, enabled: bool) {
+        *self
+            .shared
+            .compress_video
+            .lock()
+            .expect("compress_video mutex poisoned") = enabled;
+    }
+
+    /// Whether the chain's compress stage is currently switched on.
+    pub fn compress_video(&self) -> bool {
+        self.shared.compress_video()
     }
 
     /// Registers each path as a new `Pending` job and returns their initial
@@ -861,22 +898,17 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         return;
     };
 
-    // The meeting folder the next stage reads: a finished transcription's
-    // and a finished summarize's `meeting_dir` are both that folder itself.
+    // The meeting folder the next stage reads: a finished transcription's,
+    // summarize's and export's `meeting_dir` are all that folder itself.
     let meeting_dir = finished_dir;
 
-    if next != FollowUp::Export {
-        let service = shared.service.read().await.clone();
-        let llm_model_present = service
-            .health()
-            .await
-            .ok()
-            .and_then(|health| health.llm_model_present)
-            .unwrap_or(false);
-        if !llm_model_present {
-            return;
-        }
-    }
+    // The LLM stages need a model; without one they are skipped -- but
+    // skipped, not the end of the chain: the compress stage still runs
+    // "after all others", which is then right after the transcription.
+    let next = match next {
+        FollowUp::Summarize if !llm_model_present(shared).await => FollowUp::Compress,
+        other => other,
+    };
 
     let (kind, output_dir, follow_up) = match next {
         FollowUp::Summarize => (
@@ -888,11 +920,25 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         // (`export.md` + the share-named PDF), overwritten on re-run --
         // these are regenerable derived documents. The same folder
         // `export_recording` (commands/llm.rs) uses.
-        FollowUp::Export => (LlmJobKind::Export, meeting_dir.clone(), None),
+        FollowUp::Export => (
+            LlmJobKind::Export,
+            meeting_dir.clone(),
+            Some(FollowUp::Compress),
+        ),
+        // The compress stage only makes sense for a video recording and
+        // only while the operator has it switched on; otherwise the chain
+        // ends here, silently -- nothing to show for a stage that has
+        // nothing to do.
+        FollowUp::Compress => {
+            if !shared.compress_video() || !source_is_video(PathBuf::from(&meeting_dir)).await {
+                return;
+            }
+            (LlmJobKind::Compress, meeting_dir.clone(), None)
+        }
     };
-    // Chained derived stages (`summarize` / `export`) run no diarization
-    // pass, so they carry no speaker bounds -- their bodies stay the three
-    // pre-feature keys.
+    // Chained derived stages (`summarize` / `export` / `compress`) run no
+    // diarization pass, so they carry no speaker bounds -- their bodies
+    // stay the three pre-feature keys.
     let request = LlmSubmitRequest {
         kind,
         input_path: meeting_dir,
@@ -912,6 +958,33 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
         work: PendingWork::Llm { request },
         follow_up,
     });
+}
+
+/// Whether the service reports an installed LLM model right now.
+async fn llm_model_present(shared: &Arc<Shared>) -> bool {
+    let service = shared.service.read().await.clone();
+    service
+        .health()
+        .await
+        .ok()
+        .and_then(|health| health.llm_model_present)
+        .unwrap_or(false)
+}
+
+/// Whether the meeting folder's recording (`source.<ext>`) is a video, by
+/// the vault's own extension split. A folder with no recording, or one
+/// that cannot be read, is not a video.
+async fn source_is_video(meeting_dir: PathBuf) -> bool {
+    tokio::task::spawn_blocking(move || {
+        vault::source_file_in(&meeting_dir)
+            .and_then(|path| {
+                path.extension()
+                    .map(|ext| ext.to_string_lossy().into_owned())
+            })
+            .is_some_and(|ext| vault::media::is_video_extension(&ext))
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Whether any path recorded on `job` is `dir` itself or lives inside it.
@@ -1357,7 +1430,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drop_chains_summarize_then_export_in_order() {
+    fn a_drop_chains_summarize_export_then_compress_in_order() {
         run(async {
             let dir = tempdir().expect("tempdir");
             let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
@@ -1379,12 +1452,14 @@ mod tests {
             .await;
 
             // The chain: summarize (which carries the action items), then
-            // the export document -- both over the transcription's meeting
-            // folder, and the export lands in that folder itself under
-            // stable names (overwritten on re-run, no dated subfolder).
-            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            // the export document, then the video compression -- all over
+            // the transcription's meeting folder, and the export lands in
+            // that folder itself under stable names (overwritten on re-run,
+            // no dated subfolder).
+            let submissions = wait_for_llm_submissions(&fake, 3, Duration::from_secs(5)).await;
             assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Summarize);
             assert_eq!(submissions[1].kind, crate::service::LlmJobKind::Export);
+            assert_eq!(submissions[2].kind, crate::service::LlmJobKind::Compress);
 
             let meeting_dir = snapshot_meeting_dir(&registry, &snapshot.id).await;
             assert_eq!(submissions[0].input_path, meeting_dir);
@@ -1394,6 +1469,8 @@ mod tests {
                 submissions[1].output_dir, meeting_dir,
                 "the export must land in the meeting folder itself"
             );
+            assert_eq!(submissions[2].input_path, meeting_dir);
+            assert_eq!(submissions[2].output_dir, meeting_dir);
 
             // Every chained stage is a tracked, visible job that reaches Done.
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1401,7 +1478,7 @@ mod tests {
                 let jobs = registry.list().await;
                 let mut types: Vec<&str> = jobs.iter().map(|j| j.job_type.as_str()).collect();
                 types.sort_unstable();
-                if types == ["export", "summarize", "transcribe"]
+                if types == ["compress", "export", "summarize", "transcribe"]
                     && jobs.iter().all(|j| j.state == JobState::Done)
                 {
                     break;
@@ -1419,7 +1496,8 @@ mod tests {
     fn every_clean_done_fires_one_quiet_index_submission_and_a_failure_fires_none() {
         run(async {
             // The success side: a full drop chain (transcribe -> summarize
-            // -> export) fires one fire-and-forget re-index per Done.
+            // -> export -> compress) fires one fire-and-forget re-index per
+            // Done.
             let dir = tempdir().expect("tempdir");
             let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
             let fake = Arc::new(FakeService::new());
@@ -1437,12 +1515,12 @@ mod tests {
                 Duration::from_secs(5),
             )
             .await;
-            wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            wait_for_llm_submissions(&fake, 3, Duration::from_secs(5)).await;
             let deadline = Instant::now() + Duration::from_secs(5);
-            while fake.index_submission_count() < 3 {
+            while fake.index_submission_count() < 4 {
                 assert!(
                     Instant::now() < deadline,
-                    "expected 3 index submissions (one per Done stage), saw {}",
+                    "expected 4 index submissions (one per Done stage), saw {}",
                     fake.index_submission_count()
                 );
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1486,7 +1564,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chain_is_skipped_while_no_llm_model_is_installed() {
+    fn without_an_llm_model_the_chain_skips_straight_to_compress() {
         run(async {
             let dir = tempdir().expect("tempdir");
             let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
@@ -1507,11 +1585,122 @@ mod tests {
             )
             .await;
 
-            // Give the would-be chain ample time to (not) fire: no llm
-            // submission and no extra job may appear -- silence, not a
-            // pair of failed model_load jobs on every drop.
+            // The LLM stages are skipped silently -- no pair of failed
+            // model_load jobs on every drop -- but the compress stage still
+            // runs "after all others", which is right after the transcription.
+            let submissions = wait_for_llm_submissions(&fake, 1, Duration::from_secs(5)).await;
+            assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Compress);
             tokio::time::sleep(Duration::from_millis(200)).await;
-            assert!(fake.llm_submissions().is_empty());
+            assert_eq!(fake.llm_submissions().len(), 1);
+            let jobs = registry.list().await;
+            let mut types: Vec<&str> = jobs.iter().map(|j| j.job_type.as_str()).collect();
+            types.sort_unstable();
+            assert_eq!(types, ["compress", "transcribe"]);
+        });
+    }
+
+    #[test]
+    fn compress_is_not_chained_while_the_toggle_is_off() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+            assert!(registry.compress_video(), "a fresh registry has it on");
+            registry.set_compress_video(false);
+
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            assert_eq!(submissions[1].kind, crate::service::LlmJobKind::Export);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(fake.llm_submissions().len(), 2, "no compress submission");
+            assert_eq!(registry.list().await.len(), 3);
+        });
+    }
+
+    #[test]
+    fn compress_is_not_chained_for_an_audio_recording() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.m4a");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = wait_for_llm_submissions(&fake, 2, Duration::from_secs(5)).await;
+            assert_eq!(submissions[1].kind, crate::service::LlmJobKind::Export);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(
+                fake.llm_submissions().len(),
+                2,
+                "nothing to compress in an m4a"
+            );
+            assert_eq!(registry.list().await.len(), 3);
+        });
+    }
+
+    #[test]
+    fn a_manual_export_never_chains_compress() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let meeting_dir = dir.path().join("ELS").join("260101 - Planning");
+            fs::create_dir_all(&meeting_dir).expect("mkdir");
+            fs::write(meeting_dir.join("source.mp4"), b"bytes").expect("write source");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+
+            let meeting = meeting_dir.to_string_lossy().into_owned();
+            let snapshot = registry
+                .enqueue_llm(crate::service::LlmSubmitRequest {
+                    kind: crate::service::LlmJobKind::Export,
+                    input_path: meeting.clone(),
+                    output_dir: meeting,
+                    max_speakers: None,
+                    speaker_match_threshold: None,
+                })
+                .await;
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            // The Export button re-exports, nothing more.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(fake.llm_submissions().len(), 1);
             assert_eq!(registry.list().await.len(), 1);
         });
     }

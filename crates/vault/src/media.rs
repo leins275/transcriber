@@ -11,6 +11,19 @@ const ALLOWED: [&str; 10] = [
     "mp4", "mkv", "mov", "webm", "avi", "m4a", "mp3", "wav", "flac", "ogg",
 ];
 
+/// The five of them that are video containers; the other five only ever
+/// hold audio. A stage that only makes sense for video (the chain's
+/// compress stage) asks here rather than keeping its own list.
+const VIDEO: [&str; 5] = ["mp4", "mkv", "mov", "webm", "avi"];
+
+/// Whether `ext` -- with or without a leading dot, in any case -- is one of
+/// the video container extensions. Pure; an unknown extension is simply
+/// not video.
+pub fn is_video_extension(ext: &str) -> bool {
+    let lower = ext.trim_start_matches('.').to_ascii_lowercase();
+    VIDEO.contains(&lower.as_str())
+}
+
 /// A validated, lowercase-normalized media extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaExt(String);
@@ -24,6 +37,11 @@ impl MediaExt {
     /// The canonical source file name for this extension: `source.<ext>`.
     pub fn source_file_name(&self) -> String {
         format!("source.{}", self.0)
+    }
+
+    /// Whether this extension is a video container (see [`is_video_extension`]).
+    pub fn is_video(&self) -> bool {
+        is_video_extension(&self.0)
     }
 }
 
@@ -58,5 +76,33 @@ pub fn stem(name: &str) -> &str {
     match name.rfind('.') {
         Some(idx) => &name[..idx],
         None => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_five_video_containers_are_video() {
+        for ext in ["mp4", "mkv", "mov", "webm", "avi"] {
+            assert!(is_video_extension(ext), "{ext} must be video");
+            assert!(from_file_name(&format!("x.{ext}")).unwrap().is_video());
+        }
+    }
+
+    #[test]
+    fn the_audio_only_extensions_are_not_video() {
+        for ext in ["m4a", "mp3", "wav", "flac", "ogg", "", "txt"] {
+            assert!(!is_video_extension(ext), "{ext} must not be video");
+        }
+        assert!(!from_file_name("x.wav").unwrap().is_video());
+    }
+
+    #[test]
+    fn is_video_extension_ignores_case_and_a_leading_dot() {
+        assert!(is_video_extension(".MP4"));
+        assert!(is_video_extension("Mkv"));
+        assert!(!is_video_extension(".M4A"));
     }
 }

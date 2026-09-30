@@ -16,6 +16,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     default_meetings_root: null,
     diarize: false,
     hf_token_present: false,
+    compress_video: true,
     ...overrides,
   };
 }

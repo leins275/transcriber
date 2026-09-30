@@ -29,6 +29,7 @@ const RUNNING_TEXT: Record<JobType, string> = {
   summarize: "Summarizing",
   export: "Exporting PDF",
   diarize: "Identifying speakers",
+  compress: "Compressing video",
 };
 
 /** A failed derived job loses no source material — unlike transcription's
@@ -39,6 +40,7 @@ const FAILED_TEXT: Record<JobType, string> = {
   summarize: "Summary failed.",
   export: "Export failed.",
   diarize: "Speaker identification failed.",
+  compress: "Video compression failed — the recording is untouched.",
 };
 
 /** The project name from the `Project - YYMMDD - Title` convention, for a

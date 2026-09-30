@@ -72,6 +72,13 @@ describe("activeJobView", () => {
     });
   });
 
+  it("narrates a queued compress stage with the meeting title", () => {
+    const view = activeJobView([
+      buildJob({ state: "queued", job_type: "compress", file_name: "260825 - Weekly sync" }),
+    ]);
+    expect(view?.label).toBe("Compressing video for “Weekly sync”");
+  });
+
   it("says Filing during ingest, before transcription starts", () => {
     const view = activeJobView([buildJob({ state: "ingesting" })]);
     expect(view?.label).toBe("Filing “ELS - Incident review”");

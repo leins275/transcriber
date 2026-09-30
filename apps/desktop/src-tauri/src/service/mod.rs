@@ -299,6 +299,10 @@ pub enum LlmJobKind {
     /// it shares this enum because it is submitted exactly like the
     /// other per-meeting derived jobs (`input_path` = meeting dir).
     Diarize,
+    /// Re-encode the meeting's video recording to a smaller H.264 mp4 in
+    /// its place (the drop-to-insights chain's last stage). No LLM runs;
+    /// submitted like every other per-meeting derived job.
+    Compress,
 }
 
 impl LlmJobKind {
@@ -308,6 +312,7 @@ impl LlmJobKind {
             LlmJobKind::Summarize => "summarize",
             LlmJobKind::Export => "export",
             LlmJobKind::Diarize => "diarize",
+            LlmJobKind::Compress => "compress",
         }
     }
 }

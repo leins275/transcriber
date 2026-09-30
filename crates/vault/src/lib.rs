@@ -171,7 +171,7 @@ pub mod manage;
 pub use appdata::app_data_dir;
 pub use error::{Rejection, VaultError};
 pub use ingest::{Classification, CollisionOutcome, Ingested, Vault};
-pub use list::{list_meetings, MeetingEntry};
+pub use list::{list_meetings, source_file_in, MeetingEntry};
 pub use manage::{delete_meeting, rename_meeting, MeetingUpdate, ResolvedMeeting};
 pub use parse::{classify_filename, Classified, ParsedName};
 pub use paths::{

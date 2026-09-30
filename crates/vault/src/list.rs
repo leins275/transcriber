@@ -186,26 +186,30 @@ fn dir_name(entry: &DirEntry) -> Option<(String, bool)> {
     Some((name, is_dir))
 }
 
-/// Whether `meeting_dir` directly contains a file named `source.<anything>`
-/// (case-insensitively on the stem) — an existence check over the
-/// directory's own entries, never a read of any file's contents.
-fn has_source_file(meeting_dir: &Path) -> bool {
-    let Ok(children) = fs::read_dir(meeting_dir) else {
-        return false;
-    };
-    children.flatten().any(|entry| {
-        let Ok(file_type) = entry.file_type() else {
-            return false;
-        };
-        if !file_type.is_file() {
-            return false;
+/// The `source.<anything>` file directly inside `meeting_dir`, if there is
+/// one (case-insensitively on the stem) — the one rule for "this meeting's
+/// recording", shared by the listing's `has_source` and the app's commands.
+/// A directory scan over the folder's own entries, never a read of any
+/// file's contents; an unreadable folder answers `None`.
+pub fn source_file_in(meeting_dir: &Path) -> Option<PathBuf> {
+    let children = fs::read_dir(meeting_dir).ok()?;
+    children.flatten().find_map(|entry| {
+        if !entry.file_type().ok()?.is_file() {
+            return None;
         }
-        entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.split('.').next())
-            .is_some_and(|stem| stem.eq_ignore_ascii_case(SOURCE_STEM))
+        let name = entry.file_name();
+        let stem = name.to_str()?.split('.').next()?;
+        if stem.eq_ignore_ascii_case(SOURCE_STEM) {
+            Some(entry.path())
+        } else {
+            None
+        }
     })
+}
+
+/// Whether `meeting_dir` directly contains a `source.<anything>` file.
+fn has_source_file(meeting_dir: &Path) -> bool {
+    source_file_in(meeting_dir).is_some()
 }
 
 /// Parses the leading six characters of `meeting_name` as a `YYMMDD` date

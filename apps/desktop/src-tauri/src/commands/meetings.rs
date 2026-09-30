@@ -868,22 +868,11 @@ fn validate_language(language: Option<String>) -> Result<Option<String>, AppErro
 }
 
 /// The `source.<ext>` file inside a meeting folder, if there is one — the
-/// same existence rule `vault::list` uses to decide `has_source`, resolved
-/// to the actual path this time rather than a boolean.
+/// vault's own rule (`vault::source_file_in`, the same one its listing's
+/// `has_source` is built on), so the app never grows a second definition
+/// of "the recording".
 pub(super) fn source_file_in(meeting_dir: &Path) -> Option<PathBuf> {
-    let children = std::fs::read_dir(meeting_dir).ok()?;
-    children.flatten().find_map(|entry| {
-        if !entry.file_type().ok()?.is_file() {
-            return None;
-        }
-        let name = entry.file_name();
-        let stem = name.to_str()?.split('.').next()?;
-        if stem.eq_ignore_ascii_case(vault::SOURCE_STEM) {
-            Some(entry.path())
-        } else {
-            None
-        }
-    })
+    vault::source_file_in(meeting_dir)
 }
 
 /// `cancel_job` — asks the service to stop a job this app submitted.

@@ -158,6 +158,17 @@ describe("JobRow", () => {
     expect(screen.getByText("Identifying speakers · segmenting speech · 42%")).toBeInTheDocument();
   });
 
+  it("narrates a running compress job with its decoded fraction", () => {
+    const job = buildJob({
+      job_type: "compress",
+      state: "running",
+      phase: "compressing video",
+      progress: 0.5,
+    });
+    render(<JobRow job={job} onReveal={() => {}} />);
+    expect(screen.getByText("Compressing video · compressing video · 50%")).toBeInTheDocument();
+  });
+
   it("names the phase without a percentage when the phase has no measurable fraction", () => {
     const job = buildJob({
       job_type: "summarize",

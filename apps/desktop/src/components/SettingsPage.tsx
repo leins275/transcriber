@@ -47,6 +47,9 @@ export type SettingsPageProps = {
   onSaveHfToken: (token: string) => Promise<void>;
   /** Flips `diarize` for new recordings (the service restarts to read it). */
   onSetDiarizeEnabled: (enabled: boolean) => Promise<void>;
+  /** Flips `compress_video`: whether a dropped video is re-encoded to a
+   * smaller mp4 once the rest of the chain is done. No restart involved. */
+  onSetCompressVideo: (enabled: boolean) => Promise<void>;
   /** Queues speaker identification over every hand-labelled meeting that
    * never had a pass; resolves to how many were queued. */
   onDiarizeLabelledMeetings: () => Promise<number>;
@@ -221,6 +224,7 @@ export function SettingsPage({
   onCancelDiarizationModelDownload,
   onSaveHfToken,
   onSetDiarizeEnabled,
+  onSetCompressVideo,
   onDiarizeLabelledMeetings,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
@@ -236,6 +240,10 @@ export function SettingsPage({
   const [tokenState, setTokenState] = useState<"idle" | "saving" | "saved" | "failed">("idle");
   const [speakersError, setSpeakersError] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
+  // The compress-video switch: its own busy flag and error line, so a
+  // failed save there never reads as a speakers problem (or vice versa).
+  const [switchingCompress, setSwitchingCompress] = useState(false);
+  const [compressError, setCompressError] = useState<string | null>(null);
   const [backfillState, setBackfillState] = useState<
     { kind: "idle" } | { kind: "queueing" } | { kind: "queued"; count: number }
   >({ kind: "idle" });
@@ -254,6 +262,14 @@ export function SettingsPage({
         setTokenState("failed");
         setSpeakersError(errorMessageOf(caught));
       });
+  };
+
+  const toggleCompress = (enabled: boolean) => {
+    setSwitchingCompress(true);
+    setCompressError(null);
+    onSetCompressVideo(enabled)
+      .catch((caught: unknown) => setCompressError(errorMessageOf(caught)))
+      .finally(() => setSwitchingCompress(false));
   };
 
   const toggleDiarize = (enabled: boolean) => {
@@ -438,6 +454,29 @@ export function SettingsPage({
           <p className={styles.hint}>
             The index updates itself after every transcription and note save; this catches up a
             vault that changed outside the app. Incremental — unchanged meetings are skipped.
+          </p>
+        </div>
+      </div>
+
+      <div className={styles.row}>
+        <div className={styles.kicker}>Recordings</div>
+        <div className={styles.value}>
+          <div className={styles.line}>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={settings.compress_video}
+                disabled={switchingCompress}
+                onChange={(event) => toggleCompress(event.target.checked)}
+              />
+              Compress video recordings after processing
+            </label>
+          </div>
+          {compressError && <p className={styles.warning}>{compressError}</p>}
+          <p className={styles.hint}>
+            Re-encodes a dropped video to a smaller H.264 mp4 once its transcript, summary and
+            export are done. The original is replaced only when the result is at least 15% smaller;
+            audio-only recordings are left alone.
           </p>
         </div>
       </div>
