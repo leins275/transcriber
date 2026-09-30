@@ -3,6 +3,21 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.26.0 — 2026-09-30
+
+### Bug fixes
+
+- **service**: Compress at 1080p with x264 after measuring the vault's 4K recordings
+
+### Documentation
+
+- Describe the compress stage and the compress_video key
+
+### Features
+
+- **desktop**: Chain a compress stage after export behind a compress_video setting
+- **service**: Compress job replaces a filed video with an h264 mp4
+
 ## 0.25.0 — 2026-09-10
 
 ### Bug fixes
