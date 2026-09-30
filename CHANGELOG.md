@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.27.0 — 2026-09-30
+
+### Features
+
+- **service**: Compress with x265 at CRF 26, three times smaller than x264 on screen shares
+
 ## 0.26.0 — 2026-09-30
 
 ### Bug fixes
