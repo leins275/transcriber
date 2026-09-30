@@ -20,7 +20,8 @@ import pytest
 from transcription import compress
 from transcription.compress import (
     DEFAULT_ENCODERS,
-    X264,
+    HEVC_MP4_TAG,
+    X265,
     CompressOutcome,
     EncoderSpec,
     compress_recording,
@@ -32,11 +33,13 @@ MEETING_NAME = "260101 - Planning"
 FPS = 30
 SAMPLE_RATE = 48_000
 
-# CRF 23 shrinks lossless noise several times over; `ultrafast` keeps the
-# suite quick. Never NVENC here: the suite must pass on any machine.
-FAST_X264 = EncoderSpec("libx264", {"crf": "23", "preset": "ultrafast"})
-# An x264 that refuses to open (an unknown preset), standing in for an
-# NVENC whose runtime is missing.
+# CRF 26 shrinks lossless noise several times over; `ultrafast` keeps the
+# suite quick.
+FAST_X265 = EncoderSpec(
+    "libx265", {"crf": "26", "preset": "ultrafast", "x265-params": "log-level=none"}
+)
+# An encoder that refuses to open (an unknown preset), standing in for a
+# GPU encoder whose runtime is missing.
 BROKEN_X264 = EncoderSpec("libx264", {"preset": "no_such_preset"})
 
 
@@ -133,7 +136,7 @@ def _leftovers(meeting: Path) -> list[str]:
 
 
 def _run(source: Path, **overrides: object) -> CompressOutcome:
-    kwargs: dict[str, object] = {"on_progress": lambda _fraction: None, "encoders": (FAST_X264,)}
+    kwargs: dict[str, object] = {"on_progress": lambda _fraction: None, "encoders": (FAST_X265,)}
     kwargs.update(overrides)
     return compress_recording(source, **kwargs)  # type: ignore[arg-type]
 
@@ -150,7 +153,7 @@ def test_a_video_is_replaced_by_a_smaller_mp4_with_the_same_duration(tmp_path: P
 
     meeting = source.parent
     assert outcome.replaced is True
-    assert outcome.encoder == "libx264"
+    assert outcome.encoder == "libx265"
     assert outcome.warning is None
     assert _source_files(meeting) == ["source.mp4"]
     assert _leftovers(meeting) == []
@@ -200,7 +203,7 @@ def test_the_manifest_carries_the_outcome(tmp_path: Path) -> None:
     manifest = _run(source).as_manifest()
 
     assert manifest["replaced"] is True
-    assert manifest["encoder"] == "libx264"
+    assert manifest["encoder"] == "libx265"
     assert manifest["audio"] == "copy"
     assert manifest["path"].endswith("source.mp4")
     assert manifest["before_bytes"] > manifest["after_bytes"] > 0
@@ -325,18 +328,30 @@ def test_an_unknown_encoder_keeps_the_original_and_sweeps_the_temp(tmp_path: Pat
 def test_an_encoder_that_will_not_open_falls_through_to_the_next(tmp_path: Path) -> None:
     source = make_recording(tmp_path, ext="mkv")
 
-    outcome = _run(source, encoders=(BROKEN_X264, FAST_X264))
+    outcome = _run(source, encoders=(BROKEN_X264, FAST_X265))
 
     assert outcome.replaced is True
-    assert outcome.encoder == "libx264"
+    assert outcome.encoder == "libx265"
     assert _source_files(source.parent) == ["source.mp4"]
     assert _leftovers(source.parent) == []
 
 
-def test_the_default_encoder_is_x264_at_crf_23() -> None:
-    assert DEFAULT_ENCODERS == (X264,)
-    assert X264.name == "libx264"
-    assert X264.options == {"crf": "23", "preset": "medium"}
+def test_the_default_encoder_is_x265_at_crf_26() -> None:
+    assert DEFAULT_ENCODERS == (X265,)
+    assert X265.name == "libx265"
+    assert X265.options["crf"] == "26"
+    assert X265.options["preset"] == "medium"
+
+
+def test_the_output_is_hevc_tagged_for_quicktime(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv")
+
+    outcome = _run(source)
+
+    with av.open(str(outcome.path)) as container:
+        stream = container.streams.video[0]
+        assert stream.codec_context.name == "hevc"
+        assert stream.codec_context.codec_tag == HEVC_MP4_TAG
 
 
 # ---------------------------------------------------------------- sizing

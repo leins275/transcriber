@@ -95,7 +95,7 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
 - `compress_video` (`bool`, absent by default) — whether a dropped video is
   compressed once its transcript, summary and export are done: the
   drop-to-insights chain's last stage, a `compress` job that re-encodes
-  `source.<ext>` to a smaller H.264 mp4 in its place
+  `source.<ext>` to a smaller HEVC mp4 in its place
   (`services/transcription/README.md`). Absent means **on**. Like
   `speaker_match_threshold_strict` this key is read by the **app** only
   (`config.rs`'s `compress_video_enabled`), which decides whether to queue

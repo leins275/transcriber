@@ -1,20 +1,23 @@
 """Video compression for a filed recording -- the drop-to-insights chain's last stage.
 
-Re-encodes ``<meeting>/source.<ext>`` to a smaller H.264 mp4 -- x264 at
-CRF 23, capped at 1080p -- and *replaces* the original with it, so the
+Re-encodes ``<meeting>/source.<ext>`` to a smaller HEVC mp4 -- x265 at
+CRF 26, capped at 1080p -- and *replaces* the original with it, so the
 vault stops filling up with multi-GB originals. Everything runs in-process
 through PyAV (FFmpeg's libraries bundled in the wheel, the same decoder the
 transcription used): no external ``ffmpeg`` binary, ever (FR-7).
 
 Why these settings (measured on the operator's own recordings, 4K screen
 shares at a fixed 2.7 Mbps): re-encoding at the *same* resolution with a
-"visually lossless" quality index does not shrink them at all -- x264 CRF
-23 landed at the source's bitrate and NVENC's constant-quality H.264 at
-nearly twice it -- because the recorder already starves them. Halving the
-pixels is what pays: 1080p at CRF 23 came out about 65 % smaller, and
-x264 was both smaller and no slower than the GPU encoder there, so there
-is no NVENC path. Area resampling keeps screen text crisper than bilinear
-at no cost (Lanczos was seven times slower).
+"visually lossless" H.264 index does not shrink them at all -- x264 CRF 23
+landed at the source's bitrate and NVENC's constant-quality H.264 at nearly
+twice it -- because the recorder already starves them. Halving the pixels
+is what pays, and on this mostly-static screen-share content HEVC pays
+again: at 1080p, x265 CRF 26 came out at a third of x264 CRF 23's size
+(~334 vs ~995 kbps, 87 % under the source) at the *same* speed, while the
+GPU encoders were 2.5x larger for a quarter more speed -- so x265 is the
+one encoder and there is no NVENC path. Area resampling keeps screen text
+crisper than bilinear at no cost (Lanczos was seven times slower). The
+mp4 carries the ``hvc1`` tag so QuickTime and Safari recognise it.
 
 Degradation over failure, like every other stage: an audio-only recording,
 one that is already small, an encoder that will not open, a result that is
@@ -85,16 +88,24 @@ RESAMPLE = "AREA"
 
 @dataclass(frozen=True)
 class EncoderSpec:
-    """One H.264 encoder to try, with its FFmpeg private options."""
+    """One video encoder to try, with its FFmpeg private options."""
 
     name: str
     options: dict[str, str]
 
 
-X264 = EncoderSpec("libx264", {"crf": "23", "preset": "medium"})
+X265 = EncoderSpec(
+    "libx265",
+    # x265 logs its whole configuration to stderr per encode unless muted.
+    {"crf": "26", "preset": "medium", "x265-params": "log-level=none"},
+)
 
 # Tried in order; a spec that fails to open hands over to the next one.
-DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (X264,)
+DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (X265,)
+
+# HEVC in mp4 needs this four-character tag for QuickTime and Safari;
+# FFmpeg's default `hev1` plays in VLC and Windows but not there.
+HEVC_MP4_TAG = "hvc1"
 
 
 @dataclass(frozen=True)
@@ -308,6 +319,8 @@ def _encode(
             video.width, video.height = width, height
             video.pix_fmt = "yuv420p"
             video.time_base = src_video.time_base
+            if video.codec_context.name in ("libx265", "hevc_nvenc", "hevc"):
+                video.codec_context.codec_tag = HEVC_MP4_TAG
 
             audio_mode: str | None = None
             audio: av.AudioStream | None = None

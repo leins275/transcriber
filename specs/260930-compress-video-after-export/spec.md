@@ -19,9 +19,9 @@ originals whose only remaining job is playback.
   `source.<ext>` is deleted only after the output is verified. The meeting
   never holds two `source.*` files (work files carry a `compress.` prefix,
   whose stem no scanner reads as the recording).
-- **Encoder: `libx264` CRF 23, shorter side capped at 1080p.** H.264
-  yuv420p, same frame rate, pts copied in the source time base, area
-  resampling for the downscale. Audio is copied when an mp4 can hold it
+- **Encoder: `libx265` CRF 26, shorter side capped at 1080p.** HEVC
+  yuv420p in an `hvc1`-tagged mp4, same frame rate, pts copied in the
+  source time base, area resampling for the downscale. Audio is copied when an mp4 can hold it
   (aac/mp3/opus/ac3/eac3/alac), else AAC 160k. Subtitles, chapters, extra
   streams and rotation metadata are dropped (accepted).
   *Revised after measuring on the operator's vault* (55 of 73 recordings
@@ -32,7 +32,13 @@ originals whose only remaining job is playback.
   alternatives measured were 1440p x264 (44 %), 4K HEVC NVENC CQ 33
   (56 %, HEVC playback caveat) and 4K x264 CRF 28 (38 %). At 1080p output
   NVENC H.264 was 1666 kbps against x264's 924 at the same speed, so the
-  GPU path was dropped.
+  GPU path was dropped. *Revised once more* after measuring HEVC on the
+  CPU: on this mostly-static screen-share content x265 CRF 26 at 1080p
+  came out at 334 kbps (87 % under the source) at x264's speed, against
+  852 kbps for `hevc_nvenc` CQ 28 (68 %, 25 % faster) and 806 kbps for
+  x265 CRF 28 at full 4K (70 %, 23 fps). The operator chose x265 at 1080p
+  everywhere over a GPU-first order, accepting the HEVC playback caveat
+  (Windows needs the HEVC extension; VLC and macOS play it natively).
 - **Settings toggle `compress_video`, on by default.** App-only key; the
   service never reads it; no sidecar restart.
 
@@ -56,7 +62,7 @@ originals whose only remaining job is playback.
 
 ## Verification
 
-- `services/transcription/tests/test_compress.py` (20 cases, synthetic
+- `services/transcription/tests/test_compress.py` (22 cases, synthetic
   recordings, CPU encoder only) and the `compress` cases in
   `tests/test_llm_jobs.py`.
 - `jobs.rs` chain tests (`a_drop_chains_summarize_export_then_compress_in_order`,

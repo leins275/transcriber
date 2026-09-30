@@ -22,7 +22,10 @@ Three commits on `main`, each green on its own payload's gate.
 
 - The encoder loop moves on to the next `EncoderSpec` when one fails to
   open (kept, and tested with an x264 spec carrying an unknown preset,
-  even though the default list is x264 alone).
+  even though the default list is x265 alone).
+- x265 prints its whole configuration to stderr per encode unless
+  `x265-params=log-level=none`; the mp4 needs the `hvc1` codec tag or
+  QuickTime/Safari will not play it.
 - FFmpeg decodes on one thread unless `thread_type = "AUTO"` is set on the
   stream; the decode is then far from the bottleneck (2500 fps for 1080p
   HEVC), the encoder is.

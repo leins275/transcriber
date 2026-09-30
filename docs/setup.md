@@ -233,9 +233,9 @@ one of them is edited by hand instead of through `--set`.
 ## Video compression (on by default)
 
 A dropped **video** goes through one more stage after its transcript,
-summary and export are done: the service re-encodes it to a smaller H.264
-mp4 (x264 CRF 23, the shorter side capped at 1080p — a 4K screen recording
-comes out at 1080p, about 65 % smaller; a 1080p one keeps its size) and
+summary and export are done: the service re-encodes it to a smaller HEVC
+mp4 (x265 CRF 26, the shorter side capped at 1080p — a 4K screen recording
+comes out at 1080p, about 85 % smaller; a 1080p one keeps its size) and
 replaces `source.<ext>` with `source.mp4` (the job list shows it as
 "Compressing video" with the decoded fraction). The encode runs in-process
 through PyAV's bundled FFmpeg on the CPU — nothing to install, no
@@ -245,6 +245,10 @@ original is replaced only after the output is verified and is at least
 2000 kbps, and anything that fails along the way are left untouched (the
 reason lands in the job's warnings). A manual re-transcribe, summarize or
 export never triggers it.
+
+Playing the result: VLC, mpv and macOS play HEVC natively; on Windows,
+Edge, Chrome and Movies & TV need the free "HEVC Video Extensions from
+Device Manufacturer" (or the paid store one) installed once.
 
 Settings → **Recordings** has the switch (`compress_video` in
 `config.json`, `docs/config-contract.md`). Budget roughly 25 minutes per

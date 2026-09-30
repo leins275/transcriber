@@ -895,11 +895,11 @@ async def test_a_finished_export_job_reports_a_full_bar_and_no_phase(
 async def test_a_compress_job_replaces_the_recording_and_records_the_manifest(
     config: Config, ledger: Ledger, tmp_app_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from test_compress import FAST_X264, make_recording
+    from test_compress import FAST_X265, make_recording
 
     from transcription import compress
 
-    monkeypatch.setattr(compress, "DEFAULT_ENCODERS", (FAST_X264,))
+    monkeypatch.setattr(compress, "DEFAULT_ENCODERS", (FAST_X265,))
     source = make_recording(tmp_app_dir / "vault", ext="mkv")
     meeting = source.parent
     before = source.stat().st_size
@@ -918,7 +918,7 @@ async def test_a_compress_job_replaces_the_recording_and_records_the_manifest(
         assert job.result_json is not None
         manifest = json.loads(job.result_json)
         assert manifest["replaced"] is True
-        assert manifest["encoder"] == "libx264"
+        assert manifest["encoder"] == "libx265"
         assert manifest["before_bytes"] == before
         row = ledger.get_job(job_id)
         assert row is not None
