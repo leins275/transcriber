@@ -20,11 +20,11 @@ import pytest
 from transcription import compress
 from transcription.compress import (
     DEFAULT_ENCODERS,
-    NVENC_H264,
     X264,
     CompressOutcome,
     EncoderSpec,
     compress_recording,
+    target_size,
 )
 from transcription.errors import ErrorKind, ServiceError
 
@@ -47,6 +47,7 @@ def make_recording(
     audio: str | None = "aac",
     video: bool = True,
     seconds: float = 2.0,
+    size: tuple[int, int] = (128, 128),
 ) -> Path:
     """`<tmp>/ELS/<meeting>/source.<ext>`: noisy video and/or a sine tone."""
     meeting = tmp_path / "ELS" / MEETING_NAME
@@ -58,7 +59,7 @@ def make_recording(
             video_stream = out.add_stream(
                 "libx264", rate=FPS, options={"crf": "0", "preset": "ultrafast"}
             )
-            video_stream.width = video_stream.height = 128
+            video_stream.width, video_stream.height = size
             video_stream.pix_fmt = "yuv420p"
             video_stream.time_base = Fraction(1, FPS)
         audio_stream = None
@@ -66,7 +67,7 @@ def make_recording(
             audio_stream = out.add_stream(audio, rate=SAMPLE_RATE)
         if video_stream is not None:
             for index in range(int(seconds * FPS)):
-                frame = av.VideoFrame(128, 128, "yuv420p")
+                frame = av.VideoFrame(size[0], size[1], "yuv420p")
                 for plane in frame.planes:
                     plane.update(os.urandom(plane.buffer_size))
                 frame.pts = index
@@ -110,6 +111,12 @@ def _duration(path: Path) -> float:
         return container.duration / av.time_base
 
 
+def _video_size(path: Path) -> tuple[int, int]:
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        return stream.width, stream.height
+
+
 def _audio_codec(path: Path) -> str | None:
     with av.open(str(path)) as container:
         if not container.streams.audio:
@@ -151,6 +158,28 @@ def test_a_video_is_replaced_by_a_smaller_mp4_with_the_same_duration(tmp_path: P
     assert outcome.before_bytes == before
     assert outcome.after_bytes == outcome.path.stat().st_size < before * 0.85
     assert abs(_duration(outcome.path) - duration) <= 1.0
+
+
+def _frame_count(path: Path) -> int:
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        count = sum(1 for _ in container.decode(stream))
+    return count
+
+
+def test_every_frame_survives_the_re_encode(tmp_path: Path) -> None:
+    # A frame-threaded decoder holds its last frames until it is flushed;
+    # a short clip makes a missing flush lose every frame, a long one its
+    # last half-second.
+    source = make_recording(tmp_path, ext="mkv", seconds=0.3)
+    frames = _frame_count(source)
+    assert frames == 9
+
+    outcome = _run(source, min_gain=-10.0)
+
+    assert outcome.replaced is True
+    assert _frame_count(outcome.path) == frames
 
 
 def test_an_mp4_source_is_replaced_in_place(tmp_path: Path) -> None:
@@ -304,10 +333,42 @@ def test_an_encoder_that_will_not_open_falls_through_to_the_next(tmp_path: Path)
     assert _leftovers(source.parent) == []
 
 
-def test_the_default_order_is_nvenc_then_x264() -> None:
-    assert DEFAULT_ENCODERS == (NVENC_H264, X264)
-    assert NVENC_H264.zero_bit_rate is True
+def test_the_default_encoder_is_x264_at_crf_23() -> None:
+    assert DEFAULT_ENCODERS == (X264,)
+    assert X264.name == "libx264"
     assert X264.options == {"crf": "23", "preset": "medium"}
+
+
+# ---------------------------------------------------------------- sizing
+
+
+def test_target_size_caps_the_shorter_side_at_1080() -> None:
+    assert target_size(3840, 2160) == (1920, 1080)
+    assert target_size(2160, 3840) == (1080, 1920)
+    assert target_size(2560, 1440) == (1920, 1080)
+    assert target_size(1920, 1080) == (1920, 1080)
+    assert target_size(1280, 720) == (1280, 720)
+    # Odd sizes lose at most one pixel; the aspect is kept on a scale.
+    assert target_size(1281, 721) == (1280, 720)
+    assert target_size(3841, 2161) == (1920, 1080)
+
+
+def test_a_source_taller_than_1080p_is_downscaled(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv", size=(1440, 1920), seconds=0.3)
+
+    outcome = _run(source)
+
+    assert outcome.replaced is True
+    assert _video_size(outcome.path) == (1080, 1440)
+
+
+def test_a_source_at_or_under_1080p_keeps_its_size(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv", size=(640, 360))
+
+    outcome = _run(source)
+
+    assert outcome.replaced is True
+    assert _video_size(outcome.path) == (640, 360)
 
 
 def test_stale_partials_are_swept_before_encoding(tmp_path: Path) -> None:

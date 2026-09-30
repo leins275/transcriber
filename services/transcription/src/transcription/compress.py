@@ -1,10 +1,20 @@
 """Video compression for a filed recording -- the drop-to-insights chain's last stage.
 
-Re-encodes ``<meeting>/source.<ext>`` to a smaller H.264 mp4 without a
-noticeable quality loss and *replaces* the original with it, so the vault
-stops filling up with multi-GB originals. Everything runs in-process through
-PyAV (FFmpeg's libraries bundled in the wheel, the same decoder the
+Re-encodes ``<meeting>/source.<ext>`` to a smaller H.264 mp4 -- x264 at
+CRF 23, capped at 1080p -- and *replaces* the original with it, so the
+vault stops filling up with multi-GB originals. Everything runs in-process
+through PyAV (FFmpeg's libraries bundled in the wheel, the same decoder the
 transcription used): no external ``ffmpeg`` binary, ever (FR-7).
+
+Why these settings (measured on the operator's own recordings, 4K screen
+shares at a fixed 2.7 Mbps): re-encoding at the *same* resolution with a
+"visually lossless" quality index does not shrink them at all -- x264 CRF
+23 landed at the source's bitrate and NVENC's constant-quality H.264 at
+nearly twice it -- because the recorder already starves them. Halving the
+pixels is what pays: 1080p at CRF 23 came out about 65 % smaller, and
+x264 was both smaller and no slower than the GPU encoder there, so there
+is no NVENC path. Area resampling keeps screen text crisper than bilinear
+at no cost (Lanczos was seven times slower).
 
 Degradation over failure, like every other stage: an audio-only recording,
 one that is already small, an encoder that will not open, a result that is
@@ -64,27 +74,27 @@ OnProgress = Callable[[float], None]
 Cancel = Callable[[], None]
 
 
+# The output's shorter side is capped here: a 4K (3840x2160) recording
+# becomes 1920x1080, a portrait 2160x3840 becomes 1080x1920, and anything
+# already at or under it keeps its size.
+MAX_SHORT_SIDE = 1080
+# Downscale filter: area averaging is the fastest of swscale's filters and
+# keeps screen text sharper than the bilinear default.
+RESAMPLE = "AREA"
+
+
 @dataclass(frozen=True)
 class EncoderSpec:
     """One H.264 encoder to try, with its FFmpeg private options."""
 
     name: str
     options: dict[str, str]
-    # NVENC's constant-quality mode (`-rc vbr -cq N`) only takes effect with
-    # the bitrate cap zeroed (`-b:v 0`); otherwise it clamps to FFmpeg's
-    # default target bitrate.
-    zero_bit_rate: bool = False
 
 
-NVENC_H264 = EncoderSpec(
-    "h264_nvenc",
-    {"preset": "p5", "tune": "hq", "rc": "vbr", "cq": "23"},
-    zero_bit_rate=True,
-)
 X264 = EncoderSpec("libx264", {"crf": "23", "preset": "medium"})
 
-# Tried in order: the GPU encoder when its runtime opens, else CPU x264.
-DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (NVENC_H264, X264)
+# Tried in order; a spec that fails to open hands over to the next one.
+DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (X264,)
 
 
 @dataclass(frozen=True)
@@ -120,6 +130,17 @@ class _Probe:
     has_video: bool
     duration_sec: float | None
     kbps: float | None
+
+
+def target_size(width: int, height: int) -> tuple[int, int]:
+    """The output size for a ``width`` x ``height`` source: the shorter side
+    capped at ``MAX_SHORT_SIDE`` with the aspect kept, both sides even
+    (yuv420p h264 refuses odd sizes; at most one pixel is cropped)."""
+    short = min(width, height)
+    if short > MAX_SHORT_SIDE:
+        scale = MAX_SHORT_SIDE / short
+        width, height = round(width * scale), round(height * scale)
+    return width // 2 * 2, height // 2 * 2
 
 
 def sweep_partials(meeting_dir: Path) -> None:
@@ -260,11 +281,11 @@ def _encode(
 ) -> tuple[float, str | None]:
     """Transcode ``source`` into ``target``; returns (decoded seconds, audio mode).
 
-    The first video stream is re-encoded with ``spec`` at its own size and
-    frame rate, pts copied in the source time base (variable frame rates
-    survive). The first audio stream is remuxed when an mp4 can hold its
-    codec, else re-encoded to AAC. Everything else (subtitles, chapters,
-    extra streams) is dropped.
+    The first video stream is re-encoded with ``spec`` at ``target_size``
+    and its own frame rate, pts copied in the source time base (variable
+    frame rates survive). The first audio stream is remuxed when an mp4 can
+    hold its codec, else re-encoded to AAC. Everything else (subtitles,
+    chapters, extra streams) is dropped.
     """
     import av  # noqa: PLC0415
 
@@ -272,6 +293,10 @@ def _encode(
         src_video = inp.streams.video[0]
         src_audio = inp.streams.audio[0] if inp.streams.audio else None
         duration = _container_duration_sec(inp)
+        # FFmpeg decodes on one thread unless told otherwise; a 1080p HEVC
+        # source then decodes slower than NVENC encodes. Frame+slice
+        # threading is what the ffmpeg CLI does by default.
+        src_video.thread_type = "AUTO"
 
         out = av.open(str(target), "w", format="mp4", options={"movflags": "faststart"})
         try:
@@ -279,13 +304,10 @@ def _encode(
             video = cast(
                 "av.VideoStream", out.add_stream(spec.name, rate=rate, options=dict(spec.options))
             )
-            # yuv420p h264 refuses odd sizes: crop at most one pixel.
-            width, height = src_video.width // 2 * 2, src_video.height // 2 * 2
+            width, height = target_size(src_video.width, src_video.height)
             video.width, video.height = width, height
             video.pix_fmt = "yuv420p"
             video.time_base = src_video.time_base
-            if spec.zero_bit_rate:
-                video.bit_rate = 0
 
             audio_mode: str | None = None
             audio: av.AudioStream | None = None
@@ -305,20 +327,35 @@ def _encode(
             decoded_sec = 0.0
             reported = 0.0
             packets = 0
+
+            def emit_video(decoded: Any) -> None:
+                nonlocal decoded_sec
+                frame = cast("av.VideoFrame", decoded)
+                if frame.pts is not None and src_video.time_base is not None:
+                    decoded_sec = float(frame.pts * src_video.time_base)
+                scaled = frame.reformat(width, height, "yuv420p", interpolation=RESAMPLE)
+                for encoded in video.encode(scaled):
+                    out.mux(encoded)
+
+            def emit_audio(
+                decoded: Any, audio_out: av.AudioStream, audio_resampler: av.AudioResampler
+            ) -> None:
+                for resampled in audio_resampler.resample(cast("av.AudioFrame", decoded)):
+                    for encoded in audio_out.encode(resampled):
+                        out.mux(encoded)
+
+            # At end of file the demuxer yields one empty packet per stream
+            # (no dts): decoding it flushes that decoder -- which a
+            # frame-threaded decoder needs, or its last frames are lost.
+            # Such a packet carries no data to remux.
             streams = [s for s in (src_video, src_audio) if s is not None]
             for packet in inp.demux(*streams):
                 packets += 1
                 if cancel is not None and packets % CANCEL_EVERY_PACKETS == 0:
                     cancel()
-                if packet.dts is None:
-                    continue
                 if packet.stream is src_video:
                     for decoded in packet.decode():
-                        frame = cast("av.VideoFrame", decoded)
-                        if frame.pts is not None and src_video.time_base is not None:
-                            decoded_sec = float(frame.pts * src_video.time_base)
-                        for encoded in video.encode(frame.reformat(width, height, "yuv420p")):
-                            out.mux(encoded)
+                        emit_video(decoded)
                     if duration:
                         fraction = min(1.0, decoded_sec / duration)
                         if fraction - reported >= PROGRESS_STEP:
@@ -326,13 +363,12 @@ def _encode(
                             on_progress(fraction)
                 elif audio is not None:
                     if resampler is None:
-                        packet.stream = audio
-                        out.mux(packet)
+                        if packet.dts is not None:
+                            packet.stream = audio
+                            out.mux(packet)
                     else:
                         for decoded in packet.decode():
-                            for resampled in resampler.resample(cast("av.AudioFrame", decoded)):
-                                for encoded in audio.encode(resampled):
-                                    out.mux(encoded)
+                            emit_audio(decoded, audio, resampler)
             for encoded in video.encode(None):
                 out.mux(encoded)
             if audio is not None and resampler is not None:

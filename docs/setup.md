@@ -234,22 +234,22 @@ one of them is edited by hand instead of through `--set`.
 
 A dropped **video** goes through one more stage after its transcript,
 summary and export are done: the service re-encodes it to a smaller H.264
-mp4 and replaces `source.<ext>` with `source.mp4` (the job list shows it as
+mp4 (x264 CRF 23, the shorter side capped at 1080p — a 4K screen recording
+comes out at 1080p, about 65 % smaller; a 1080p one keeps its size) and
+replaces `source.<ext>` with `source.mp4` (the job list shows it as
 "Compressing video" with the decoded fraction). The encode runs in-process
-through PyAV's bundled FFmpeg — nothing to install, no `ffmpeg.exe`
-anywhere. `h264_nvenc` is used when the NVIDIA runtime opens, else
-`libx264` on the CPU; audio is copied when an mp4 can hold it. The original
-is replaced only after the output is verified and is at least 15 % smaller;
-audio-only recordings, recordings already at or under 2000 kbps, and
-anything that fails along the way are left untouched (the reason lands in
-the job's warnings). A manual re-transcribe, summarize or export never
-triggers it.
+through PyAV's bundled FFmpeg on the CPU — nothing to install, no
+`ffmpeg.exe` anywhere; audio is copied when an mp4 can hold it. The
+original is replaced only after the output is verified and is at least
+15 % smaller; audio-only recordings, recordings already at or under
+2000 kbps, and anything that fails along the way are left untouched (the
+reason lands in the job's warnings). A manual re-transcribe, summarize or
+export never triggers it.
 
 Settings → **Recordings** has the switch (`compress_video` in
-`config.json`, `docs/config-contract.md`). Worth switching off on a
-machine without an NVIDIA GPU that drops long 1080p meetings: x264 runs at
-roughly real time there and, like every job, holds the serial queue while
-it runs.
+`config.json`, `docs/config-contract.md`). Budget roughly 25 minutes per
+hour of 4K meeting on a desktop CPU; like every job it holds the serial
+queue while it runs, so the next drop's transcription waits behind it.
 
 ## Speaker identification (optional, first-run setup)
 

@@ -474,9 +474,9 @@ export function SettingsPage({
           </div>
           {compressError && <p className={styles.warning}>{compressError}</p>}
           <p className={styles.hint}>
-            Re-encodes a dropped video to a smaller H.264 mp4 once its transcript, summary and
-            export are done. The original is replaced only when the result is at least 15% smaller;
-            audio-only recordings are left alone.
+            Re-encodes a dropped video to a smaller H.264 mp4 (at most 1080p) once its transcript,
+            summary and export are done. The original is replaced only when the result is at least
+            15% smaller; audio-only recordings are left alone.
           </p>
         </div>
       </div>

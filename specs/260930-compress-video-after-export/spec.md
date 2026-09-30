@@ -19,11 +19,20 @@ originals whose only remaining job is playback.
   `source.<ext>` is deleted only after the output is verified. The meeting
   never holds two `source.*` files (work files carry a `compress.` prefix,
   whose stem no scanner reads as the recording).
-- **Encoder: `h264_nvenc` first, `libx264` CRF 23 second.** H.264 yuv420p,
-  same size and frame rate, pts copied in the source time base. Audio is
-  copied when an mp4 can hold it (aac/mp3/opus/ac3/eac3/alac), else AAC
-  160k. Subtitles, chapters, extra streams and rotation metadata are
-  dropped (accepted).
+- **Encoder: `libx264` CRF 23, shorter side capped at 1080p.** H.264
+  yuv420p, same frame rate, pts copied in the source time base, area
+  resampling for the downscale. Audio is copied when an mp4 can hold it
+  (aac/mp3/opus/ac3/eac3/alac), else AAC 160k. Subtitles, chapters, extra
+  streams and rotation metadata are dropped (accepted).
+  *Revised after measuring on the operator's vault* (55 of 73 recordings
+  are 4K screen shares at a fixed 2668 kbps): at the same resolution x264
+  CRF 23 came out at the source's bitrate and NVENC CQ 23 at 4.7 Mbps, so
+  the original "no visible loss, NVENC first" tuning would have compressed
+  nothing. Capping at 1080p gives about 65 % (924 kbps) at 69 fps; the
+  alternatives measured were 1440p x264 (44 %), 4K HEVC NVENC CQ 33
+  (56 %, HEVC playback caveat) and 4K x264 CRF 28 (38 %). At 1080p output
+  NVENC H.264 was 1666 kbps against x264's 924 at the same speed, so the
+  GPU path was dropped.
 - **Settings toggle `compress_video`, on by default.** App-only key; the
   service never reads it; no sidecar restart.
 
@@ -31,7 +40,8 @@ originals whose only remaining job is playback.
 
 - FR-1 A `compress` job (`POST /v1/jobs`, `input_path` = meeting dir) runs
   the re-encode on the serial worker and reports `compressing video` with
-  the decoded fraction as its phase.
+  the decoded fraction as its phase. The output's shorter side is capped at
+  1080 (`target_size`), the aspect kept, both sides even.
 - FR-2 Skip with a warning, no encoding: audio-only extension, no video
   stream, average bitrate at or under 2000 kbps.
 - FR-3 Keep the original with a warning: no encoder opens, the output is
@@ -46,7 +56,7 @@ originals whose only remaining job is playback.
 
 ## Verification
 
-- `services/transcription/tests/test_compress.py` (17 cases, synthetic
+- `services/transcription/tests/test_compress.py` (20 cases, synthetic
   recordings, CPU encoder only) and the `compress` cases in
   `tests/test_llm_jobs.py`.
 - `jobs.rs` chain tests (`a_drop_chains_summarize_export_then_compress_in_order`,

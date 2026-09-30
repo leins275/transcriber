@@ -20,16 +20,18 @@ Three commits on `main`, each green on its own payload's gate.
 
 ## Things that could bite
 
-- NVENC refuses frames below its minimum size and fails at
-  `avcodec_open2`; the encoder loop moves on to the next candidate, so a
-  missing NVIDIA runtime costs one failed open, not the job.
-- NVENC's constant-quality mode needs the bitrate cap zeroed (`-b:v 0`);
-  `EncoderSpec.zero_bit_rate` does that on the stream.
+- The encoder loop moves on to the next `EncoderSpec` when one fails to
+  open (kept, and tested with an x264 spec carrying an unknown preset,
+  even though the default list is x264 alone).
+- FFmpeg decodes on one thread unless `thread_type = "AUTO"` is set on the
+  stream; the decode is then far from the bottleneck (2500 fps for 1080p
+  HEVC), the encoder is.
 - Variable frame rates: `average_rate` may be `None`; it only feeds the
   encoder's rate hint, pts are copied. Containers with no duration report
   `progress: null` and are verified against the decoded span.
-- x264 on a CPU-only machine is roughly real time for 1080p and holds the
-  serial queue; the toggle is the escape hatch (documented in setup.md).
+- x264 at 4K-to-1080p runs at about 70 fps on a desktop CPU (roughly 25
+  minutes per hour of meeting) and holds the serial queue; the toggle is
+  the escape hatch (documented in setup.md).
 - A "kept as-is" outcome shows as a plain Done in the UI; the reason is in
   the service job's `warnings` (the Rust poll does not relay warnings).
   Relaying them into the snapshot's message is a possible follow-up.
