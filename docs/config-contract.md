@@ -92,6 +92,17 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   `load` returns a `config`-kind error naming the file, not a panic. The
   app never writes the key as `null`, and a value already in the file
   survives every load → modify → save round-trip.
+- `compress_video` (`bool`, absent by default) — whether a dropped video is
+  compressed once its transcript, summary and export are done: the
+  drop-to-insights chain's last stage, a `compress` job that re-encodes
+  `source.<ext>` to a smaller H.264 mp4 in its place
+  (`services/transcription/README.md`). Absent means **on**. Like
+  `speaker_match_threshold_strict` this key is read by the **app** only
+  (`config.rs`'s `compress_video_enabled`), which decides whether to queue
+  the stage; the service sees it as an unknown top-level key and ignores
+  it, so no `TRANSCRIBER_*` variable or CLI flag reaches it. Written by
+  the Settings page's Recordings row (`set_compress_video`), which takes
+  effect immediately and restarts nothing. Never written as `null`.
 - **Unknown keys are preserved.** Every level (`Settings`, `ServiceSettings`,
   `ModelSettings`) carries `#[serde(flatten)] extra: serde_json::Map<...>`,
   so any additional top-level key, or additional key nested under `service`
