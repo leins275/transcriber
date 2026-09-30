@@ -108,6 +108,7 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` (with the action items as a section) |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
 | `diarize` | `<meeting>/source.<ext>` + `<meeting>/transcript.json` (no LLM call; the pyannote engine) | `<meeting>/transcript.json` rewritten in place with speaker labels and the `diarization` block, ids untouched -- see "Speaker diarization" below |
+| `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: H.264 (`h264_nvenc` when the NVIDIA runtime opens, else `libx264` CRF 23), same size and frame rate, audio copied when an mp4 can hold it else AAC 160k. Skipped with a warning for an audio-only or already-small (<= 2000 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio` and the byte counts |
 
 `facts` and `action_items` jobs existed once; both were retired (the
 summary carries the notable facts and the action items), and submitting one
@@ -190,6 +191,7 @@ is what makes that legible; a weighted single bar would only be a guess.
 | `diarize` | `reading transcript` (`null`) → `loading speaker model` (`null`) → `decoding audio` (`null`) → `segmenting speech` / `counting speakers` / `extracting voice embeddings` / `assigning speakers` (pyannote's `completed / total` where the step reports counts, else `null`) → `assigning speakers` while labels are written |
 | `summarize` | `reading transcript` (`null`) → `writing summary · N tokens`, or `summarizing part k/n · N tokens` for a map-reduced transcript (`null` throughout — the token count is a length, not a percentage) |
 | `export` | `writing export.md` (`null`) → `rendering PDF` (`null`) |
+| `compress` | `compressing video` (the decoded fraction of the recording; `null` while the container's duration is unknown) |
 | `index` | *no phase*; `docs processed / total` |
 
 The CLI's `transcribe` poll loop mirrors this on stderr: a `phase: <label>`

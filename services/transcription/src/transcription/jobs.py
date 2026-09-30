@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from transcription import artifacts, exporting, llm_catalog, paths, transcript
+from transcription import artifacts, compress, exporting, llm_catalog, paths, transcript
 from transcription.config import Config
 from transcription.diarization import label_segments, split_segments_at_turns
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
@@ -56,7 +56,7 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently (the index job's embedder is CPU-only on top of that).
-KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index", "diarize"})
+KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index", "diarize", "compress"})
 
 # The per-meeting derived jobs that read an existing transcript.json.
 _TRANSCRIPT_READING_JOB_TYPES = frozenset({"summarize", "export", "diarize"})
@@ -433,8 +433,8 @@ class JobManager:
             # No LLM, no whisper: the CPU embedder is the only model here.
             provider_name = "none"
             model_name = self._config.embedding_model
-        elif job_type == "export":
-            # Deterministic assembly: no model runs at all.
+        elif job_type in ("export", "compress"):
+            # Deterministic assembly / a video re-encode: no model runs at all.
             provider_name = "none"
             model_name = "none"
         elif job_type == "diarize":
@@ -935,6 +935,10 @@ class JobManager:
                 job.status = "running"
                 self._ledger.mark_running(job.job_id)
                 body = functools.partial(self._diarize_existing_sync, job)
+            elif job.job_type == "compress":
+                job.status = "running"
+                self._ledger.mark_running(job.job_id)
+                body = functools.partial(self._compress_sync, job)
             else:
                 # Unreachable in practice -- the pydantic `JobType` literal
                 # and `KNOWN_JOB_TYPES` both gate the type long before the
@@ -1269,6 +1273,43 @@ class JobManager:
         except PdfRenderError as exc:
             job.warnings.append(f"PDF render failed: {exc}; export.md was written")
         return {"artifacts": artifact_paths}
+
+    def _compress_sync(self, job: JobState) -> dict[str, Any]:
+        """The `compress` job: re-encode the meeting's video in its place.
+
+        The chain's last stage. Everything short of a cancellation degrades
+        to "the recording is untouched" with the reason as a warning: an
+        audio-only or already-small recording, an encoder that will not
+        open, an output not worth keeping. The single-worker executor is
+        what keeps the encode (GPU when NVENC opens) off whisper's and the
+        LLM's time.
+        """
+        meeting_dir = Path(job.source_path)
+        source = artifacts.find_source_recording(meeting_dir)
+        if source is None:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"{meeting_dir.name} has no recording to compress",
+            )
+        phase = "compressing video"
+        _set_phase(job, phase, None)
+        outcome = compress.compress_recording(
+            source,
+            on_progress=lambda fraction: _set_phase(job, phase, fraction),
+            cancel=job.cancel_token.raise_if_cancelled,
+        )
+        if outcome.warning is not None:
+            job.warnings.append(outcome.warning)
+        _logger.info(
+            "compress: %s -> %s (%s, audio %s, %d -> %d bytes)",
+            source.name,
+            outcome.path.name,
+            outcome.encoder or "no encode",
+            outcome.audio or "none",
+            outcome.before_bytes,
+            outcome.after_bytes,
+        )
+        return outcome.as_manifest()
 
 
 def _job_state_from_ledger_row(row: dict[str, Any]) -> JobState:

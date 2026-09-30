@@ -22,10 +22,13 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # (no LLM call). `diarize` runs the speaker-diarization pass over an
 # already-transcribed meeting's recording and writes the speaker labels
 # and voice embeddings into its existing transcript.json (ids untouched).
+# `compress` re-encodes a meeting's video recording to a smaller H.264 mp4
+# in its place (no LLM call, in-process FFmpeg via PyAV) -- the chain's
+# last stage.
 # `facts` and `action_items` jobs existed once; both were retired in favour
 # of the summary carrying the notable facts and the action items, and
 # submitting one now answers `invalid_request`.
-JobType = Literal["transcribe", "summarize", "export", "index", "diarize"]
+JobType = Literal["transcribe", "summarize", "export", "index", "diarize", "compress"]
 
 
 class Segment(BaseModel):
@@ -140,7 +143,8 @@ class JobCreate(BaseModel):
 
     A ``transcribe`` job (the default, so pre-feature clients are untouched)
     takes ``audio_path``; the per-meeting derived jobs (``summarize``/
-    ``export``) take ``input_path`` -- the meeting folder they read. An
+    ``export``/``diarize``/``compress``) take ``input_path`` -- the meeting
+    folder they read. An
     ``index`` job takes neither path and no ``output_dir``: it walks the
     configured ``vault_root`` into the configured index database.
     """

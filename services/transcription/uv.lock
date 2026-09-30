@@ -3957,6 +3957,7 @@ name = "transcription"
 version = "0.25.0"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "fastapi" },
     { name = "faster-whisper" },
     { name = "h11" },
@@ -4002,6 +4003,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", specifier = ">=18,<19" },
     { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "faster-whisper", specifier = ">=1.2,<2" },
     { name = "h11", specifier = ">=0.16" },

@@ -9,6 +9,10 @@ dependencies = [
   "uvicorn[standard]>=0.30",
   "pydantic>=2.7",
   "faster-whisper>=1.2,<2",
+  # PyAV: FFmpeg's libraries bundled in a wheel (already faster-whisper's
+  # decoder). Named directly because `compress.py` re-encodes a filed video
+  # through it in-process -- no external ffmpeg binary, ever (FR-7).
+  "av>=18,<19",
   "h11>=0.16",
   "huggingface_hub>=0.35",
   # Markdown -> HTML -> PDF for reports and exports (pure-python stack).

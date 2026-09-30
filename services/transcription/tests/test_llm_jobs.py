@@ -887,3 +887,145 @@ async def test_a_finished_export_job_reports_a_full_bar_and_no_phase(
         assert (meeting_dir / EXPORT_PDF_NAME).is_file()
     finally:
         await manager.aclose()
+
+
+# ----------------------------------------------------------------- compress
+
+
+async def test_a_compress_job_replaces_the_recording_and_records_the_manifest(
+    config: Config, ledger: Ledger, tmp_app_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_compress import FAST_X264, make_recording
+
+    from transcription import compress
+
+    monkeypatch.setattr(compress, "DEFAULT_ENCODERS", (FAST_X264,))
+    source = make_recording(tmp_app_dir / "vault", ext="mkv")
+    meeting = source.parent
+    before = source.stat().st_size
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _run_job(
+            manager, job_type="compress", input_path=meeting, output_dir=meeting
+        )
+
+        job = manager.status(job_id)
+
+        assert job.status == "succeeded", job.error_message
+        assert job.warnings == []
+        assert sorted(p.name for p in meeting.iterdir() if p.stem == "source") == ["source.mp4"]
+        assert (meeting / "source.mp4").stat().st_size < before
+        assert job.result_json is not None
+        manifest = json.loads(job.result_json)
+        assert manifest["replaced"] is True
+        assert manifest["encoder"] == "libx264"
+        assert manifest["before_bytes"] == before
+        row = ledger.get_job(job_id)
+        assert row is not None
+        assert row["job_type"] == "compress"
+        assert row["provider"] == "none"
+    finally:
+        await manager.aclose()
+
+
+async def test_a_compress_job_without_a_recording_fails_as_invalid_request(
+    config: Config, ledger: Ledger, meeting_dir: Path
+) -> None:
+    (meeting_dir / "source.mp4").unlink()
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _run_job(
+            manager, job_type="compress", input_path=meeting_dir, output_dir=meeting_dir
+        )
+
+        job = manager.status(job_id)
+
+        assert job.status == "failed"
+        assert job.error_kind is ErrorKind.INVALID_REQUEST
+        assert job.error_message is not None
+        assert "no recording to compress" in job.error_message
+    finally:
+        await manager.aclose()
+
+
+async def test_a_compress_job_over_an_audio_recording_succeeds_with_a_warning(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    meeting = tmp_app_dir / "vault" / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    (meeting / "source.m4a").write_bytes(b"fake-audio-bytes")
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _run_job(
+            manager, job_type="compress", input_path=meeting, output_dir=meeting
+        )
+
+        job = manager.status(job_id)
+
+        assert job.status == "succeeded"
+        assert job.warnings == ["audio-only recording, nothing to compress"]
+        assert (meeting / "source.m4a").read_bytes() == b"fake-audio-bytes"
+    finally:
+        await manager.aclose()
+
+
+async def test_a_compress_job_needs_no_transcript(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """Unlike summarize/export/diarize, the recording alone is its input."""
+    meeting = tmp_app_dir / "vault" / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    (meeting / "source.wav").write_bytes(b"fake-audio-bytes")
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _run_job(
+            manager, job_type="compress", input_path=meeting, output_dir=meeting
+        )
+
+        assert manager.status(job_id).status == "succeeded"
+    finally:
+        await manager.aclose()
+
+
+async def test_a_running_compress_job_reports_the_compressing_phase_and_its_fraction(
+    config: Config, ledger: Ledger, meeting_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from transcription.compress import CompressOutcome
+
+    gate = _Gate()
+
+    def fake_compress(
+        source: Path, *, on_progress: Any, cancel: Any, **_kw: Any
+    ) -> CompressOutcome:
+        on_progress(0.5)
+        gate.arrive()
+        return CompressOutcome(
+            replaced=False,
+            path=source,
+            warning="video kept as-is: test",
+            encoder=None,
+            audio=None,
+            before_bytes=1,
+            after_bytes=1,
+        )
+
+    monkeypatch.setattr(jobs.compress, "compress_recording", fake_compress)
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        job_id = await _submit(manager, job_type="compress", meeting=meeting_dir)
+        await _paused_at(gate, "the encode")
+
+        job = manager.status(job_id)
+
+        assert job.phase == "compressing video"
+        assert job.progress == 0.5
+        gate.release()
+        await _wait_until_terminal(manager, job_id)
+        job = manager.status(job_id)
+        assert job.status == "succeeded"
+        assert job.progress == 1.0
+        assert job.phase is None
+        assert job.warnings == ["video kept as-is: test"]
+    finally:
+        gate.release()
+        await manager.aclose()
