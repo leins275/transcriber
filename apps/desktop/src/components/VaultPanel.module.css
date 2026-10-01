@@ -67,14 +67,13 @@
   padding-top: var(--space-3);
 }
 
-/* The view control over the table: narrow to a project. */
-.filterRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
+/* The view control over the table: narrow to a project. It shares the
+   search input's row at its natural width, and may shrink (never overflow)
+   when a long project code meets a narrow window. */
 .pickerSelect {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--divider);
   border-radius: var(--radius-md);

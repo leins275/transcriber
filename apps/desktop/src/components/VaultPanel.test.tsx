@@ -195,6 +195,36 @@ describe("VaultPanel", () => {
     expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
   });
 
+  it("puts the project picker on the search input's row, not on a row of its own", () => {
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
+        buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
+      ],
+    });
+
+    const box = screen.getByRole("searchbox", { name: /search recordings/i });
+    const picker = screen.getByRole("combobox", { name: /project/i });
+
+    // Siblings in one container, the input first: one flex row.
+    expect(picker.parentElement).toBe(box.parentElement);
+    expect(box.nextElementSibling).toBe(picker);
+  });
+
+  it("hides the project picker while a search is active, as before", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
+        buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
+      ],
+    });
+
+    await user.type(screen.getByRole("searchbox", { name: /search recordings/i }), "sync");
+
+    expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
+  });
+
   it("opens a recording by id when its row is clicked", async () => {
     const onOpen = vi.fn();
     const user = userEvent.setup();

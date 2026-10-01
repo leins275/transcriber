@@ -79,7 +79,8 @@ export type VaultPanelProps = {
  * recordings render flat, newest first, with a column per section of the
  * naming convention — project, date, name, type — plus the transcript
  * state, each sortable from its header. Sorting by project is what grouping
- * used to be. One filter row narrows to a project (or to Unsorted).
+ * used to be. One picker, on the search input's row, narrows to a project
+ * (or to Unsorted).
  *
  * Presentational only: no invoke, no listen, no fetch — App.tsx owns
  * fetching and passes every action down.
@@ -129,8 +130,9 @@ export function VaultPanel({
     return entriesForProject(entries, validFilter);
   }, [entries, unsorted, validFilter]);
 
-  // The filter row earns its place only when there is something to choose
-  // -- a vault of one project with nothing unsorted has no use for it.
+  // The project picker earns its place (beside the search input, on the
+  // same row) only when there is something to choose -- a vault of one
+  // project with nothing unsorted has no use for it.
   const showFilterRow = projects.length + (unsorted.length > 0 ? 1 : 0) > 1;
 
   return (
@@ -208,27 +210,28 @@ export function VaultPanel({
                 onQueryChange={onSearchChange}
                 onSearch={onSearch}
                 onOpen={onOpen}
+                trailing={
+                  showFilterRow &&
+                  !searchActive && (
+                    <select
+                      className={styles.pickerSelect}
+                      aria-label="Project"
+                      value={validFilter}
+                      onChange={(event) => onFilterChange(event.target.value)}
+                    >
+                      <option value="">All projects</option>
+                      {projects.map((code) => (
+                        <option key={code} value={code}>
+                          {code}
+                        </option>
+                      ))}
+                      {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
+                    </select>
+                  )
+                }
               />
               {searchActive ? null : (
                 <>
-                  {showFilterRow && (
-                    <div className={styles.filterRow}>
-                      <select
-                        className={styles.pickerSelect}
-                        aria-label="Project"
-                        value={validFilter}
-                        onChange={(event) => onFilterChange(event.target.value)}
-                      >
-                        <option value="">All projects</option>
-                        {projects.map((code) => (
-                          <option key={code} value={code}>
-                            {code}
-                          </option>
-                        ))}
-                        {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
-                      </select>
-                    </div>
-                  )}
                   {validFilter === UNSORTED_FILTER && (
                     <p className={styles.hint}>
                       These did not follow the{" "}
