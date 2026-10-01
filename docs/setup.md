@@ -242,7 +242,7 @@ through PyAV's bundled FFmpeg on the CPU — nothing to install, no
 `ffmpeg.exe` anywhere; audio is copied when an mp4 can hold it. The
 original is replaced only after the output is verified and is at least
 15 % smaller; audio-only recordings, recordings already at or under
-2000 kbps, and anything that fails along the way are left untouched (the
+700 kbps, and anything that fails along the way are left untouched (the
 reason lands in the job's warnings). A manual re-transcribe, summarize or
 export never triggers it.
 

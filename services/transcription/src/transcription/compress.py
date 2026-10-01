@@ -62,8 +62,11 @@ PARTIAL_NAME = "compress.partial.mp4"
 REPLACED_PREFIX = "compress.replaced."
 
 # A source at or under this average bitrate is already small: re-encoding
-# it would cost minutes to save nearly nothing.
-MIN_SOURCE_KBPS = 2000.0
+# it would cost minutes to save nearly nothing. The line sits just above
+# what this stage itself produces (320-520 kbps measured): the operator's
+# 1080p recordings at 1000-1400 kbps still halve or better, so a higher
+# line left real savings on the table.
+MIN_SOURCE_KBPS = 700.0
 # The output replaces the original only when it is at least this much smaller.
 MIN_GAIN = 0.15
 # The output's duration must match the source's within this many seconds.
@@ -319,6 +322,12 @@ def _encode(
             video.width, video.height = width, height
             video.pix_fmt = "yuv420p"
             video.time_base = src_video.time_base
+            # The encoder counts in the source's ticks too. Left at PyAV's
+            # default of 1/rate, two frames of a variable-frame-rate
+            # recording that sit closer than the average interval round to
+            # the same pts and the muxer refuses the file.
+            if src_video.time_base is not None:
+                video.codec_context.time_base = src_video.time_base
             if video.codec_context.name in ("libx265", "hevc_nvenc", "hevc"):
                 video.codec_context.codec_tag = HEVC_MP4_TAG
 

@@ -185,6 +185,38 @@ def test_every_frame_survives_the_re_encode(tmp_path: Path) -> None:
     assert _frame_count(outcome.path) == frames
 
 
+def test_a_variable_frame_rate_recording_is_compressed(tmp_path: Path) -> None:
+    # Screen recorders emit frames only when the picture changes: pairs of
+    # frames 5 ms apart at a nominal 30 fps. An encoder counting in 1/30 s
+    # rounds each pair onto one pts and the mp4 muxer refuses the file.
+    meeting = tmp_path / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True)
+    source = meeting / "source.mkv"
+    tick = Fraction(1, 1000)
+    with av.open(str(source), "w") as out:
+        stream = out.add_stream("libx264", rate=FPS, options={"crf": "0", "preset": "ultrafast"})
+        stream.width, stream.height = 128, 128
+        stream.pix_fmt = "yuv420p"
+        stream.time_base = tick
+        stream.codec_context.time_base = tick
+        for index in range(40):
+            frame = av.VideoFrame(128, 128, "yuv420p")
+            for plane in frame.planes:
+                plane.update(os.urandom(plane.buffer_size))
+            frame.pts = (index // 2) * 100 + (index % 2) * 5
+            frame.time_base = tick
+            for packet in stream.encode(frame):
+                out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+
+    outcome = _run(source, min_source_kbps=0.0)
+
+    assert outcome.warning is None
+    assert outcome.replaced is True
+    assert _frame_count(outcome.path) == 40
+
+
 def test_an_mp4_source_is_replaced_in_place(tmp_path: Path) -> None:
     source = make_recording(tmp_path, ext="mp4")
     before = source.stat().st_size

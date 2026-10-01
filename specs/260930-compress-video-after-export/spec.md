@@ -49,7 +49,7 @@ originals whose only remaining job is playback.
   the decoded fraction as its phase. The output's shorter side is capped at
   1080 (`target_size`), the aspect kept, both sides even.
 - FR-2 Skip with a warning, no encoding: audio-only extension, no video
-  stream, average bitrate at or under 2000 kbps.
+  stream, average bitrate at or under 700 kbps (lowered from 2000 on 2026-10-01).
 - FR-3 Keep the original with a warning: no encoder opens, the output is
   under 15 % smaller, or verification fails (opens, has video, duration
   within 1 s of the source). Only a cancellation propagates.
