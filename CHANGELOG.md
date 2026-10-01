@@ -3,6 +3,20 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.29.0 — 2026-10-01
+
+### Bug fixes
+
+- **desktop**: Put the search bar and the project picker on one row
+
+### Features
+
+- Name whose voice a set-aside sample sounds like on the speaker page
+- **desktop**: Add a speakers database tab and speaker pages
+- **service**: A speakers database that says who a name is
+- **desktop**: Suggest a meeting title from its summary
+- Recognize voices across the vault, per segment, from a self-invalidating index
+
 ## 0.28.0 — 2026-10-01
 
 ### Features
