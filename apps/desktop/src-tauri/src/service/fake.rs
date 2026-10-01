@@ -27,6 +27,10 @@ const FAKE_LLM_CATALOG: [(&str, &str, &str, u64); 1] = [(
     6_577_841_376,
 )];
 
+/// The title every `suggest_title` job of the fake proposes unless a test
+/// scripts another one ([`FakeService::set_suggested_title`]).
+pub const FAKE_SUGGESTED_TITLE: &str = "Suggested meeting title";
+
 /// How many `status()` polls a scripted job spends in each phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FakeTiming {
@@ -226,6 +230,9 @@ struct Inner {
     submissions: Vec<SubmitRequest>,
     /// How many fire-and-forget `submit_index` calls arrived, for assertions.
     index_submissions: usize,
+    /// What a finished `suggest_title` job's result holds; `None` scripts
+    /// a job that finished with no readable result.
+    suggested_title: Option<String>,
 }
 
 impl Inner {
@@ -318,6 +325,7 @@ impl FakeService {
                 llm_submissions: Vec::new(),
                 submissions: Vec::new(),
                 index_submissions: 0,
+                suggested_title: Some(FAKE_SUGGESTED_TITLE.to_string()),
             }),
         }
     }
@@ -419,6 +427,16 @@ impl FakeService {
             // arrive later -- a gate that stays open, not a permit count.
             gate.close();
         }
+    }
+
+    /// Scripts what `suggested_title` answers: `Some` is the title of every
+    /// finished `suggest_title` job, `None` makes the result unreadable
+    /// (the service answering 404 for it).
+    pub fn set_suggested_title(&self, title: Option<&str>) {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .suggested_title = title.map(str::to_string);
     }
 
     /// Every derived-job submission this fake has accepted, in order.
@@ -658,6 +676,18 @@ impl TranscriptionService for FakeService {
         }
 
         Ok(job_id)
+    }
+
+    async fn suggested_title(&self, job_id: &str) -> Result<String, ServiceError> {
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        let unavailable = || ServiceError::Http {
+            status: 404,
+            message: format!("result not available for job {job_id}"),
+        };
+        if !inner.jobs.contains_key(job_id) {
+            return Err(unavailable());
+        }
+        inner.suggested_title.clone().ok_or_else(unavailable)
     }
 
     async fn submit_index(&self) -> Result<String, ServiceError> {
@@ -1283,6 +1313,57 @@ mod tests {
                 status.cuda_warning.as_deref(),
                 Some("digest mismatch for nvidia_cublas_cu12.whl")
             );
+        });
+    }
+
+    fn suggest_title_request() -> LlmSubmitRequest {
+        LlmSubmitRequest {
+            kind: super::super::LlmJobKind::SuggestTitle,
+            input_path: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+            output_dir: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+            max_speakers: None,
+            speaker_match_threshold: None,
+        }
+    }
+
+    #[test]
+    fn suggested_title_answers_the_scripted_title_for_a_submitted_job() {
+        run(async {
+            let fake = FakeService::new();
+            let job_id = fake
+                .submit_llm(suggest_title_request())
+                .await
+                .expect("submit should succeed");
+
+            let default_title = fake.suggested_title(&job_id).await.expect("a title");
+            assert_eq!(default_title, FAKE_SUGGESTED_TITLE);
+
+            fake.set_suggested_title(Some("Budget review"));
+            let scripted = fake.suggested_title(&job_id).await.expect("a title");
+            assert_eq!(scripted, "Budget review");
+        });
+    }
+
+    #[test]
+    fn suggested_title_is_a_404_for_an_unknown_job_and_for_an_unreadable_result() {
+        run(async {
+            let fake = FakeService::new();
+            let unknown = fake.suggested_title("no-such-job").await;
+            assert!(matches!(
+                unknown,
+                Err(ServiceError::Http { status: 404, .. })
+            ));
+
+            let job_id = fake
+                .submit_llm(suggest_title_request())
+                .await
+                .expect("submit should succeed");
+            fake.set_suggested_title(None);
+            let unreadable = fake.suggested_title(&job_id).await;
+            assert!(matches!(
+                unreadable,
+                Err(ServiceError::Http { status: 404, .. })
+            ));
         });
     }
 }

@@ -252,6 +252,10 @@ export const api = {
     call<JobSnapshot>("summarize_vault_entry", { entryId }),
   exportRecording: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("export_recording", { entryId }),
+  /** Asks the language model for a short meeting name out of the summary.
+   * Renames nothing: the finished job's snapshot carries `suggested_title`. */
+  suggestTitleForVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("suggest_title_for_vault_entry", { entryId }),
   llmModelDownloadStatus: (): Promise<LlmModelDownloadStatus> =>
     call<LlmModelDownloadStatus>("llm_model_download_status"),
   startLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>

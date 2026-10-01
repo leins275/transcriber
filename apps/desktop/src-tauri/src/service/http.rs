@@ -209,6 +209,12 @@ struct SubmitResponse {
     job_id: String,
 }
 
+/// `GET /v1/jobs/{id}/result` of a `suggest_title` job: its manifest.
+#[derive(Deserialize)]
+struct SuggestedTitleResponse {
+    title: String,
+}
+
 /// `POST /v1/search` request body (F2's `SearchRequest`).
 #[derive(Serialize)]
 struct SearchBody<'a> {
@@ -836,6 +842,22 @@ impl TranscriptionService for HttpTranscriptionService {
             message: err.to_string(),
         })?;
         Ok(parsed.job_id)
+    }
+
+    async fn suggested_title(&self, job_id: &str) -> Result<String, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint(&format!("/v1/jobs/{job_id}/result"))),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+        let parsed: SuggestedTitleResponse =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(parsed.title)
     }
 
     async fn submit_index(&self) -> Result<String, ServiceError> {
@@ -2289,6 +2311,118 @@ mod tests {
                 .model_download_status()
                 .await
                 .expect_err("an unrecognised wire state must not be silently accepted");
+            assert!(matches!(err, ServiceError::Decode { .. }));
+        });
+    }
+
+    #[test]
+    fn submit_llm_posts_a_suggest_title_job_with_exactly_its_three_keys() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .and(body_json(serde_json::json!({
+                    "job_type": "suggest_title",
+                    "input_path": "C:\\Meetings\\ELS\\260812 - Sync",
+                    "output_dir": "C:\\Meetings\\ELS\\260812 - Sync",
+                })))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_json(serde_json::json!({"job_id": "job-7"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let job_id = service
+                .submit_llm(super::super::LlmSubmitRequest {
+                    kind: super::super::LlmJobKind::SuggestTitle,
+                    input_path: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+                    output_dir: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+                    max_speakers: None,
+                    speaker_match_threshold: None,
+                })
+                .await
+                .expect("submit should succeed");
+            assert_eq!(job_id, "job-7");
+        });
+    }
+
+    #[test]
+    fn suggested_title_reads_the_title_out_of_the_jobs_result() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs/job-7/result"))
+                .and(header("authorization", "Bearer secret"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"title": "Обзор бюджета"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("secret".to_string()))
+                .expect("loopback base url must be accepted");
+            let title = service
+                .suggested_title("job-7")
+                .await
+                .expect("the result must decode");
+            assert_eq!(title, "Обзор бюджета");
+        });
+    }
+
+    #[test]
+    fn suggested_title_maps_a_missing_result_to_an_http_error_with_the_service_message() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs/job-7/result"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error_kind": "invalid_request",
+                    "error_message": "result not available for job job-7",
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let err = service
+                .suggested_title("job-7")
+                .await
+                .expect_err("a 404 must not be read as a title");
+            assert_eq!(
+                err,
+                ServiceError::Http {
+                    status: 404,
+                    message: "result not available for job job-7".to_string(),
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn suggested_title_refuses_a_result_that_is_not_a_title_manifest() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs/job-7/result"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"artifacts": ["summary.md"]})),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let err = service
+                .suggested_title("job-7")
+                .await
+                .expect_err("another job's manifest is not a title");
             assert!(matches!(err, ServiceError::Decode { .. }));
         });
     }

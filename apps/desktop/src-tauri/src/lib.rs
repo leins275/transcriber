@@ -258,6 +258,7 @@ pub fn run() {
             commands::model::cancel_model_download,
             commands::llm::summarize_vault_entry,
             commands::llm::export_recording,
+            commands::llm::suggest_title_for_vault_entry,
             commands::llm::llm_model_download_status,
             commands::llm::start_llm_model_download,
             commands::llm::cancel_llm_model_download,

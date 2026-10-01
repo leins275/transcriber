@@ -65,8 +65,10 @@ export type JobState =
  * frozen contract): the LLM feature's summary and export, `diarize`,
  * speaker identification written into the existing transcript, and
  * `compress`, the chain's last stage re-encoding a video recording in its
- * place. */
-export type JobType = "transcribe" | "summarize" | "export" | "diarize" | "compress";
+ * place. `suggest_title` asks the language model for a short meeting name
+ * out of the summary; it writes nothing and answers on the snapshot. */
+export type JobType =
+  "transcribe" | "summarize" | "export" | "diarize" | "compress" | "suggest_title";
 
 export type JobSnapshot = {
   id: string;
@@ -86,6 +88,12 @@ export type JobSnapshot = {
   phase?: string | null;
   message: string | null;
   error_kind: string | null;
+  /** The meeting name a finished `suggest_title` job proposes; null for
+   * every other job and until that one is done. A proposal only — the
+   * recording page prefills its rename form with it and the operator saves.
+   * Optional so snapshot literals written before the feature still
+   * typecheck. */
+  suggested_title?: string | null;
   created_at: string;
 };
 

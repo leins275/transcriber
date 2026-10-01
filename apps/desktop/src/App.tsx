@@ -596,6 +596,18 @@ function App() {
     [upsertJob],
   );
 
+  // Asks the language model for a title; the answer rides back on the
+  // finished job's snapshot and is offered to the recording page below.
+  const handleSuggestTitle = useCallback(
+    async (entryId: string) => {
+      upsertJob(await api.suggestTitleForVaultEntry(entryId));
+    },
+    [upsertJob],
+  );
+  // Title suggestions the operator has already been shown (by job id): each
+  // one opens the rename form once, never again on a later visit.
+  const [shownTitleSuggestions, setShownTitleSuggestions] = useState<string[]>([]);
+
   // The first-run setup path (spec.md 2a) covers both "no folder yet" and
   // "folder chosen but the model isn't here yet" -- one coherent path
   // instead of three unrelated blocks. "Skip for now" (modelSkipped) exits
@@ -635,6 +647,23 @@ function App() {
           job.source_path === openEntry.meeting_dir,
       ).length
     : 0;
+  // Finished title suggestions for the open recording that have not been
+  // put in front of the operator yet. The page gets the newest; showing it
+  // retires them all, so an older one never pops up afterwards.
+  const pendingTitleSuggestions = openEntry
+    ? jobs
+        .filter(
+          (job) =>
+            job.job_type === "suggest_title" &&
+            job.state === "done" &&
+            !!job.suggested_title &&
+            job.source_path === openEntry.meeting_dir &&
+            !shownTitleSuggestions.includes(job.id),
+        )
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    : [];
+  const newestTitleSuggestion = pendingTitleSuggestions[0];
+  const llmReady = llmModels?.models.some((model) => model.active && model.present) ?? false;
 
   // The header narrates the in-flight job only while the operator is away
   // from the main view (mockup 7a) -- on the library the queue itself is
@@ -788,6 +817,22 @@ function App() {
                   speakersReady={speakersReady}
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
+                  onSuggestTitle={handleSuggestTitle}
+                  llmReady={llmReady}
+                  titleSuggestion={
+                    newestTitleSuggestion
+                      ? {
+                          jobId: newestTitleSuggestion.id,
+                          title: newestTitleSuggestion.suggested_title ?? "",
+                        }
+                      : null
+                  }
+                  onTitleSuggestionShown={() =>
+                    setShownTitleSuggestions((shown) => [
+                      ...shown,
+                      ...pendingTitleSuggestions.map((job) => job.id),
+                    ])
+                  }
                 />
               ) : (
                 <>

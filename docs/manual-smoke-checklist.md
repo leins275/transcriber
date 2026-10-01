@@ -76,6 +76,17 @@ Each names the automated coverage that stands in for it in the meantime.
       refused with the backend's own message and nothing moves. Automated:
       `vault::manage::tests`, `commands::tests::update_vault_entry_*`,
       `MeetingEditor.test.tsx`.
+- [ ] **11a. Suggest title from summary.** Open a meeting that has a
+      summary (language model installed) and pick `⋯` → **Suggest title
+      from summary**. Expected: the item reads "Suggesting title…" and is
+      disabled while the job runs; when it finishes the rename form opens
+      with the Title prefilled by a short name in the summary's language,
+      the date and type unchanged, and the folder is renamed only after
+      Save (Cancel keeps the old name). The item is absent on a meeting
+      without a summary and with no language model installed. Automated:
+      `test_llm_title.py`, `test_suggest_title_job.py`,
+      `jobs::tests::*suggest_title*`, `commands::llm::tests::suggest_title_*`,
+      `SuggestTitle.test.tsx`, `App.suggestTitle.test.tsx`.
 - [ ] **12. Delete.** Delete a meeting and confirm. Expected: the folder is
       in the Windows Recycle Bin (restorable), not erased; the row
       disappears. Automated: `vault::manage::tests::delete_moves_the_meeting_out_of_the_vault_and_prunes_its_project`,

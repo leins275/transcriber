@@ -39,9 +39,10 @@ from transcription.llm import (
 )
 from transcription.llm.base import EmbeddingProvider, LlmProvider, LlmTruncatedError, Message
 from transcription.llm.chunking import chunk_lines, input_budget_tokens
-from transcription.llm.prompts import render_transcript_lines
+from transcription.llm.prompts import render_transcript_lines, title_messages
 from transcription.llm.reasoning import split_reasoning
 from transcription.llm.summarize import summarize_chunks
+from transcription.llm.title import sanitize_title
 from transcription.pdf import PdfRenderError, render_pdf
 from transcription.providers import get_provider, validate_provider_name
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptionProvider
@@ -63,10 +64,16 @@ TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 # worker: an LLM job queued behind a transcription waits, and vice versa --
 # which is also the RAM guarantee that whisper and the LLM never infer
 # concurrently (the index job's embedder is CPU-only on top of that).
-KNOWN_JOB_TYPES = frozenset({"transcribe", "summarize", "export", "index", "diarize", "compress"})
+KNOWN_JOB_TYPES = frozenset(
+    {"transcribe", "summarize", "export", "index", "diarize", "compress", "suggest_title"}
+)
 
 # The per-meeting derived jobs that read an existing transcript.json.
 _TRANSCRIPT_READING_JOB_TYPES = frozenset({"summarize", "export", "diarize"})
+
+# The job types that load the LLM: resolved before they run, unloaded after
+# (unless `llm_keep_loaded`), and what guards a model deletion.
+_LLM_JOB_TYPES = frozenset({"summarize", "suggest_title"})
 
 _logger = logging.getLogger("transcription")
 
@@ -365,13 +372,13 @@ class JobManager:
         }
 
     def has_active_llm_job(self) -> bool:
-        """Whether any model-loading LLM job (summarize -- not export, which
-        never touches the model) is queued or running. Guards catalog model
-        deletion: never pull a GGUF out from under a job that may be about
-        to mmap it.
+        """Whether any model-loading LLM job (summarize, suggest_title -- not
+        export, which never touches the model) is queued or running. Guards
+        catalog model deletion: never pull a GGUF out from under a job that
+        may be about to mmap it.
         """
         return any(
-            job.job_type == "summarize" and job.status in ("queued", "running")
+            job.job_type in _LLM_JOB_TYPES and job.status in ("queued", "running")
             for job in self._jobs.values()
         )
 
@@ -460,6 +467,15 @@ class JobManager:
                 raise ServiceError(
                     ErrorKind.INVALID_REQUEST,
                     f"no transcript.json in {resolved_source.name}; transcribe first",
+                )
+            # A title is suggested from the summary, so there must be one.
+            if (
+                job_type == "suggest_title"
+                and not (resolved_source / artifacts.SUMMARY_FILE_NAME).is_file()
+            ):
+                raise ServiceError(
+                    ErrorKind.INVALID_REQUEST,
+                    f"no summary.md in {resolved_source.name}; summarize first",
                 )
         if job_type == "index":
             resolved_output = Path(self._config.index_db_path)
@@ -1019,13 +1035,18 @@ class JobManager:
         heavy work ever overlaps.
         """
         start = time.monotonic()
-        uses_llm = job.job_type == "summarize"
+        uses_llm = job.job_type in _LLM_JOB_TYPES
         try:
             if uses_llm:
                 provider = await self._resolve_llm(job)
                 job.status = "running"
                 self._ledger.mark_running(job.job_id, device=provider.describe().device)
-                body = functools.partial(self._summarize_sync, job, provider)
+                run_llm = (
+                    self._suggest_title_sync
+                    if job.job_type == "suggest_title"
+                    else self._summarize_sync
+                )
+                body = functools.partial(run_llm, job, provider)
             elif job.job_type == "index":
                 # The embedder is constructed here (cheap); its lazy weight
                 # load -- and any failure of it -- happens inside the walk,
@@ -1334,6 +1355,57 @@ class JobManager:
                 Path(job.output_path) / "summary.reasoning.md",
             )
         return {"artifacts": [str(summary_path)]}
+
+    def _suggest_title_sync(self, job: JobState, provider: LlmProvider) -> dict[str, Any]:
+        """The `suggest_title` job: a short meeting name out of `summary.md`.
+
+        Read-only: the suggestion travels in the result manifest and
+        nothing is written or renamed -- the operator confirms the name in
+        the app, which renames through the vault's own rules. The answer
+        is sanitized (`llm/title.py`), never trusted.
+        """
+        meeting_dir = Path(job.source_path)
+        _set_phase(job, "reading summary", None)
+        try:
+            summary = (meeting_dir / artifacts.SUMMARY_FILE_NAME).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"summary.md is missing or unreadable in {meeting_dir.name}; summarize first",
+            ) from exc
+        if not summary.strip():
+            raise ServiceError(
+                ErrorKind.INVALID_REQUEST,
+                f"summary.md is empty in {meeting_dir.name}; summarize first",
+            )
+        # A summary is short by construction, but a hand-written one need
+        # not be: only what fits the context window is read, from the top
+        # (where the overview paragraph is).
+        fitted = chunk_lines(
+            summary.strip().splitlines(),
+            self._llm_budget_tokens(),
+            count_tokens=provider.count_tokens,
+        )[0]
+        job.cancel_token.raise_if_cancelled()
+        try:
+            answer = self._complete_text(
+                job,
+                provider,
+                title_messages(fitted),
+                on_token=lambda piece: _set_phase(job, "writing title", None),
+            )
+        except LlmTruncatedError as truncated:
+            raise ServiceError(
+                ErrorKind.LLM_OUTPUT,
+                "the model hit the token limit before it produced a title",
+            ) from truncated
+        title = sanitize_title(answer)
+        if not title:
+            raise ServiceError(
+                ErrorKind.LLM_OUTPUT,
+                "the model produced no usable title; try again or rename by hand",
+            )
+        return {"title": title}
 
     def _index_sync(self, job: JobState, embedder: EmbeddingProvider) -> dict[str, Any]:
         """One incremental index pass over the vault (runs on the serial
