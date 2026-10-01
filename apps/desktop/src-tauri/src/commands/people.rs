@@ -45,6 +45,8 @@ pub struct SpeakerMeetingView {
     /// `"ok" | "unconfirmed" | "partial" | "short" | "conflict"`, or `None`
     /// when the meeting holds no voice sample of this person.
     pub voice_quality: Option<String>,
+    /// For a `conflict`: whose voice the sample sounds like.
+    pub voice_conflicts_with: Option<String>,
     pub segments: Vec<PersonSegment>,
     pub segments_truncated: bool,
 }
@@ -149,6 +151,7 @@ pub async fn speaker_detail_handler(
                 hand_segments: meeting.hand_segments,
                 speech_sec: meeting.speech_sec,
                 voice_quality: meeting.voice_quality,
+                voice_conflicts_with: meeting.voice_conflicts_with,
                 segments: meeting.segments,
                 segments_truncated: meeting.segments_truncated,
             })
@@ -287,6 +290,7 @@ mod tests {
             hand_segments: 2,
             speech_sec: 12.5,
             voice_quality: Some("ok".to_string()),
+            voice_conflicts_with: None,
             segments: vec![PersonSegment {
                 id: 7,
                 start: 63.2,

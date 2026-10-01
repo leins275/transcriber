@@ -359,6 +359,7 @@ def test_a_persons_page_shows_their_projects_and_hand_labelled_speech(
     assert (kt["labelled_segments"], kt["hand_segments"]) == (2, 1)
     assert [segment["id"] for segment in kt["segments"]] == [0]
     assert undiarized["voice_quality"] is None
+    assert sync["voice_conflicts_with"] is None
     assert [segment["id"] for segment in undiarized["segments"]] == [0]
 
 

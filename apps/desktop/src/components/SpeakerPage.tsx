@@ -45,11 +45,17 @@ function meetingTitle(meeting: SpeakerMeetingView): string {
 }
 
 /** Why this meeting's voice sample is set aside, in the voice-memory
- * panel's own words. The page knows neither the sample's own length nor
- * whom it was confused with, so those two reasons stay general. */
-function setAsideNote(quality: VoiceSampleQuality): string {
+ * panel's own words. The page does not know the sample's own length, so
+ * that reason stays general; a conflict names whom it sounds like. */
+function setAsideNote(quality: VoiceSampleQuality, conflictsWith: string | null): string {
   if (quality === "short") return "too little speech";
-  return setAsideReason({ label: "", name: "", speech_sec: 0, quality, conflicts_with: null });
+  return setAsideReason({
+    label: "",
+    name: "",
+    speech_sec: 0,
+    quality,
+    conflicts_with: conflictsWith,
+  });
 }
 
 function PencilIcon() {
@@ -107,7 +113,9 @@ function MeetingBlock({
       <div className={styles.meetingMeta}>
         <span>{meta.join(" · ")}</span>
         {setAside && (
-          <span className={styles.setAside}>voice sample set aside: {setAsideNote(quality)}</span>
+          <span className={styles.setAside}>
+            voice sample set aside: {setAsideNote(quality, meeting.voice_conflicts_with ?? null)}
+          </span>
         )}
       </div>
       {meeting.segments.length > 0 && (

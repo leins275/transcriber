@@ -170,6 +170,11 @@ describe("SpeakerPage", () => {
               meeting({ meeting: "260901 - A", voice_quality: "conflict" }),
               meeting({ meeting: "260902 - B", voice_quality: "unconfirmed" }),
               meeting({ meeting: "260903 - C", voice_quality: "short" }),
+              meeting({
+                meeting: "260905 - E",
+                voice_quality: "conflict",
+                voice_conflicts_with: "Boris",
+              }),
               meeting({ meeting: "260904 - D", voice_quality: null }),
             ],
           }),
@@ -183,6 +188,7 @@ describe("SpeakerPage", () => {
       screen.getByText("voice sample set aside: named automatically, not confirmed"),
     ).toBeInTheDocument();
     expect(screen.getByText("voice sample set aside: too little speech")).toBeInTheDocument();
+    expect(screen.getByText("voice sample set aside: sounds like Boris")).toBeInTheDocument();
     expect(screen.getByText(/· no voice sample$/)).toBeInTheDocument();
     expect(screen.queryByText(/voice sample in use/)).not.toBeInTheDocument();
   });

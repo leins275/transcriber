@@ -198,7 +198,8 @@ def person_detail(index: VoiceIndex, vault_root: Path, name: str) -> dict[str, A
         )
         project["meetings"] += 1
         project["speech_sec"] += speech
-        qualities = [item.quality for item in row.exemplars if item.exemplar.name == person]
+        samples = [item for item in row.exemplars if item.exemplar.name == person]
+        sample = min(samples, key=lambda item: _QUALITY_RANK[item.quality]) if samples else None
         segments, truncated = _hand_segments(
             vault_root / row.project / row.meeting, person, snapshot
         )
@@ -210,9 +211,8 @@ def person_detail(index: VoiceIndex, vault_root: Path, name: str) -> dict[str, A
                 "labelled_segments": sum(stat.segments for stat in stats),
                 "hand_segments": sum(stat.hand_segments for stat in stats),
                 "speech_sec": speech,
-                "voice_quality": min(qualities, key=lambda q: _QUALITY_RANK[q])
-                if qualities
-                else None,
+                "voice_quality": sample.quality if sample is not None else None,
+                "voice_conflicts_with": sample.conflicts_with if sample is not None else None,
                 "segments": segments,
                 "segments_truncated": truncated,
             }

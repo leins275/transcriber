@@ -663,6 +663,9 @@ pub struct PersonMeeting {
     /// `None` when the meeting holds no voice sample of this person.
     #[serde(default)]
     pub voice_quality: Option<String>,
+    /// For a `conflict`: whose voice the sample sounds like.
+    #[serde(default)]
+    pub voice_conflicts_with: Option<String>,
     /// The person's hand-labelled segments in time order, capped per meeting.
     #[serde(default)]
     pub segments: Vec<PersonSegment>,

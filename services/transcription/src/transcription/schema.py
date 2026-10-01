@@ -423,6 +423,8 @@ class PersonMeeting(BaseModel):
     # The verdict on this person's voice sample in the meeting; `None` when
     # the meeting holds none (never diarized, or the voice is somebody else's).
     voice_quality: Literal["ok", "unconfirmed", "partial", "short", "conflict"] | None = None
+    # For a `conflict`: whose voice the sample sounds like.
+    voice_conflicts_with: str | None = None
     # The segments the operator labelled as this person, in time order,
     # capped per meeting.
     segments: list[PersonSegment] = Field(default_factory=list)

@@ -518,6 +518,8 @@ export type SpeakerMeetingView = {
   speech_sec: number;
   /** `null`: the meeting holds no voice sample of this person. */
   voice_quality: VoiceSampleQuality | null;
+  /** For a `conflict`: whose voice the sample sounds like. */
+  voice_conflicts_with?: string | null;
   /** The person's hand-labelled segments in time order, capped per meeting. */
   segments: SpeakerSegmentView[];
   segments_truncated: boolean;
