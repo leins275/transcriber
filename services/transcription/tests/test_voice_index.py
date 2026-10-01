@@ -143,7 +143,7 @@ def test_an_unchanged_vault_is_not_read_again(
     def refuse(_meeting_dir: Path) -> None:
         raise AssertionError("an unchanged meeting must not be re-read")
 
-    monkeypatch.setattr(voice_index_module, "scan_meeting", refuse)
+    monkeypatch.setattr(voice_index_module, "scan_meeting_full", refuse)
 
     stats = index.refresh(vault)
 

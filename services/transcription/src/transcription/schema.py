@@ -365,6 +365,93 @@ class VoiceStatusResponse(BaseModel):
     meetings: list[VoiceMeetingStatus]
 
 
+class PersonModel(BaseModel):
+    """A person of the speakers database: canonical name, the other names
+    their labels use, and the operator's free-text note."""
+
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    bio: str = ""
+    # In `people.json`; false for somebody only known from meeting labels.
+    registered: bool
+
+
+class PersonRow(PersonModel):
+    """One row of ``GET /v1/people``."""
+
+    projects: list[str] = Field(default_factory=list)
+    meetings: int = 0
+    labelled_segments: int = 0
+    hand_segments: int = 0
+    speech_sec: float = 0.0
+    voice_samples: int = 0
+    voice_set_aside: int = 0
+
+
+class PeopleListResponse(BaseModel):
+    people: list[PersonRow]
+
+
+class PersonProject(BaseModel):
+    project: str
+    meetings: int
+    speech_sec: float
+    in_roster: bool
+
+
+class PersonVoice(BaseModel):
+    samples: int
+    set_aside: int
+    speech_sec: float
+
+
+class PersonSegment(BaseModel):
+    id: int
+    start: float
+    end: float
+    text: str
+
+
+class PersonMeeting(BaseModel):
+    project: str
+    meeting: str
+    # Vault-root-relative, forward slashes.
+    meeting_dir: str
+    labelled_segments: int
+    hand_segments: int
+    speech_sec: float
+    # The verdict on this person's voice sample in the meeting; `None` when
+    # the meeting holds none (never diarized, or the voice is somebody else's).
+    voice_quality: Literal["ok", "unconfirmed", "partial", "short", "conflict"] | None = None
+    # The segments the operator labelled as this person, in time order,
+    # capped per meeting.
+    segments: list[PersonSegment] = Field(default_factory=list)
+    segments_truncated: bool = False
+
+
+class PersonDetailResponse(PersonModel):
+    """``GET /v1/people/detail`` response body."""
+
+    projects: list[PersonProject]
+    voice: PersonVoice
+    meetings: list[PersonMeeting]
+
+
+class PersonUpdate(BaseModel):
+    """``PUT /v1/people`` request body. `name` addresses the person by any
+    of their names (and creates them when nobody answers to it); a field
+    left out is left alone."""
+
+    name: str = Field(min_length=1)
+    new_name: str | None = None
+    aliases: list[str] | None = None
+    bio: str | None = None
+
+
+class PersonDeleteResponse(BaseModel):
+    deleted: bool
+
+
 class ChatMessageModel(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1)

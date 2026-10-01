@@ -478,6 +478,40 @@ voice's `quality`), `roster_only`, and `rescanned` / `rescanned_elsewhere`:
 the meetings this very request had to re-read. It runs no model and answers
 mid-job.
 
+### The speakers database
+
+Who a name *is* comes from `<vault_root>/people.json` (`people.py`), the one
+thing about speakers that is not derived from the meetings:
+
+```json
+{"schema_version": 1, "people": [
+  {"name": "Danil Savchuk", "aliases": ["Даня", "Danya"], "bio": "…"}]}
+```
+
+A person has no id: they are addressed by any of their names, compared
+trimmed and lower-cased. Every spelling in a label resolves to the person's
+canonical `name` *before* voices are compared, so the samples behind
+"Artur" and "Артур" pool once the two are one person (unregistered, the
+same voice under two names is a `conflict` and neither is used). A
+spelling nobody registered is its own person, with its case and spacing
+variants folded together. Labels in `speakers.json` are never rewritten:
+the registry is a layer of resolution over them. A roster entry stands for
+the person, whichever of their names it uses, and a recognized voice is
+written under the canonical name (under the roster's spelling in a strict
+project).
+
+| route | |
+|---|---|
+| `GET /v1/people` | everybody registered or labelled anywhere: `name`, `aliases` (registered ones first, then other spellings the labels use), `bio`, `registered`, `projects` (labelled there, or on that project's roster), `meetings`, `labelled_segments`, `hand_segments`, `speech_sec`, `voice_samples`, `voice_set_aside` |
+| `GET /v1/people/detail?name=` | one person by any of their names (404 when nobody answers to it): the same identity fields, `projects` (`meetings`, `speech_sec`, `in_roster`), `voice` (`samples`, `set_aside`, `speech_sec`) and `meetings`, newest first, each with `voice_quality` and the first 20 segments the operator labelled as this person (`segments_truncated` when there are more) |
+| `PUT /v1/people` | create or update: `{"name", "new_name"?, "aliases"?, "bio"?}`. A field left out is left alone; `aliases` replaces the list; a rename keeps the name being replaced as an alias, whatever alias list came with it; an alias that is another registered person's name merges that person in. 400 for an empty or over-long name, or a `new_name` that is already somebody else |
+| `DELETE /v1/people?name=` | remove the registry entry (`{"deleted": bool}`); the labels stay, so the spellings reappear as unregistered people |
+
+The table and the page are derived on every request from the voice index
+(which also stores, per meeting, how many segments and how much speech each
+written name has -- for undiarized meetings too); none of the routes runs a
+model, so they answer mid-job.
+
 Measured on the operator's vault (29 hand-labelled diarized meetings in
 four projects, each named from the others, compared segment by segment with
 the operator's labels): the previous per-project scan agreed on 79% of

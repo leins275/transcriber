@@ -36,6 +36,7 @@ from transcription.api.model_routes import (
     is_model_present,
     llm_gpu_build_present,
 )
+from transcription.api.people_routes import build_people_router
 from transcription.api.search_routes import build_search_router
 from transcription.config import Config
 from transcription.cuda_runtime import is_cuda_runtime_present
@@ -49,6 +50,7 @@ from transcription.jobs import JobManager, JobNotFoundError
 from transcription.ledger import Ledger
 from transcription.llm_catalog import CatalogEntry
 from transcription.model_download import ModelDownload
+from transcription.people import PersonNotFoundError
 from transcription.schema import DiarizationStatus, JobCreate, JobStatus
 from transcription.search.index_db import remove_legacy_app_dir_index
 from transcription.search.service import SearchService
@@ -210,6 +212,13 @@ def create_app(
 
     @app.exception_handler(JobNotFoundError)
     async def _job_not_found_handler(request: Request, exc: JobNotFoundError) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content=_error_body(ErrorKind.INVALID_REQUEST, str(exc)),
+        )
+
+    @app.exception_handler(PersonNotFoundError)
+    async def _person_not_found_handler(request: Request, exc: PersonNotFoundError) -> JSONResponse:
         return JSONResponse(
             status_code=404,
             content=_error_body(ErrorKind.INVALID_REQUEST, str(exc)),
@@ -392,5 +401,6 @@ def create_app(
         )
     )
     app.include_router(build_search_router(require_token))
+    app.include_router(build_people_router(require_token))
 
     return app

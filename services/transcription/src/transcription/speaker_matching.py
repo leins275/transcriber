@@ -25,6 +25,11 @@ of it or its roster lists it, and is matched as before; any other name is a
 at least ``MIN_EXEMPLAR_SPEECH_SEC`` of speech. A real returning voice does
 (the same person scores 0.9 and up across meetings); a scrap does not.
 
+Who a name *is* comes from the speakers database (``people.py``): every
+spelling in a label resolves to one person's canonical name before voices
+are compared, so "Artur" and "Артур" registered as one person pool their
+samples instead of being told apart -- or flagged as a conflict.
+
 Two layers of recognition, both fed by the same memory:
 
 * **per voice** -- each diarized cluster is matched to at most one known
@@ -67,11 +72,12 @@ import statistics
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from transcription.diarization import SPEAKER_LABEL_PREFIX
+from transcription.people import PeopleRegistry, PeopleResolver, name_key
 
 logger = logging.getLogger("transcription")
 
@@ -152,6 +158,29 @@ class Exemplar:
     named_segments: int
     hand_votes: int
     total_segments: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class NameStat:
+    """How much of one meeting carries one name, as written in its labels:
+    ``hand_segments`` of the ``segments`` were named by the operator rather
+    than by this module."""
+
+    name: str
+    segments: int
+    hand_segments: int
+    speech_sec: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class MeetingScan:
+    """Everything one meeting says about its speakers: the voice samples
+    (``exemplars``, diarized meetings only) and the names its labels use
+    (``names``, any labelled meeting)."""
+
+    state: MeetingVoiceState
+    exemplars: list[Exemplar] = field(default_factory=list)
+    names: list[NameStat] = field(default_factory=list)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -300,8 +329,9 @@ def _segment_duration(segment: Mapping[str, Any]) -> float:
     return max(0.0, end - start)
 
 
-def scan_meeting(meeting_dir: Path) -> tuple[MeetingVoiceState, list[Exemplar]]:
-    """One meeting's contribution to the voice memory.
+def scan_meeting_full(meeting_dir: Path) -> MeetingScan:
+    """One meeting's contribution to the voice memory and to the speakers
+    database.
 
     One exemplar per diarized label whose segments carry a real name, named
     by majority vote (a stray mis-assigned segment must not rename a voice).
@@ -310,38 +340,47 @@ def scan_meeting(meeting_dir: Path) -> tuple[MeetingVoiceState, list[Exemplar]]:
     no vote -- otherwise a placeholder would travel across the project as if
     it were a person.
 
-    The state says why a meeting contributes nothing: ``no_voices`` has no
-    stored voice embeddings (never diarized), ``unnamed`` has voices but no
-    names.
+    The state says why a meeting contributes no exemplar: ``no_voices`` has
+    no stored voice embeddings (never diarized), ``unnamed`` has voices but
+    no names. The name statistics do not need voices: a meeting labelled by
+    hand without ever being diarized still says who spoke in it.
     """
     doc = _read_json_capped(meeting_dir / _TRANSCRIPT_FILE_NAME, _MAX_TRANSCRIPT_BYTES)
     if doc is None:
-        return "no_voices", []
+        return MeetingScan(state="no_voices")
     embeddings = _label_embeddings(doc)
-    if not embeddings:
-        return "no_voices", []
     assignments, auto = _load_speakers(meeting_dir)
 
     votes: dict[str, Counter[str]] = defaultdict(Counter)
     hand: dict[str, Counter[str]] = defaultdict(Counter)
     speech: dict[str, float] = defaultdict(float)
     totals: Counter[str] = Counter()
+    name_segments: Counter[str] = Counter()
+    name_hand: Counter[str] = Counter()
+    name_speech: dict[str, float] = defaultdict(float)
     segments = doc.get("segments")
     for segment in segments if isinstance(segments, list) else []:
         if not isinstance(segment, dict):
             continue
-        label = segment.get("speaker")
-        if not isinstance(label, str) or label not in embeddings:
-            continue
-        speech[label] += _segment_duration(segment)
-        totals[label] += 1
+        duration = _segment_duration(segment)
+        raw_label = segment.get("speaker")
+        label = raw_label if isinstance(raw_label, str) and raw_label in embeddings else None
+        if label is not None:
+            speech[label] += duration
+            totals[label] += 1
         segment_id = str(segment.get("id"))
         name = assignments.get(segment_id)
         if not name or _is_generic(name):
             continue
-        votes[label][name] += 1
-        if auto.get(segment_id) != name:
-            hand[label][name] += 1
+        by_hand = auto.get(segment_id) != name
+        name_segments[name] += 1
+        name_speech[name] += duration
+        if by_hand:
+            name_hand[name] += 1
+        if label is not None:
+            votes[label][name] += 1
+            if by_hand:
+                hand[label][name] += 1
 
     exemplars = []
     for label, counter in votes.items():
@@ -360,7 +399,28 @@ def scan_meeting(meeting_dir: Path) -> tuple[MeetingVoiceState, list[Exemplar]]:
                 total_segments=totals[label],
             )
         )
-    return ("named" if exemplars else "unnamed"), exemplars
+    state: MeetingVoiceState = (
+        "no_voices" if not embeddings else "named" if exemplars else "unnamed"
+    )
+    return MeetingScan(
+        state=state,
+        exemplars=exemplars,
+        names=[
+            NameStat(
+                name=name,
+                segments=count,
+                hand_segments=name_hand[name],
+                speech_sec=name_speech[name],
+            )
+            for name, count in name_segments.items()
+        ],
+    )
+
+
+def scan_meeting(meeting_dir: Path) -> tuple[MeetingVoiceState, list[Exemplar]]:
+    """``scan_meeting_full`` as the bare ``(state, exemplars)`` pair."""
+    scan = scan_meeting_full(meeting_dir)
+    return scan.state, scan.exemplars
 
 
 def assess_exemplars(exemplars: Sequence[Exemplar]) -> list[AssessedExemplar]:
@@ -465,33 +525,64 @@ def scan_vault(vault_root: Path) -> list[Exemplar]:
     return exemplars
 
 
-def name_key(name: str) -> str:
-    """How two spellings of a name are compared: trimmed and lower-cased,
-    the same folding the roster itself deduplicates by
-    (`commands/roster.rs`, `lib/roster.ts`)."""
-    return name.strip().lower()
+def people_resolver(vault_root: Path, exemplars: Sequence[Exemplar]) -> PeopleResolver:
+    """The speakers database's resolver for this vault, with the exemplars'
+    own spellings as what is "observed" (weighted by how many segments carry
+    each), so unregistered case variants of one name still become one
+    person."""
+    observed: Counter[str] = Counter()
+    for exemplar in exemplars:
+        observed[exemplar.name] += exemplar.votes
+    return PeopleRegistry.load(vault_root).resolver(observed)
 
 
-def strict_roster_names(project_dir: Path) -> dict[str, str] | None:
-    """The names a project in ``roster`` mode allows, as folded name -> the
-    roster's own spelling, or ``None`` when any name may be given (no
-    roster, ``open`` mode, unreadable file).
+def canonicalize(exemplars: Sequence[Exemplar], resolver: PeopleResolver) -> list[Exemplar]:
+    """`exemplars` with every name replaced by the person's canonical one."""
+    return [
+        exemplar
+        if (name := resolver(exemplar.name)) == exemplar.name
+        else replace(exemplar, name=name)
+        for exemplar in exemplars
+    ]
+
+
+def _roster(project_dir: Path) -> tuple[bool, list[str]]:
+    """``(strict, names)`` of the project's ``roster.json``; an absent or
+    unreadable roster is ``(False, [])``."""
+    data = _read_json_capped(project_dir / _ROSTER_FILE_NAME, _MAX_ROSTER_BYTES)
+    if not data:
+        return False, []
+    names = data.get("names")
+    return (
+        data.get("mode") == _ROSTER_STRICT_MODE,
+        [name.strip() for name in names if isinstance(name, str) and name.strip()]
+        if isinstance(names, list)
+        else [],
+    )
+
+
+def _person_key(name: str, resolver: PeopleResolver | None) -> str:
+    return name_key(resolver(name) if resolver is not None else name)
+
+
+def strict_roster_names(
+    project_dir: Path, resolver: PeopleResolver | None = None
+) -> dict[str, str] | None:
+    """The people a project in ``roster`` mode allows, as the person's
+    folded canonical name -> the roster's own spelling, or ``None`` when any
+    name may be given (no roster, ``open`` mode, unreadable file).
 
     The one thing the service reads from ``roster.json``. The speaker cap
     and the lowered threshold of a strict roster still arrive as numbers on
     the job; the names cannot, because they bound a memory that now spans
     projects -- without them a strict project would be offered every voice
-    the vault has ever heard.
+    the vault has ever heard. With a ``resolver`` a roster entry stands for
+    the person, whichever of their names it uses.
     """
-    data = _read_json_capped(project_dir / _ROSTER_FILE_NAME, _MAX_ROSTER_BYTES)
-    if not data or data.get("mode") != _ROSTER_STRICT_MODE:
+    strict, names = _roster(project_dir)
+    if not strict:
         return None
-    names = data.get("names")
-    if not isinstance(names, list):
-        return {}
-    return {
-        name_key(name): name.strip() for name in names if isinstance(name, str) and name.strip()
-    }
+    return {_person_key(name, resolver): name for name in names}
 
 
 def read_vault_exemplars(vault_root: Path, memory: VoiceMemory | None) -> list[Exemplar]:
@@ -511,15 +602,12 @@ def read_vault_exemplars(vault_root: Path, memory: VoiceMemory | None) -> list[E
     return scan_vault(vault_root)
 
 
-def roster_names(project_dir: Path) -> frozenset[str]:
-    """The folded names on a project's roster, whatever its mode: in
-    ``open`` mode the list restricts nothing, but it still says who the
+def roster_names(project_dir: Path, resolver: PeopleResolver | None = None) -> frozenset[str]:
+    """The folded canonical names on a project's roster, whatever its mode:
+    in ``open`` mode the list restricts nothing, but it still says who the
     operator expects in this project."""
-    data = _read_json_capped(project_dir / _ROSTER_FILE_NAME, _MAX_ROSTER_BYTES)
-    names = data.get("names") if data else None
-    if not isinstance(names, list):
-        return frozenset()
-    return frozenset(name_key(name) for name in names if isinstance(name, str) and name.strip())
+    _strict, names = _roster(project_dir)
+    return frozenset(_person_key(name, resolver) for name in names)
 
 
 def collect_known_voices(meeting_dir: Path, *, memory: VoiceMemory | None = None) -> KnownVoices:
@@ -527,37 +615,43 @@ def collect_known_voices(meeting_dir: Path, *, memory: VoiceMemory | None = None
     *other* meeting of the vault and, in a strict-roster project, narrowed
     to the names on its roster.
 
-    The quality rules of ``assess_exemplars`` apply to the vault as a whole
-    -- this meeting's own exemplars take part in the judgement even though
-    they are not offered as references.
+    Names are the speakers database's canonical ones. The quality rules of
+    ``assess_exemplars`` apply to the vault as a whole -- this meeting's own
+    exemplars take part in the judgement even though they are not offered
+    as references.
     """
     project_dir = meeting_dir.parent
-    exemplars = read_vault_exemplars(project_dir.parent, memory)
-    allowed = strict_roster_names(project_dir)
-    at_home = set(roster_names(project_dir))
+    vault_root = project_dir.parent
+    raw = read_vault_exemplars(vault_root, memory)
+    resolver = people_resolver(vault_root, raw)
+    allowed = strict_roster_names(project_dir, resolver)
+    at_home = set(roster_names(project_dir, resolver))
 
     voiceprints: dict[str, list[list[float]]] = defaultdict(list)
-    for assessed in assess_exemplars(exemplars):
+    spelling: dict[str, str] = {}
+    for assessed in assess_exemplars(canonicalize(raw, resolver)):
         exemplar = assessed.exemplar
         if assessed.quality != "ok":
             continue
         own_project = exemplar.project == project_dir.name
         if own_project and exemplar.meeting == meeting_dir.name:
             continue
+        key = name_key(exemplar.name)
         name = exemplar.name
         if allowed is not None:
             # A strict roster also decides the spelling: a voice known
             # elsewhere as "ANNA" is offered here as the roster's "Anna".
-            listed = allowed.get(name_key(name))
+            listed = allowed.get(key)
             if listed is None:
                 continue
             name = listed
         if own_project:
-            at_home.add(name_key(name))
+            at_home.add(key)
+        spelling[name] = key
         voiceprints[name].append(exemplar.vector)
     return KnownVoices(
         voiceprints=dict(voiceprints),
-        newcomers=frozenset(name for name in voiceprints if name_key(name) not in at_home),
+        newcomers=frozenset(name for name, key in spelling.items() if key not in at_home),
     )
 
 

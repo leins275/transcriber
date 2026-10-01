@@ -34,19 +34,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from transcription.people import PeopleRegistry, PeopleResolver, name_key
 from transcription.speaker_matching import (
     AssessedExemplar,
     Exemplar,
+    NameStat,
     assess_exemplars,
-    name_key,
+    canonicalize,
     project_dirs,
-    scan_meeting,
+    scan_meeting_full,
     strict_roster_names,
 )
 
 logger = logging.getLogger("transcription")
 
-VOICE_INDEX_SCHEMA_VERSION = 1
+VOICE_INDEX_SCHEMA_VERSION = 2
 VOICE_INDEX_FILENAME = "voices.sqlite3"
 
 _DB_FILE_SUFFIXES = ("", "-wal", "-shm")
@@ -78,6 +80,15 @@ CREATE TABLE exemplars(
   total_segments INTEGER NOT NULL,
   PRIMARY KEY(project, meeting, label)
 );
+CREATE TABLE names(
+  project TEXT NOT NULL,
+  meeting TEXT NOT NULL,
+  name TEXT NOT NULL,
+  segments INTEGER NOT NULL,
+  hand_segments INTEGER NOT NULL,
+  speech_sec REAL NOT NULL,
+  PRIMARY KEY(project, meeting, name)
+);
 """
 
 
@@ -97,6 +108,19 @@ class MeetingRow:
     state: str
     scanned_at: int
     exemplars: list[AssessedExemplar] = field(default_factory=list)
+    # The names this meeting's labels use, as written (not canonical).
+    names: list[NameStat] = field(default_factory=list)
+
+
+@dataclass(frozen=True, kw_only=True)
+class Snapshot:
+    """The refreshed vault: what the refresh changed, every transcribed
+    meeting with its assessed (canonically named) voice samples and its
+    label names, and the resolver that maps any spelling to its person."""
+
+    stats: RefreshStats
+    rows: list[MeetingRow]
+    resolver: PeopleResolver
 
 
 def voice_index_path(index_db_path: str | Path) -> Path:
@@ -202,6 +226,9 @@ class VoiceIndex:
             "DELETE FROM exemplars WHERE project = ? AND meeting = ?", (project, meeting)
         )
         self._conn.execute(
+            "DELETE FROM names WHERE project = ? AND meeting = ?", (project, meeting)
+        )
+        self._conn.execute(
             "DELETE FROM meetings WHERE project = ? AND meeting = ?", (project, meeting)
         )
 
@@ -225,7 +252,8 @@ class VoiceIndex:
             if stored.get(key) == fingerprint:
                 continue
             project, meeting = key
-            state, exemplars = scan_meeting(meeting_dir)
+            scan = scan_meeting_full(meeting_dir)
+            state, exemplars = scan.state, scan.exemplars
             with self._conn:
                 self._forget_locked(project, meeting)
                 self._conn.execute(
@@ -251,6 +279,14 @@ class VoiceIndex:
                             e.total_segments,
                         )
                         for e in exemplars
+                    ],
+                )
+                self._conn.executemany(
+                    "INSERT INTO names(project, meeting, name, segments, hand_segments,"
+                    " speech_sec) VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        (project, meeting, n.name, n.segments, n.hand_segments, n.speech_sec)
+                        for n in scan.names
                     ],
                 )
             rescanned.append(key)
@@ -303,29 +339,52 @@ class VoiceIndex:
             self._refresh_locked(vault_root)
             return self._exemplars_locked()
 
-    def snapshot(self, vault_root: Path) -> tuple[RefreshStats, list[MeetingRow]]:
-        """The refreshed vault, meeting by meeting, with each exemplar's
-        verdict -- what the status view is built from."""
+    def snapshot(self, vault_root: Path) -> Snapshot:
+        """The refreshed vault, meeting by meeting, with each voice sample's
+        verdict and each meeting's label names -- what the status view and
+        the speakers database are built from."""
         with self._lock:
             stats = self._refresh_locked(vault_root)
-            assessed = assess_exemplars(self._exemplars_locked())
+            raw = self._exemplars_locked()
             meeting_rows = self._conn.execute(
                 "SELECT project, meeting, state, scanned_at FROM meetings"
             ).fetchall()
+            name_rows = self._conn.execute(
+                "SELECT project, meeting, name, segments, hand_segments, speech_sec FROM names"
+            ).fetchall()
+
+        names: dict[tuple[str, str], list[NameStat]] = {}
+        observed: dict[str, float] = {}
+        for row in name_rows:
+            stat = NameStat(
+                name=str(row["name"]),
+                segments=int(row["segments"]),
+                hand_segments=int(row["hand_segments"]),
+                speech_sec=float(row["speech_sec"]),
+            )
+            names.setdefault((str(row["project"]), str(row["meeting"])), []).append(stat)
+            observed[stat.name] = observed.get(stat.name, 0.0) + stat.segments
+        resolver = PeopleRegistry.load(vault_root).resolver(observed)
+
         by_meeting: dict[tuple[str, str], list[AssessedExemplar]] = {}
-        for item in assessed:
+        for item in assess_exemplars(canonicalize(raw, resolver)):
             key = (item.exemplar.project, item.exemplar.meeting)
             by_meeting.setdefault(key, []).append(item)
-        return stats, [
-            MeetingRow(
-                project=str(row["project"]),
-                meeting=str(row["meeting"]),
-                state=str(row["state"]),
-                scanned_at=int(row["scanned_at"]),
-                exemplars=by_meeting.get((str(row["project"]), str(row["meeting"])), []),
-            )
-            for row in meeting_rows
-        ]
+        return Snapshot(
+            stats=stats,
+            rows=[
+                MeetingRow(
+                    project=str(row["project"]),
+                    meeting=str(row["meeting"]),
+                    state=str(row["state"]),
+                    scanned_at=int(row["scanned_at"]),
+                    exemplars=by_meeting.get((str(row["project"]), str(row["meeting"])), []),
+                    names=names.get((str(row["project"]), str(row["meeting"])), []),
+                )
+                for row in meeting_rows
+            ],
+            resolver=resolver,
+        )
 
 
 def voice_memory_status(index: VoiceIndex, vault_root: Path, project: str) -> dict[str, Any]:
@@ -343,8 +402,9 @@ def voice_memory_status(index: VoiceIndex, vault_root: Path, project: str) -> di
     instead of hiding it.
     """
     project_dir = vault_root / project
-    stats, rows = index.snapshot(vault_root)
-    allowed = strict_roster_names(project_dir)
+    snapshot = index.snapshot(vault_root)
+    stats, rows = snapshot.stats, snapshot.rows
+    allowed = strict_roster_names(project_dir, snapshot.resolver)
 
     voices: dict[str, dict[str, Any]] = {}
     if allowed is not None:
