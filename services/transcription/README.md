@@ -109,6 +109,20 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
 | `diarize` | `<meeting>/source.<ext>` + `<meeting>/transcript.json` (no LLM call; the pyannote engine) | `<meeting>/transcript.json` rewritten in place with speaker labels and the `diarization` block, ids untouched -- see "Speaker diarization" below |
 | `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: HEVC (`libx265` CRF 26, preset medium, `hvc1`-tagged so QuickTime/Safari play it), the shorter side capped at 1080p (a 4K recording becomes 1080p, area-resampled; smaller sources keep their size), same frame rate, audio copied when an mp4 can hold it else AAC 160k. Skipped with a warning for an audio-only or already-small (<= 700 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio` and the byte counts. (No GPU path on purpose: measured on the operator's 4K screen recordings, x265 at 1080p was a third of x264's size and 2.5x smaller than NVENC HEVC at the same speed) |
+| `suggest_title` | `<meeting>/summary.md` (no transcript needed; only what fits the context window is read) | **nothing** -- the job's result manifest (`GET /v1/jobs/{id}/result`) is `{"title": "..."}`, a short meeting name proposed by the LLM. The caller decides what to do with it; the service never renames a folder |
+
+A `suggest_title` submission is refused with `invalid_request` when the
+meeting has no `summary.md`, and the job fails with `invalid_request` when
+the file is empty (or gone by the time it runs). The model is asked for 3
+to 7 words in the summary's own language; whatever it answers is sanitized
+in code (`llm/title.py`), never trusted: the reasoning block is split off,
+the first usable line is kept, hyphens and dashes (`-` is the vault's
+name-section separator) and the characters Windows refuses in a file name
+(`<>:"/\|?*`, control characters) become spaces, wrapping quotes and
+Markdown are stripped, whitespace is collapsed, no trailing dot or
+punctuation survives, and the result is capped at 80 characters on a word
+boundary. An answer with nothing usable left fails the job with
+`llm_output` rather than inventing a name.
 
 `facts` and `action_items` jobs existed once; both were retired (the
 summary carries the notable facts and the action items), and submitting one
@@ -117,7 +131,7 @@ answers `invalid_request`. Existing `<meeting>/facts/`,
 untouched and are no longer read — exports no longer include a Facts or
 Action-items section, and `POST /v1/items/screenshots` is gone.
 
-All of them run on the built-in llama.cpp runtime -- the only LLM *engine*
+The LLM jobs (`summarize`, `suggest_title`) run on the built-in llama.cpp runtime -- the only LLM *engine*
 this service ships -- against the one GGUF in the curated model catalog
 (`llm_catalog.py`): `qwen3.5-9b` (Q5_K_M, ~6.6 GB). There is deliberately
 no model switching. `GET /v1/llm-models` lists the catalog with per-model
@@ -190,6 +204,7 @@ is what makes that legible; a weighted single bar would only be a guess.
 | `transcribe` with `diarize: true` | the above, then the diarizer's phases relayed verbatim, then `naming speakers` (`null`, cross-meeting auto-naming) |
 | `diarize` | `reading transcript` (`null`) → `loading speaker model` (`null`) → `decoding audio` (`null`) → `segmenting speech` / `counting speakers` / `extracting voice embeddings` / `assigning speakers` (pyannote's `completed / total` where the step reports counts, else `null`) → `assigning speakers` while labels are written |
 | `summarize` | `reading transcript` (`null`) → `writing summary · N tokens`, or `summarizing part k/n · N tokens` for a map-reduced transcript (`null` throughout — the token count is a length, not a percentage) |
+| `suggest_title` | `reading summary` (`null`) → `writing title` (`null`) |
 | `export` | `writing export.md` (`null`) → `rendering PDF` (`null`) |
 | `compress` | `compressing video` (the decoded fraction of the recording; `null` while the container's duration is unknown) |
 | `index` | *no phase*; `docs processed / total` |

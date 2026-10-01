@@ -91,6 +91,18 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/jobs/{id}/result` of a finished `suggest_title` job: the
+    /// title F2's LLM proposed for the meeting (already sanitized over
+    /// there). The one derived job whose outcome is a value rather than a
+    /// file, which is why it is the one result this seam reads. Default:
+    /// unsupported (the house rule -- pipeline fakes must not need an edit
+    /// to keep compiling).
+    async fn suggested_title(&self, _job_id: &str) -> Result<String, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "title suggestions are not supported by this service".to_string(),
+        })
+    }
+
     /// `POST /v1/jobs` with `job_type: "index"` -- F2's vault-wide
     /// incremental search re-index. Fire-and-forget by every caller: never
     /// polled, never a user-visible job, and an error (an older service
@@ -303,6 +315,11 @@ pub enum LlmJobKind {
     /// its place (the drop-to-insights chain's last stage). No LLM runs;
     /// submitted like every other per-meeting derived job.
     Compress,
+    /// Ask the LLM for a short meeting name out of `<meeting>/summary.md`.
+    /// Writes nothing: the suggestion is the job's result, read back with
+    /// [`TranscriptionService::suggested_title`]. Never part of the
+    /// drop-to-insights chain -- it runs only when the operator asks.
+    SuggestTitle,
 }
 
 impl LlmJobKind {
@@ -313,6 +330,7 @@ impl LlmJobKind {
             LlmJobKind::Export => "export",
             LlmJobKind::Diarize => "diarize",
             LlmJobKind::Compress => "compress",
+            LlmJobKind::SuggestTitle => "suggest_title",
         }
     }
 }

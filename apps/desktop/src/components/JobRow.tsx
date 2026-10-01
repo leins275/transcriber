@@ -30,6 +30,7 @@ const RUNNING_TEXT: Record<JobType, string> = {
   export: "Exporting PDF",
   diarize: "Identifying speakers",
   compress: "Compressing video",
+  suggest_title: "Suggesting a title",
 };
 
 /** A failed derived job loses no source material — unlike transcription's
@@ -41,6 +42,7 @@ const FAILED_TEXT: Record<JobType, string> = {
   export: "Export failed.",
   diarize: "Speaker identification failed.",
   compress: "Video compression failed — the recording is untouched.",
+  suggest_title: "Title suggestion failed — the meeting keeps its name.",
 };
 
 /** The project name from the `Project - YYMMDD - Title` convention, for a

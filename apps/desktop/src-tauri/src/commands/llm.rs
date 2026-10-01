@@ -103,6 +103,30 @@ pub async fn export_recording_handler(
     Ok(enqueue(state, LlmJobKind::Export, &meeting_dir, &meeting_dir).await)
 }
 
+/// `suggest_title_for_vault_entry` -- ask the LLM for a short meeting name
+/// out of the meeting's `summary.md`.
+///
+/// Nothing is renamed here or by the job: the suggestion comes back on the
+/// finished job's snapshot (`suggested_title`) and the UI puts it into the
+/// rename form, which the operator saves through `update_vault_entry` --
+/// the one place a meeting folder is ever renamed. Operator-triggered only;
+/// the drop-to-insights chain never queues it.
+pub async fn suggest_title_for_vault_entry_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<JobSnapshot, AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    if !meeting_dir.join(vault::SUMMARY_FILE_NAME).is_file() {
+        let name = meeting_name_of(&meeting_dir);
+        return Err(AppError::invalid_argument(format!(
+            "\"{name}\" has no summary yet; generate one first"
+        )));
+    }
+    // The job writes nothing; F2 still wants an output directory, and the
+    // meeting folder is the one every other per-meeting job names.
+    Ok(enqueue(state, LlmJobKind::SuggestTitle, &meeting_dir, &meeting_dir).await)
+}
+
 // -- GGUF model download ----------------------------------------------------
 
 /// Health-derived fields the download status alone cannot answer:
@@ -313,6 +337,14 @@ pub async fn export_recording(
     entry_id: String,
 ) -> Result<JobSnapshot, AppError> {
     export_recording_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn suggest_title_for_vault_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<JobSnapshot, AppError> {
+    suggest_title_for_vault_entry_handler(&state, &entry_id).await
 }
 
 #[tauri::command]
@@ -571,6 +603,103 @@ mod tests {
                 submission.input_path, submission.output_dir,
                 "input and output are both the meeting folder"
             );
+        });
+    }
+
+    #[test]
+    fn suggest_title_requires_a_summary() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            // A transcript alone is not enough: the title comes from the summary.
+            make_meeting(root.path(), "ELS", "260101 - Planning", true);
+            let fake = Arc::new(FakeService::new());
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+
+            let err = suggest_title_for_vault_entry_handler(&state, &id)
+                .await
+                .expect_err("no summary must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(err.message().contains("no summary"), "{}", err.message());
+            assert!(fake.llm_submissions().is_empty());
+        });
+    }
+
+    #[test]
+    fn suggest_title_rejects_an_unknown_entry_id() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let err = suggest_title_for_vault_entry_handler(&state, "not-an-entry")
+                .await
+                .expect_err("only ids list_vault issued name a meeting");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+        });
+    }
+
+    #[test]
+    fn suggest_title_submits_the_job_over_the_meeting_dir_and_renames_nothing() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            make_meeting(root.path(), "ELS", "260101 - Planning", true);
+            let meeting_dir = root.path().join("ELS").join("260101 - Planning");
+            std::fs::write(meeting_dir.join("summary.md"), "We planned.").expect("write summary");
+            let fake = Arc::new(FakeService::new());
+            fake.set_suggested_title(Some("Quarterly planning"));
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+
+            let snapshot = suggest_title_for_vault_entry_handler(&state, &id)
+                .await
+                .expect("suggest title must enqueue");
+            assert_eq!(snapshot.job_type, "suggest_title");
+            assert_eq!(snapshot.suggested_title, None);
+
+            let submission = first_llm_submission(&fake).await;
+            assert_eq!(submission.kind, crate::service::LlmJobKind::SuggestTitle);
+            assert!(submission.input_path.ends_with("260101 - Planning"));
+            assert_eq!(submission.input_path, submission.output_dir);
+            assert_eq!(submission.max_speakers, None);
+
+            // The suggestion arrives on the finished job; the folder keeps
+            // its name until the operator saves the rename form.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let finished = loop {
+                let current = state
+                    .registry
+                    .read()
+                    .await
+                    .get(&snapshot.id)
+                    .await
+                    .expect("the job stays listed");
+                if current.state == crate::jobs::JobState::Done {
+                    break current;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the job never finished: {current:?}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            assert_eq!(
+                finished.suggested_title.as_deref(),
+                Some("Quarterly planning")
+            );
+            assert!(meeting_dir.is_dir(), "nothing is renamed by the job");
+            assert_eq!(fake.llm_submissions().len(), 1, "nothing is chained");
         });
     }
 

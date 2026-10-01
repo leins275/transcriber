@@ -255,6 +255,28 @@ Settings → **Recordings** has the switch (`compress_video` in
 hour of 4K meeting on a desktop CPU; like every job it holds the serial
 queue while it runs, so the next drop's transcription waits behind it.
 
+## Suggesting a title from the summary
+
+Recordings often arrive with names that say nothing ("Запись встречи
+31.07.2026 11-04-56"). Once a meeting has a summary, its page's overflow
+menu (`⋯`) offers **Suggest title from summary**: the local language model
+reads `summary.md` and proposes a short name (3 to 7 words, in the
+summary's language). The item is only there when the meeting has a summary
+and the language model is installed, and reads "Suggesting title…" while
+the job runs (it shows in the job list like any other, and waits its turn
+in the serial queue).
+
+Nothing is renamed by the job. When it finishes, the rename form opens
+with the **Title** field prefilled — the date, the type and the project
+are left as they are — and the meeting is renamed only when you press
+**Save**, through the same rename as the pencil. Edit the suggestion first
+if you like, or Cancel to keep the current name; a suggestion that
+finished while you were elsewhere is offered once, the next time you open
+that recording. It never runs on its own: the drop-to-insights chain does
+not include it. A failed suggestion (no usable answer from the model, a
+summary that has gone missing) shows in the job list with the service's
+reason and leaves the meeting's name untouched.
+
 ## Speaker identification (optional, first-run setup)
 
 Speaker identification (pyannote diarization + cross-meeting voice

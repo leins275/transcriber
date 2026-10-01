@@ -117,6 +117,34 @@ def summary_messages(transcript_text: str, *, language: str | None = None) -> li
     ]
 
 
+def title_messages(summary_text: str) -> list[Message]:
+    """Name a meeting after its summary (the ``suggest_title`` job).
+
+    The answer becomes the ``<Name>`` section of the meeting folder, so the
+    prompt rules out what that section cannot carry; ``llm/title.py`` still
+    enforces every one of them on whatever comes back.
+    """
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You name meetings. Given a meeting summary, you answer with one "
+                "short title and nothing else. Write the title in the same "
+                "language the summary is written in. " + _TERMS_RULE
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Write a title of 3 to 7 words that says what this meeting was "
+                "about. Rules: a single line; no date; no project code; no "
+                "quotes; no hyphens or dashes; no trailing punctuation; no "
+                "explanation before or after the title.\n\nSummary:\n\n" + summary_text
+            ),
+        },
+    ]
+
+
 def chunk_summary_messages(
     chunk_text: str, index: int, total: int, *, language: str | None = None
 ) -> list[Message]:

@@ -88,6 +88,12 @@ pub struct JobSnapshot {
     pub phase: Option<String>,
     pub message: Option<String>,
     pub error_kind: Option<String>,
+    /// The meeting name a finished `suggest_title` job proposes, read from
+    /// the service's result the moment the job lands `Done`. `None` for
+    /// every other job type and until then. A proposal only: nothing is
+    /// renamed until the operator saves the rename form it prefills.
+    /// Additive to the frozen IPC contract, always serialised.
+    pub suggested_title: Option<String>,
     pub created_at: String,
 }
 
@@ -298,6 +304,7 @@ fn snapshots_equal_ignoring_created_at(a: &JobSnapshot, b: &JobSnapshot) -> bool
         && a.phase == b.phase
         && a.message == b.message
         && a.error_kind == b.error_kind
+        && a.suggested_title == b.suggested_title
 }
 
 /// Job registry, sequential ingest+submit pipeline and poll loop. Cheap to
@@ -550,13 +557,13 @@ impl JobRegistry {
         })
     }
 
-    /// True while any non-terminal *model-loading* LLM job (summarize)
-    /// exists -- the model-delete guard's question: never ask the service
-    /// to unlink a GGUF a job may be about to mmap. (`export` is
-    /// LLM-flavored but never touches the model.)
+    /// True while any non-terminal *model-loading* LLM job (summarize,
+    /// suggest_title) exists -- the model-delete guard's question: never
+    /// ask the service to unlink a GGUF a job may be about to mmap.
+    /// (`export` is LLM-flavored but never touches the model.)
     pub async fn has_active_llm_job(&self) -> bool {
         self.shared.jobs.read().await.values().any(|job| {
-            matches!(job.job_type.as_str(), "summarize")
+            matches!(job.job_type.as_str(), "summarize" | "suggest_title")
                 && !matches!(
                     job.state,
                     JobState::Done | JobState::Failed | JobState::Rejected
@@ -814,6 +821,15 @@ async fn poll_until_terminal(
             Ok(status) => {
                 consecutive_errors = 0;
                 apply_status(&mut snapshot, &status);
+                // A title suggestion's outcome is a value, not a file: it
+                // is read here, before `Done` is announced, so the
+                // snapshot that says the job finished also carries what
+                // it found.
+                if status.state == ServiceJobState::Done
+                    && snapshot.job_type == LlmJobKind::SuggestTitle.wire_name()
+                {
+                    attach_suggested_title(service.as_ref(), &service_job_id, &mut snapshot).await;
+                }
                 shared.update_if_changed(snapshot.clone()).await;
                 if matches!(
                     status.state,
@@ -859,6 +875,26 @@ async fn poll_until_terminal(
                     return;
                 }
             }
+        }
+    }
+}
+
+/// Reads a finished `suggest_title` job's result onto its snapshot.
+///
+/// A job that finished but whose title cannot be read has nothing to
+/// offer the operator, so it is reported as failed -- with the reason --
+/// rather than as a `Done` that silently opens no rename form.
+async fn attach_suggested_title(
+    service: &dyn TranscriptionService,
+    service_job_id: &str,
+    snapshot: &mut JobSnapshot,
+) {
+    match service.suggested_title(service_job_id).await {
+        Ok(title) => snapshot.suggested_title = Some(title),
+        Err(err) => {
+            snapshot.state = JobState::Failed;
+            snapshot.error_kind = Some(service_error_kind_str(&err).to_string());
+            snapshot.message = Some(format!("the suggested title could not be read: {err}"));
         }
     }
 }
@@ -1079,6 +1115,7 @@ fn new_pending_snapshot(source_path: &Path) -> JobSnapshot {
         phase: None,
         message: None,
         error_kind: None,
+        suggested_title: None,
         created_at: now_rfc3339(),
     }
 }
@@ -1702,6 +1739,167 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(200)).await;
             assert_eq!(fake.llm_submissions().len(), 1);
             assert_eq!(registry.list().await.len(), 1);
+        });
+    }
+
+    /// A meeting folder holding a summary, and a registry over a fast fake.
+    fn suggest_title_fixture(
+        dir: &std::path::Path,
+        fake: Arc<FakeService>,
+    ) -> (JobRegistry, crate::service::LlmSubmitRequest) {
+        let meeting_dir = dir.join("ELS").join("260101 - Planning");
+        fs::create_dir_all(&meeting_dir).expect("mkdir");
+        fs::write(meeting_dir.join("source.mp4"), b"bytes").expect("write source");
+        fs::write(meeting_dir.join("summary.md"), b"We planned.").expect("write summary");
+        let registry = JobRegistry::with_poll_interval(
+            dir.to_path_buf(),
+            fake,
+            Arc::new(RecordingSink::new()),
+            Duration::from_millis(10),
+        );
+        let meeting = meeting_dir.to_string_lossy().into_owned();
+        let request = crate::service::LlmSubmitRequest {
+            kind: crate::service::LlmJobKind::SuggestTitle,
+            input_path: meeting.clone(),
+            output_dir: meeting,
+            max_speakers: None,
+            speaker_match_threshold: None,
+        };
+        (registry, request)
+    }
+
+    fn is_terminal(snapshot: &JobSnapshot) -> bool {
+        matches!(snapshot.state, JobState::Done | JobState::Failed)
+    }
+
+    #[test]
+    fn a_finished_suggest_title_job_carries_the_title_and_chains_nothing() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let fake = Arc::new(FakeService::new());
+            fake.set_suggested_title(Some("Budget review"));
+            let (registry, request) = suggest_title_fixture(dir.path(), fake.clone());
+
+            let pending = registry.enqueue_llm(request).await;
+            assert_eq!(pending.job_type, "suggest_title");
+            assert_eq!(pending.suggested_title, None);
+            assert!(registry.has_active_llm_job().await);
+
+            let done = wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;
+            assert_eq!(done.state, JobState::Done);
+            assert_eq!(done.suggested_title.as_deref(), Some("Budget review"));
+            assert!(!registry.has_active_llm_job().await);
+
+            // Operator-triggered only: nothing follows it, and the meeting
+            // folder still has the name it had.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(fake.llm_submissions().len(), 1);
+            assert_eq!(registry.list().await.len(), 1);
+            assert!(dir.path().join("ELS").join("260101 - Planning").is_dir());
+        });
+    }
+
+    #[test]
+    fn the_done_event_itself_carries_the_suggested_title() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let fake = Arc::new(FakeService::new());
+            let meeting_dir = dir.path().join("ELS").join("260101 - Planning");
+            fs::create_dir_all(&meeting_dir).expect("mkdir");
+            let sink = Arc::new(RecordingSink::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake,
+                sink.clone(),
+                Duration::from_millis(10),
+            );
+            let meeting = meeting_dir.to_string_lossy().into_owned();
+
+            let pending = registry
+                .enqueue_llm(crate::service::LlmSubmitRequest {
+                    kind: crate::service::LlmJobKind::SuggestTitle,
+                    input_path: meeting.clone(),
+                    output_dir: meeting,
+                    max_speakers: None,
+                    speaker_match_threshold: None,
+                })
+                .await;
+            wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;
+
+            // The UI opens the rename form off the `Done` event, so no
+            // emitted `Done` may ever lack its title.
+            let done_events: Vec<JobSnapshot> = sink
+                .snapshots()
+                .into_iter()
+                .filter(|s| s.state == JobState::Done)
+                .collect();
+            assert!(!done_events.is_empty());
+            for event in done_events {
+                assert_eq!(
+                    event.suggested_title.as_deref(),
+                    Some(crate::service::fake::FAKE_SUGGESTED_TITLE)
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_suggest_title_job_whose_result_cannot_be_read_is_reported_failed() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let fake = Arc::new(FakeService::new());
+            fake.set_suggested_title(None);
+            let (registry, request) = suggest_title_fixture(dir.path(), fake);
+
+            let pending = registry.enqueue_llm(request).await;
+            let ended = wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;
+
+            assert_eq!(ended.state, JobState::Failed);
+            assert_eq!(ended.suggested_title, None);
+            assert_eq!(ended.error_kind.as_deref(), Some("service"));
+            let message = ended.message.expect("a failure must say why");
+            assert!(
+                message.contains("suggested title could not be read"),
+                "got {message:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_failed_suggest_title_job_carries_the_services_message_and_no_title() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let fake = Arc::new(FakeService::new());
+            fake.queue_failure("the model produced no usable title");
+            let (registry, request) = suggest_title_fixture(dir.path(), fake);
+
+            let pending = registry.enqueue_llm(request).await;
+            let ended = wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;
+
+            assert_eq!(ended.state, JobState::Failed);
+            assert_eq!(ended.suggested_title, None);
+            assert_eq!(
+                ended.message.as_deref(),
+                Some("the model produced no usable title")
+            );
+        });
+    }
+
+    #[test]
+    fn a_summarize_job_never_asks_for_a_suggested_title() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let fake = Arc::new(FakeService::new());
+            // Would fail the job if the registry read a result for it.
+            fake.set_suggested_title(None);
+            let (registry, mut request) = suggest_title_fixture(dir.path(), fake);
+            request.kind = crate::service::LlmJobKind::Summarize;
+
+            let pending = registry.enqueue_llm(request).await;
+            let ended = wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;
+
+            assert_eq!(ended.state, JobState::Done);
+            assert_eq!(ended.suggested_title, None);
         });
     }
 

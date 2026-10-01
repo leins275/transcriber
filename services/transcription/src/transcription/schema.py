@@ -28,7 +28,12 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # `facts` and `action_items` jobs existed once; both were retired in favour
 # of the summary carrying the notable facts and the action items, and
 # submitting one now answers `invalid_request`.
-JobType = Literal["transcribe", "summarize", "export", "index", "diarize", "compress"]
+# `suggest_title` asks the LLM for a short meeting name out of an existing
+# `summary.md`; the suggestion is the job's result (`{"title": ...}`) and
+# nothing is written or renamed.
+JobType = Literal[
+    "transcribe", "summarize", "export", "index", "diarize", "compress", "suggest_title"
+]
 
 
 class Segment(BaseModel):

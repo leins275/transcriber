@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./RecordingPage.module.css";
 import { MeetingEditor } from "./MeetingEditor";
 import { NotePanel } from "./NotePanel";
@@ -60,6 +60,27 @@ export type RecordingPageProps = {
   /** Bumped when a summarize job for this entry finishes, so the summary
    * tab re-reads `summary.md`. */
   summaryReloadToken: number;
+  /** Asks the language model for a short title out of this recording's
+   * summary. The answer comes back as `titleSuggestion`; nothing is renamed
+   * by asking. */
+  onSuggestTitle?: (entryId: string) => Promise<void>;
+  /** Whether a language model is installed — without one the suggest-title
+   * action is not offered at all. */
+  llmReady?: boolean;
+  /** A finished title suggestion for this recording that the operator has
+   * not been shown yet. Arriving, it opens the rename form with the title
+   * prefilled — the operator still has to save it. */
+  titleSuggestion?: TitleSuggestion | null;
+  /** Reports that `titleSuggestion` has been put in front of the operator,
+   * so the app stops offering it. */
+  onTitleSuggestionShown?: (jobId: string) => void;
+};
+
+/** One finished `suggest_title` job's answer. */
+export type TitleSuggestion = {
+  /** The job that produced it — what tells two suggestions apart. */
+  jobId: string;
+  title: string;
 };
 
 type Tab = "transcript" | "summary" | "note";
@@ -125,6 +146,10 @@ export function RecordingPage({
   speakersReady,
   activeLlmJobs,
   summaryReloadToken,
+  onSuggestTitle,
+  llmReady = false,
+  titleSuggestion = null,
+  onTitleSuggestionShown,
 }: RecordingPageProps) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [panel, setPanel] = useState<Panel>("none");
@@ -140,6 +165,8 @@ export function RecordingPage({
   const [noteText, setNoteText] = useState<string | null>(null);
   // The note panel reports an unsaved draft; Back is guarded on it.
   const [noteDirty, setNoteDirty] = useState(false);
+  // The title suggestion the open rename form was prefilled with, if any.
+  const [prefilledTitle, setPrefilledTitle] = useState<TitleSuggestion | null>(null);
 
   // Opening a different recording resets the page-local view state; stale
   // panel content must never survive into another meeting's Copy.
@@ -151,6 +178,50 @@ export function RecordingPage({
     setNoteText(null);
     setNoteDirty(false);
   }, [entry.id]);
+
+  // Closing the rename form — by any route — forgets the suggestion it was
+  // prefilled with: reopened by hand, it starts from the meeting's current
+  // name again.
+  useEffect(() => {
+    if (panel !== "edit") setPrefilledTitle(null);
+  }, [panel]);
+
+  // A finished title suggestion opens the rename form with the title field
+  // prefilled. That is all it does: the folder is renamed only when the
+  // operator saves the form. Declared after the two effects above so that
+  // a suggestion waiting for this recording survives the page opening (state
+  // updates apply in order, and this one comes last).
+  const shownSuggestionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!titleSuggestion || shownSuggestionRef.current === titleSuggestion.jobId) return;
+    shownSuggestionRef.current = titleSuggestion.jobId;
+    setPrefilledTitle(titleSuggestion);
+    setPanel("edit");
+    onTitleSuggestionShown?.(titleSuggestion.jobId);
+  }, [titleSuggestion, onTitleSuggestionShown]);
+
+  // Whether there is a summary to name the meeting after. Only asked while
+  // a language model is installed — without one the action is not offered,
+  // so there is nothing to find out.
+  const [hasSummary, setHasSummary] = useState(false);
+  const canSuggestTitle = llmReady && onSuggestTitle !== undefined;
+  useEffect(() => {
+    if (!canSuggestTitle) {
+      setHasSummary(false);
+      return;
+    }
+    let cancelled = false;
+    onReadSummary(entry.id)
+      .then((summary) => {
+        if (!cancelled) setHasSummary(Boolean(summary.markdown?.trim()));
+      })
+      .catch(() => {
+        if (!cancelled) setHasSummary(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canSuggestTitle, entry.id, entry.meeting_dir, onReadSummary, summaryReloadToken]);
 
   useEffect(() => {
     if (!entry.has_transcript) {
@@ -274,6 +345,7 @@ export function RecordingPage({
   const summarizing = activeLlmJobs.includes("summarize");
   const exporting = activeLlmJobs.includes("export");
   const diarizing = activeLlmJobs.includes("diarize");
+  const suggestingTitle = activeLlmJobs.includes("suggest_title");
 
   const closeMenuAnd = (action: () => void) => () => {
     setMenuOpen(false);
@@ -458,6 +530,19 @@ export function RecordingPage({
                   >
                     Rename
                   </button>
+                  {canSuggestTitle && hasSummary && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={styles.menuItem}
+                      disabled={suggestingTitle}
+                      onClick={closeMenuAnd(() => {
+                        if (onSuggestTitle) void runLlm(onSuggestTitle);
+                      })}
+                    >
+                      {suggestingTitle ? "Suggesting title…" : "Suggest title from summary"}
+                    </button>
+                  )}
                   <hr className={styles.menuDivider} />
                   <button
                     type="button"
@@ -482,8 +567,12 @@ export function RecordingPage({
 
       {panel === "edit" && (
         <MeetingEditor
+          // Keyed by the suggestion so a second one replaces the first in
+          // the title field instead of being ignored by a mounted form.
+          key={prefilledTitle?.jobId ?? "manual"}
           entry={entry}
           projects={projects}
+          suggestedTitle={prefilledTitle?.title}
           onSave={async (update) => {
             await onUpdate(entry.id, update);
             setPanel("none");
