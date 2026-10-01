@@ -1,0 +1,427 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--divider);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.crumbSeparator {
+  color: var(--text-muted);
+}
+
+/* The page's main actions keep a 44px target, whatever their label. */
+.target {
+  min-height: 44px;
+}
+
+/* Who this is on the left, how much of them the vault holds on the right;
+   the totals drop under the name once the two no longer fit side by side. */
+.headRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nameLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* A person is the subject of the whole page, so the name is set larger than
+   a recording's title. */
+.name {
+  font-size: 34px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+/* Rename lives at the name itself — a quiet pencil, as on the recording.
+   Qualified with the global `.btn` (here and on `.danger` below) so these
+   win over its colour and padding whichever stylesheet loads last. */
+:global(.btn).pencil {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+.inlineForm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.input {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-md) / 1.5 var(--font-body);
+}
+
+.aliasInput {
+  font-size: var(--text-sm);
+}
+
+.kicker {
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.aliases {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--text-faint);
+  border-radius: 999px;
+  padding: 2px 4px 2px 10px;
+  font-size: var(--text-sm);
+}
+
+.chipRemove {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chipRemove:hover {
+  color: var(--danger);
+}
+
+.chipRemove:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* Dashed: an empty slot for one more name, not another alias. */
+.chipAdd {
+  min-height: 32px;
+  padding: 0 10px;
+  background: none;
+  border: 1px dashed var(--text-faint);
+  border-radius: 999px;
+  font: var(--text-sm) var(--font-body);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chipAdd:hover {
+  border-color: var(--accent);
+}
+
+.muted {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.mutedInline {
+  color: var(--text-muted);
+}
+
+.stats {
+  display: flex;
+  gap: var(--space-6);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.statValue {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 28px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* The evidence takes the width; what is edited or read rarely sits in a
+   fixed aside, which drops below once the window is too narrow for both. */
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: var(--space-8);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.sectionTitle {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: var(--text-h2);
+}
+
+.meetings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meeting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--divider);
+}
+
+.meeting:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.meetingHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* A meeting that can be opened reads as the link it is; one that is no
+   longer in the library keeps the same weight without the affordance. */
+.meetingLink {
+  min-height: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  font: 600 var(--text-lg) var(--font-body);
+  color: var(--accent-deep);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent-deep) 35%, transparent);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.meetingLink:hover {
+  text-decoration-color: var(--accent-deep);
+}
+
+.meetingTitle {
+  font-weight: 600;
+  font-size: var(--text-lg);
+  overflow-wrap: anywhere;
+}
+
+.meetingMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.setAside {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  padding: 1px 7px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.segments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* The timecode stays aligned to the first line of a segment that wraps. */
+.segment {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: var(--space-3);
+  line-height: 1.55;
+}
+
+.timecode {
+  padding-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.bio {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--text-faint);
+  border-radius: var(--radius-md);
+  font: var(--text-md) / 1.55 var(--font-body);
+  color: var(--text);
+  resize: vertical;
+}
+
+.saveRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.projects {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.projects th {
+  padding: 6px 0;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--divider);
+}
+
+.projects td {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.projects tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.projects th + th,
+.projects td + td {
+  padding-left: var(--space-4);
+}
+
+.projects .right {
+  text-align: right;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+
+.voice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.voiceRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.voiceRow dd {
+  margin: 0;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Removal is ruled off from the rest: it is the one destructive thing here. */
+.removal {
+  align-items: flex-start;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--divider);
+}
+
+:global(.btn).danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+:global(.btn).danger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.confirmText {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}

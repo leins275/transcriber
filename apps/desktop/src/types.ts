@@ -443,3 +443,94 @@ export type LedgerJobView = {
   error_message: string | null;
   service_version: string | null;
 };
+
+// Speakers-database extension to the IPC contract (additive). A person has
+// no id: any of their names -- the canonical one or an alias -- addresses
+// them, so every command takes a name.
+
+/** One row of the Speakers table (`list_speakers`). */
+export type SpeakerView = {
+  /** The canonical name. */
+  name: string;
+  /** Other spellings of the same person found in meeting labels. */
+  aliases: string[];
+  bio: string;
+  /** `false`: named in meeting labels only, never edited. Saving anything
+   * about them registers them. */
+  registered: boolean;
+  /** Sorted project codes the person is labelled in. */
+  projects: string[];
+  /** Meetings holding at least one labelled segment of theirs. */
+  meetings: number;
+  labelled_segments: number;
+  /** Segments the operator labelled, as opposed to machine-named ones. */
+  hand_segments: number;
+  /** Labelled speech time, in seconds. */
+  speech_sec: number;
+  /** Voice-memory samples recognition uses / sets aside. */
+  voice_samples: number;
+  voice_set_aside: number;
+};
+
+/** The registry entry `save_speaker` answers with. */
+export type SpeakerRecord = {
+  name: string;
+  aliases: string[];
+  bio: string;
+  registered: boolean;
+};
+
+/** What a save changes. A field left out is left alone; one that is present
+ * replaces the stored value wholesale. */
+export type SpeakerUpdate = {
+  /** Rename: the old canonical name stays behind as an alias. */
+  newName?: string;
+  /** Adding another person's name here merges that person in. */
+  aliases?: string[];
+  bio?: string;
+};
+
+export type SpeakerProjectView = {
+  project: string;
+  meetings: number;
+  speech_sec: number;
+  /** The person is on that project's roster. */
+  in_roster: boolean;
+};
+
+export type SpeakerSegmentView = {
+  id: number;
+  start: number;
+  end: number;
+  text: string;
+};
+
+/** One meeting a person was labelled in. */
+export type SpeakerMeetingView = {
+  /** The vault entry id the recording opens by -- never a path. `null` when
+   * the meeting is not in the library listing: shown, but not a link. */
+  entry_id: string | null;
+  project: string;
+  /** The meeting's folder name. */
+  meeting: string;
+  labelled_segments: number;
+  hand_segments: number;
+  speech_sec: number;
+  /** `null`: the meeting holds no voice sample of this person. */
+  voice_quality: VoiceSampleQuality | null;
+  /** The person's hand-labelled segments in time order, capped per meeting. */
+  segments: SpeakerSegmentView[];
+  segments_truncated: boolean;
+};
+
+/** The speaker page's data (`speaker_detail`). */
+export type SpeakerDetailView = {
+  name: string;
+  aliases: string[];
+  bio: string;
+  registered: boolean;
+  projects: SpeakerProjectView[];
+  voice: { samples: number; set_aside: number; speech_sec: number };
+  /** Newest first. */
+  meetings: SpeakerMeetingView[];
+};

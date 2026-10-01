@@ -143,6 +143,43 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/people` -- the speakers database: everybody the registry
+    /// (`<vault root>/people.json`) holds plus everybody a meeting label
+    /// names, with their vault-wide counts. Default: unsupported (the house
+    /// rule).
+    async fn list_people(&self) -> Result<Vec<Person>, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the speakers database is not supported by this service".to_string(),
+        })
+    }
+
+    /// `GET /v1/people/detail?name=` -- one person, addressed by any of
+    /// their names: projects, voice memory and the meetings they were
+    /// labelled in. An unknown name is the service's 404. Default:
+    /// unsupported.
+    async fn person_detail(&self, _name: &str) -> Result<PersonDetail, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the speakers database is not supported by this service".to_string(),
+        })
+    }
+
+    /// `PUT /v1/people` -- creates or updates a registry entry (rename,
+    /// aliases, bio). Default: unsupported.
+    async fn save_person(&self, _update: PersonUpdate) -> Result<PersonRecord, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the speakers database is not supported by this service".to_string(),
+        })
+    }
+
+    /// `DELETE /v1/people?name=` -- drops the registry entry (meeting labels
+    /// stay). `Ok(false)` when there was no entry to drop. Default:
+    /// unsupported.
+    async fn delete_person(&self, _name: &str) -> Result<bool, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "the speakers database is not supported by this service".to_string(),
+        })
+    }
+
     /// `POST /v1/chat` (SSE): streams the local LLM's answer over the
     /// project's materials. `on_event` receives each parsed event on the
     /// runtime's threads until the stream ends, `Done`/`Error` arrives, or
@@ -508,6 +545,149 @@ pub struct VoiceStatus {
     pub rescanned_elsewhere: u64,
     pub voices: Vec<VoiceSummary>,
     pub meetings: Vec<VoiceMeeting>,
+}
+
+/// One row of `GET /v1/people` -- a person of the speakers database.
+///
+/// Like the voice-memory types above, the list row, the registry record and
+/// the detail's leaf types are wire shape and view at once (nothing in them
+/// is a path or an id). Only [`PersonMeeting`] is not: it carries the
+/// service's `meeting_dir`, which the command layer swaps for an entry id.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Person {
+    /// The canonical name.
+    pub name: String,
+    /// Other spellings of the same person found in meeting labels.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub bio: String,
+    /// `false`: named in meeting labels only, never edited; saving anything
+    /// about them registers them.
+    #[serde(default)]
+    pub registered: bool,
+    /// Sorted project codes the person is labelled in.
+    #[serde(default)]
+    pub projects: Vec<String>,
+    /// Meetings holding at least one labelled segment of theirs.
+    #[serde(default)]
+    pub meetings: u64,
+    #[serde(default)]
+    pub labelled_segments: u64,
+    /// Segments the operator labelled, as opposed to machine-named ones.
+    #[serde(default)]
+    pub hand_segments: u64,
+    /// Labelled speech time.
+    #[serde(default)]
+    pub speech_sec: f64,
+    /// Voice-memory samples recognition uses / sets aside.
+    #[serde(default)]
+    pub voice_samples: u64,
+    #[serde(default)]
+    pub voice_set_aside: u64,
+}
+
+/// `PUT /v1/people`'s answer: the registry entry as stored.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersonRecord {
+    pub name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub bio: String,
+    #[serde(default)]
+    pub registered: bool,
+}
+
+/// `PUT /v1/people` request. `None` leaves a field alone; `Some` replaces
+/// the stored value wholesale.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersonUpdate {
+    /// The person's current name, or any of their aliases.
+    pub name: String,
+    /// Rename: the old canonical name stays behind as an alias.
+    pub new_name: Option<String>,
+    pub aliases: Option<Vec<String>>,
+    pub bio: Option<String>,
+}
+
+/// One project a person takes part in (`GET /v1/people/detail`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersonProject {
+    pub project: String,
+    #[serde(default)]
+    pub meetings: u64,
+    #[serde(default)]
+    pub speech_sec: f64,
+    /// The person is on that project's `roster.json`.
+    #[serde(default)]
+    pub in_roster: bool,
+}
+
+/// A person's voice memory across the vault.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct PersonVoice {
+    #[serde(default)]
+    pub samples: u64,
+    #[serde(default)]
+    pub set_aside: u64,
+    #[serde(default)]
+    pub speech_sec: f64,
+}
+
+/// One hand-labelled segment of a person in one meeting.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersonSegment {
+    pub id: i64,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+/// One meeting a person was labelled in, as the service answers it.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct PersonMeeting {
+    pub project: String,
+    /// The meeting's folder name.
+    pub meeting: String,
+    /// Vault-root-relative, forward slashes -- mapped to an entry id by the
+    /// command layer and never sent to the frontend.
+    pub meeting_dir: String,
+    #[serde(default)]
+    pub labelled_segments: u64,
+    #[serde(default)]
+    pub hand_segments: u64,
+    #[serde(default)]
+    pub speech_sec: f64,
+    /// `"ok" | "unconfirmed" | "partial" | "short" | "conflict"`, verbatim;
+    /// `None` when the meeting holds no voice sample of this person.
+    #[serde(default)]
+    pub voice_quality: Option<String>,
+    /// The person's hand-labelled segments in time order, capped per meeting.
+    #[serde(default)]
+    pub segments: Vec<PersonSegment>,
+    /// More hand-labelled segments exist than `segments` holds.
+    #[serde(default)]
+    pub segments_truncated: bool,
+}
+
+/// `GET /v1/people/detail?name=` -- one person in full.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct PersonDetail {
+    pub name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub bio: String,
+    #[serde(default)]
+    pub registered: bool,
+    #[serde(default)]
+    pub projects: Vec<PersonProject>,
+    #[serde(default)]
+    pub voice: PersonVoice,
+    /// Newest first.
+    #[serde(default)]
+    pub meetings: Vec<PersonMeeting>,
 }
 
 /// One turn of chat history on its way to `POST /v1/chat`.

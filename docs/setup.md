@@ -344,9 +344,12 @@ code to keep a list of who can be named there:
   transcripts into a drop-down over the roster -- no free text, no typos.
   Adding a new person means coming back to this panel.
 
-Add names one at a time, or press **Add names already used in this
-project** to pull in every name you have assigned in its other meetings;
-**Remove** drops one. The list is saved as `roster.json` in the project
+Add names one at a time, pick a person under **From the speakers
+database** (everybody known in any project who is not on this roster yet --
+see "Speakers" below -- which is how someone named in one project joins
+another's roster under exactly the same spelling), or press **Add names
+already used in this project** to pull in every name you have assigned in
+its other meetings; **Remove** drops one. The list is saved as `roster.json` in the project
 folder of your meetings vault, so it travels with the vault and can be
 edited by hand. It is a list of names only -- no voice data -- and it
 changes nothing about existing labels: a name assigned before the roster
@@ -400,6 +403,56 @@ the service CPU torch from PyPI instead (slow, but no fetch); the status
 row then reports the runtime as present. `tauri dev` does not bundle
 resources, so point the service at the committed tree
 (`TRANSCRIBER_APP_DIR`'s `models\diarization`) or paste a token once.
+
+## Speakers
+
+The library's **Speakers** tab, beside Recordings, is the speakers database:
+one row per person across the whole vault. It needs no download and no GPU
+-- it is built from the names you gave in transcripts, plus what you write
+about a person here.
+
+**The table.** The same kind of sortable table as Recordings: **Name** (with
+the person's other names muted underneath), **Projects**, **Meetings**,
+**Labelled speech** (how much speech carries their name) and **Voice
+samples** (what speaker recognition has to go on, with "N set aside" when
+some samples are not used). Click a column header to sort, type in the
+filter to narrow by name or by any other name the person goes under, and
+click a row to open the person. **Add speaker** creates a person before
+they have spoken in any meeting. Everybody a transcript names is listed
+whether or not you ever edited them.
+
+**A speaker's page.** Under the name and its pencil (rename) sit the
+person's other names and three totals. The main column, "Speech you
+labelled", lists every meeting they are named in, newest first, with the
+lines you named by hand (a long meeting shows the first ones and says how
+many there are), and says for each meeting whether its voice sample is in
+use or why it is set aside. A meeting's title opens that recording; a
+meeting that is no longer in the library is shown without a link. The side
+column holds **About** (a free-text bio, saved with its own **Save**), the
+**Projects** they take part in (meetings, speech, and "on the roster" where
+the project's roster lists them), the **Voice memory** totals, and **Remove
+from database**.
+
+**Other names and merging.** A person is one canonical name plus "also
+known as" names -- the other spellings found in labels ("Nikita",
+"Никита"). Labels written under any of them count as that person.
+
+- Renaming keeps the old name as one of the other names, so nothing that
+  was labelled under it is lost.
+- Adding a name with **+ Add a name** attaches that spelling. If the name
+  belongs to another speaker, the two are **merged** into this one.
+- Removing a name detaches it; labels written under it show up as a person
+  of their own again.
+- **Remove from database** deletes the name, the other names and the bio.
+  If the person is still named in a meeting they stay in the table, marked
+  "not in the database yet", and saving anything about them puts them back.
+
+**Labels in meetings are never rewritten.** None of the above touches a
+transcript or a `speakers.json`: a meeting labelled "Никита" still says
+"Никита" after that name is attached to "Nikita". The database
+(`people.json` in the root of your meetings vault, so it travels with the
+vault) only records which names are the same person and what you wrote
+about them.
 
 ## Known gaps
 

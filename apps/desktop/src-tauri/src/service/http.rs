@@ -283,6 +283,31 @@ struct IndexMeetingBody {
     chunks: u64,
 }
 
+/// `GET /v1/people` response body.
+#[derive(Deserialize)]
+struct PeopleResponseBody {
+    people: Vec<super::Person>,
+}
+
+/// `PUT /v1/people` request body. An omitted field is left alone by the
+/// service, so `None` must not travel as `null`.
+#[derive(Serialize)]
+struct PersonUpdateBody<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aliases: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bio: Option<&'a str>,
+}
+
+/// `DELETE /v1/people` response body.
+#[derive(Deserialize)]
+struct PersonDeletedBody {
+    deleted: bool,
+}
+
 /// `POST /v1/chat` request body (F2's `ChatRequest`).
 #[derive(Serialize)]
 struct ChatBody<'a> {
@@ -946,6 +971,79 @@ impl TranscriptionService for HttpTranscriptionService {
         response.json().await.map_err(|err| ServiceError::Decode {
             message: err.to_string(),
         })
+    }
+
+    async fn list_people(&self) -> Result<Vec<super::Person>, ServiceError> {
+        let request = self.authorize(self.client.get(self.endpoint("/v1/people")));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: PeopleResponseBody =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(parsed.people)
+    }
+
+    async fn person_detail(&self, name: &str) -> Result<super::PersonDetail, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint("/v1/people/detail"))
+                .query(&[("name", name)]),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        response.json().await.map_err(|err| ServiceError::Decode {
+            message: err.to_string(),
+        })
+    }
+
+    async fn save_person(
+        &self,
+        update: super::PersonUpdate,
+    ) -> Result<super::PersonRecord, ServiceError> {
+        let body = PersonUpdateBody {
+            name: &update.name,
+            new_name: update.new_name.as_deref(),
+            aliases: update.aliases.as_deref(),
+            bio: update.bio.as_deref(),
+        };
+        let request = self.authorize(self.client.put(self.endpoint("/v1/people")).json(&body));
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        response.json().await.map_err(|err| ServiceError::Decode {
+            message: err.to_string(),
+        })
+    }
+
+    async fn delete_person(&self, name: &str) -> Result<bool, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .delete(self.endpoint("/v1/people"))
+                .query(&[("name", name)]),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        let parsed: PersonDeletedBody =
+            response.json().await.map_err(|err| ServiceError::Decode {
+                message: err.to_string(),
+            })?;
+        Ok(parsed.deleted)
     }
 
     async fn chat_stream(
@@ -1770,6 +1868,250 @@ mod tests {
             assert_eq!(sample.quality, "conflict");
             assert_eq!(sample.conflicts_with.as_deref(), Some("Boris"));
             assert_eq!(status.meetings[1].scanned_at, None);
+        });
+    }
+
+    #[test]
+    fn list_people_decodes_the_speakers_database() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/people"))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "people": [
+                        {
+                            "name": "Nikita",
+                            "aliases": ["Никита"],
+                            "bio": "",
+                            "registered": true,
+                            "projects": ["ELS", "GIS"],
+                            "meetings": 34,
+                            "labelled_segments": 5123,
+                            "hand_segments": 4000,
+                            "speech_sec": 12345.0,
+                            "voice_samples": 26,
+                            "voice_set_aside": 5
+                        },
+                        {"name": "Anna", "registered": false}
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let people = service
+                .list_people()
+                .await
+                .expect("list_people should succeed");
+
+            assert_eq!(people.len(), 2);
+            assert_eq!(people[0].name, "Nikita");
+            assert_eq!(people[0].aliases, vec!["Никита".to_string()]);
+            assert!(people[0].registered);
+            assert_eq!(
+                people[0].projects,
+                vec!["ELS".to_string(), "GIS".to_string()]
+            );
+            assert_eq!(people[0].meetings, 34);
+            assert_eq!(people[0].hand_segments, 4000);
+            assert_eq!(people[0].voice_samples, 26);
+            assert_eq!(people[0].voice_set_aside, 5);
+            // A sparse row still decodes: the counts default to nothing.
+            assert!(!people[1].registered);
+            assert_eq!(people[1].meetings, 0);
+        });
+    }
+
+    #[test]
+    fn person_detail_asks_by_name_and_decodes_meetings_and_segments() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/people/detail"))
+                .and(wiremock::matchers::query_param("name", "Никита"))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "name": "Nikita",
+                    "aliases": ["Никита"],
+                    "bio": "Lead",
+                    "registered": true,
+                    "projects": [
+                        {"project": "GIS", "meetings": 7, "speech_sec": 3100.0, "in_roster": true}
+                    ],
+                    "voice": {"samples": 26, "set_aside": 5, "speech_sec": 12300.0},
+                    "meetings": [
+                        {
+                            "project": "GIS",
+                            "meeting": "260903 - 360 photos & flows",
+                            "meeting_dir": "GIS/260903 - 360 photos & flows",
+                            "labelled_segments": 132,
+                            "hand_segments": 120,
+                            "speech_sec": 640.0,
+                            "voice_quality": "ok",
+                            "segments": [
+                                {"id": 12, "start": 63.2, "end": 70.1, "text": "hello"}
+                            ],
+                            "segments_truncated": true
+                        },
+                        {
+                            "project": "GIS",
+                            "meeting": "260801 - Kickoff",
+                            "meeting_dir": "GIS/260801 - Kickoff",
+                            "labelled_segments": 3,
+                            "hand_segments": 3,
+                            "speech_sec": 12.0,
+                            "voice_quality": null,
+                            "segments": [],
+                            "segments_truncated": false
+                        }
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let detail = service
+                .person_detail("Никита")
+                .await
+                .expect("person_detail should succeed");
+
+            assert_eq!(detail.name, "Nikita");
+            assert_eq!(detail.bio, "Lead");
+            assert!(detail.projects[0].in_roster);
+            assert_eq!(detail.voice.samples, 26);
+            assert_eq!(detail.voice.set_aside, 5);
+            let first = &detail.meetings[0];
+            assert_eq!(first.meeting_dir, "GIS/260903 - 360 photos & flows");
+            assert_eq!(first.voice_quality.as_deref(), Some("ok"));
+            assert_eq!(first.segments[0].id, 12);
+            assert_eq!(first.segments[0].text, "hello");
+            assert!(first.segments_truncated);
+            assert_eq!(detail.meetings[1].voice_quality, None);
+        });
+    }
+
+    #[test]
+    fn person_detail_for_an_unknown_name_is_the_services_404() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/people/detail"))
+                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error_kind": "not_found",
+                    "error_message": "no such person: Ghost"
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let err = service
+                .person_detail("Ghost")
+                .await
+                .expect_err("an unknown name must fail");
+
+            assert_eq!(
+                err,
+                ServiceError::Http {
+                    status: 404,
+                    message: "no such person: Ghost".to_string()
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn save_person_puts_only_the_fields_that_are_set() {
+        run(async {
+            let server = MockServer::start().await;
+            // A bio-only save: `new_name` and `aliases` must be absent, not
+            // null -- an omitted field is what the service leaves alone.
+            Mock::given(method("PUT"))
+                .and(path("/v1/people"))
+                .and(body_json(
+                    serde_json::json!({ "name": "Nikita", "bio": "Lead" }),
+                ))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "name": "Nikita",
+                    "aliases": ["Никита"],
+                    "bio": "Lead",
+                    "registered": true
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(path("/v1/people"))
+                .and(body_json(serde_json::json!({
+                    "name": "Nikita",
+                    "new_name": "Nikita L",
+                    "aliases": ["Никита"]
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "name": "Nikita L",
+                    "aliases": ["Никита", "Nikita"],
+                    "bio": "Lead",
+                    "registered": true
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let saved = service
+                .save_person(super::super::PersonUpdate {
+                    name: "Nikita".to_string(),
+                    bio: Some("Lead".to_string()),
+                    ..Default::default()
+                })
+                .await
+                .expect("save_person should succeed");
+            assert_eq!(saved.bio, "Lead");
+            assert!(saved.registered);
+
+            let renamed = service
+                .save_person(super::super::PersonUpdate {
+                    name: "Nikita".to_string(),
+                    new_name: Some("Nikita L".to_string()),
+                    aliases: Some(vec!["Никита".to_string()]),
+                    bio: None,
+                })
+                .await
+                .expect("save_person should succeed");
+            assert_eq!(renamed.name, "Nikita L");
+            assert_eq!(
+                renamed.aliases,
+                vec!["Никита".to_string(), "Nikita".to_string()]
+            );
+        });
+    }
+
+    #[test]
+    fn delete_person_asks_by_name_and_decodes_the_flag() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("DELETE"))
+                .and(path("/v1/people"))
+                .and(wiremock::matchers::query_param("name", "Nikita"))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "deleted": true })),
+                )
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let deleted = service
+                .delete_person("Nikita")
+                .await
+                .expect("delete_person should succeed");
+
+            assert!(deleted);
         });
     }
 

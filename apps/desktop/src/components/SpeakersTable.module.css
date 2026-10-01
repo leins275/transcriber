@@ -1,0 +1,81 @@
+/* The table itself is drawn by VaultList/VaultRow's own modules, so the
+   Speakers table cannot drift from the Recordings table it sits beside;
+   this file holds only what is the Speakers tab's own. */
+.speakers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The filter takes what is left beside the Add button, like the search
+   input beside the project picker on the Recordings tab. */
+.bar {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  font: var(--text-md) / 1.5 var(--font-body);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+}
+
+.input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.addForm {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 0 1 20rem;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.status {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* Other spellings sit under the name, muted: they explain why a search for
+   "Никита" finds "Nikita", and are never the thing to click. */
+.aliases {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.number {
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+
+.aside {
+  color: var(--text-muted);
+}
