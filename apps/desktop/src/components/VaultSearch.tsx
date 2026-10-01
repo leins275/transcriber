@@ -11,6 +11,10 @@ export type VaultSearchProps = {
   onSearch: (query: string) => Promise<SearchResultView[]>;
   /** Opens the hit's recording, exactly like a list row. */
   onOpen: (entryId: string) => void;
+  /** A control sharing the input's row -- the library's project picker.
+   * The input takes the remaining width; this sits beside it at its own
+   * width and wraps underneath when the window is too narrow for both. */
+  trailing?: React.ReactNode;
 };
 
 const DEBOUNCE_MS = 300;
@@ -36,7 +40,13 @@ function messageOf(error: unknown): string {
  *
  * Presentational apart from `onSearch`: no invoke, no listen, no fetch.
  */
-export function VaultSearch({ query, onQueryChange, onSearch, onOpen }: VaultSearchProps) {
+export function VaultSearch({
+  query,
+  onQueryChange,
+  onSearch,
+  onOpen,
+  trailing,
+}: VaultSearchProps) {
   const [results, setResults] = useState<SearchResultView[]>([]);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,14 +85,17 @@ export function VaultSearch({ query, onQueryChange, onSearch, onOpen }: VaultSea
 
   return (
     <div className={styles.search}>
-      <input
-        type="search"
-        className={styles.input}
-        aria-label="Search recordings"
-        placeholder="Search transcripts, summaries and notes…"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-      />
+      <div className={styles.bar}>
+        <input
+          type="search"
+          className={styles.input}
+          aria-label="Search recordings"
+          placeholder="Search transcripts, summaries and notes…"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+        />
+        {trailing}
+      </div>
       {active && (
         <div className={styles.results} aria-label="Search results">
           {searching ? (
