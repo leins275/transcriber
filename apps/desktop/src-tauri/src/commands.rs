@@ -74,6 +74,11 @@ pub mod speakers;
 /// the names the app's speaker pickers offer.
 pub mod roster;
 
+/// The speakers database (`list_speakers`, `speaker_detail`, `save_speaker`,
+/// `delete_speaker`): a thin proxy over the service's people registry that
+/// maps each meeting to its entry id.
+pub mod people;
+
 /// A defensive upper bound on a single dropped-path argument's length
 /// (Windows' own extended-length path limit is 32767 UTF-16 code units) —
 /// guards `enqueue_paths` against a pathological string without ever

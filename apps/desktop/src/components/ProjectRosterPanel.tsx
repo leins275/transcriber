@@ -1,6 +1,11 @@
 import { useId, useState } from "react";
 import styles from "./ProjectRosterPanel.module.css";
-import { addRosterName, mergeRosterNames, removeRosterName } from "../lib/roster";
+import {
+  addRosterName,
+  mergeRosterNames,
+  normalizeRosterNames,
+  removeRosterName,
+} from "../lib/roster";
 import type { ProjectRosterView, RosterMode } from "../types";
 
 export type ProjectRosterPanelProps = {
@@ -10,6 +15,11 @@ export type ProjectRosterPanelProps = {
    * what the seed button offers. Never merged on its own: seeding is the
    * operator's explicit act. */
   siblingNames: string[];
+  /** The canonical names of the speakers database — everybody known in any
+   * project. The ones not on the roster yet are offered in a pick-list, so a
+   * person known elsewhere joins this roster under the same spelling. Never
+   * merged on its own, for the same reason as `siblingNames`. */
+  databaseNames?: string[];
   /** Resolves when the save has landed; rejects with an `AppError`-shaped
    * value whose `message` is shown inline, panel left open. */
   onSave: (roster: ProjectRosterView) => Promise<void>;
@@ -41,6 +51,11 @@ function messageOf(error: unknown): string {
  * and the list decides what that pick-list holds. Both are drafted locally
  * and only leave the panel on Save, so Cancel is a real discard.
  *
+ * Names come from three places: typed, picked from the speakers database
+ * (everybody known in any project — which is how a person recognized in one
+ * project is put on another's roster under the same spelling), or seeded
+ * from this project's own meetings.
+ *
  * The names the project already uses are *not* pulled in automatically: an
  * operator switching to roster mode gets an empty list until they press the
  * seed button, because silently importing every historical misspelling is
@@ -55,12 +70,14 @@ function messageOf(error: unknown): string {
 export function ProjectRosterPanel({
   roster,
   siblingNames,
+  databaseNames = [],
   onSave,
   onClose,
 }: ProjectRosterPanelProps) {
   const [draft, setDraft] = useState<ProjectRosterView>(roster);
   const [seededFrom, setSeededFrom] = useState<string>(() => identityOf(roster));
   const [typed, setTyped] = useState("");
+  const [picked, setPicked] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modeName = useId();
@@ -80,6 +97,14 @@ export function ProjectRosterPanel({
   const seeded = mergeRosterNames(draft, siblingNames);
   const nothingToSeed = seeded.names.length === draft.names.length;
 
+  // People of the database the roster does not hold yet, matched the way the
+  // roster itself deduplicates.
+  const listed = new Set(draft.names.map((name) => name.toLowerCase()));
+  const offered = normalizeRosterNames(databaseNames).filter(
+    (name) => !listed.has(name.toLowerCase()),
+  );
+  const pickedOffered = offered.includes(picked) ? picked : "";
+
   function setMode(mode: RosterMode) {
     setDraft((prev) => ({ mode, names: prev.names }));
   }
@@ -87,6 +112,12 @@ export function ProjectRosterPanel({
   function addTyped() {
     setDraft((prev) => addRosterName(prev, typed));
     setTyped("");
+  }
+
+  function addPicked() {
+    if (pickedOffered === "") return;
+    setDraft((prev) => addRosterName(prev, pickedOffered));
+    setPicked("");
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -182,6 +213,35 @@ export function ProjectRosterPanel({
           Add
         </button>
       </div>
+
+      {offered.length > 0 && (
+        <div className={styles.addRow}>
+          <label className={styles.field}>
+            <span className={styles.label}>From the speakers database</span>
+            <select
+              className={styles.input}
+              value={pickedOffered}
+              disabled={saving}
+              onChange={(event) => setPicked(event.target.value)}
+            >
+              <option value="">Choose a speaker…</option>
+              {offered.map((name) => (
+                <option key={name.toLowerCase()} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={saving || pickedOffered === ""}
+            onClick={addPicked}
+          >
+            Add to roster
+          </button>
+        </div>
+      )}
 
       <button
         type="button"

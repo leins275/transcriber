@@ -14,8 +14,9 @@ use uuid::Uuid;
 
 use super::{
     ChatEvent, ChatRequest, DiarizationStatus, IndexStatus, JobState, JobStatus, LlmCatalogModel,
-    LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, SearchHit,
-    SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus, Person,
+    PersonDetail, PersonRecord, PersonUpdate, SearchHit, SearchQuery, ServiceError, ServiceHealth,
+    SubmitRequest, TranscriptionService,
 };
 
 /// The simulated curated catalog: `(id, label, file, size_bytes)` -- mirrors
@@ -233,9 +234,23 @@ struct Inner {
     /// What a finished `suggest_title` job's result holds; `None` scripts
     /// a job that finished with no readable result.
     suggested_title: Option<String>,
+    /// The speakers database: empty by default (the fake has no vault to
+    /// read labels from), filled by [`FakeService::set_people`] or by saves.
+    people: Vec<PersonDetail>,
+}
+
+/// Whether `name` is the person's canonical name or one of their aliases.
+fn person_answers_to(person: &PersonDetail, name: &str) -> bool {
+    person.name == name || person.aliases.iter().any(|alias| alias == name)
 }
 
 impl Inner {
+    fn person_index(&self, name: &str) -> Option<usize> {
+        self.people
+            .iter()
+            .position(|person| person_answers_to(person, name))
+    }
+
     fn active_llm_slot(&mut self) -> &mut FakeModelDownload {
         let active = self.llm_active.clone();
         self.llm_slot(&active)
@@ -326,6 +341,7 @@ impl FakeService {
                 submissions: Vec::new(),
                 index_submissions: 0,
                 suggested_title: Some(FAKE_SUGGESTED_TITLE.to_string()),
+                people: Vec::new(),
             }),
         }
     }
@@ -437,6 +453,15 @@ impl FakeService {
             .lock()
             .expect("fake service mutex poisoned")
             .suggested_title = title.map(str::to_string);
+    }
+
+    /// Scripts the speakers database: these people are what `list_people`
+    /// and `person_detail` answer, and what saves and deletes act on.
+    pub fn set_people(&self, people: Vec<PersonDetail>) {
+        self.inner
+            .lock()
+            .expect("fake service mutex poisoned")
+            .people = people;
     }
 
     /// Every derived-job submission this fake has accepted, in order.
@@ -753,6 +778,161 @@ impl TranscriptionService for FakeService {
             voices: Vec::new(),
             meetings: Vec::new(),
         })
+    }
+
+    async fn list_people(&self) -> Result<Vec<Person>, ServiceError> {
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        Ok(inner
+            .people
+            .iter()
+            .map(|person| Person {
+                name: person.name.clone(),
+                aliases: person.aliases.clone(),
+                bio: person.bio.clone(),
+                registered: person.registered,
+                projects: person
+                    .projects
+                    .iter()
+                    .map(|project| project.project.clone())
+                    .collect(),
+                meetings: person.meetings.len() as u64,
+                labelled_segments: person.meetings.iter().map(|m| m.labelled_segments).sum(),
+                hand_segments: person.meetings.iter().map(|m| m.hand_segments).sum(),
+                speech_sec: person.meetings.iter().map(|m| m.speech_sec).sum(),
+                voice_samples: person.voice.samples,
+                voice_set_aside: person.voice.set_aside,
+            })
+            .collect())
+    }
+
+    async fn person_detail(&self, name: &str) -> Result<PersonDetail, ServiceError> {
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        inner
+            .person_index(name)
+            .map(|index| inner.people[index].clone())
+            .ok_or_else(|| ServiceError::Http {
+                status: 404,
+                message: format!("no such person: {name}"),
+            })
+    }
+
+    async fn save_person(&self, update: PersonUpdate) -> Result<PersonRecord, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        let invalid = |message: &str| ServiceError::Http {
+            status: 400,
+            message: message.to_string(),
+        };
+        let name = update.name.trim().to_string();
+        if name.is_empty() {
+            return Err(invalid("a person needs a name"));
+        }
+        let index = match inner.person_index(&name) {
+            Some(index) => index,
+            None => {
+                inner.people.push(PersonDetail {
+                    name,
+                    aliases: Vec::new(),
+                    bio: String::new(),
+                    registered: true,
+                    projects: Vec::new(),
+                    voice: super::PersonVoice::default(),
+                    meetings: Vec::new(),
+                });
+                inner.people.len() - 1
+            }
+        };
+        if let Some(new_name) = update.new_name.as_deref().map(str::trim) {
+            if new_name.is_empty() {
+                return Err(invalid("a person needs a name"));
+            }
+            if inner
+                .person_index(new_name)
+                .is_some_and(|other| other != index)
+            {
+                return Err(invalid("that name belongs to another person"));
+            }
+            let person = &mut inner.people[index];
+            if person.name != new_name {
+                let old = std::mem::replace(&mut person.name, new_name.to_string());
+                person.aliases.retain(|alias| alias != new_name);
+                person.aliases.push(old);
+            }
+        }
+        let canonical = inner.people[index].name.clone();
+        if let Some(aliases) = update.aliases {
+            // Merge: another person whose name is now an alias of this one
+            // stops being a person of their own; their meetings move over.
+            let mut absorbed = Vec::new();
+            inner.people.retain(|other| {
+                let merged = other.name != canonical && aliases.contains(&other.name);
+                if merged {
+                    absorbed.extend(other.meetings.iter().cloned());
+                }
+                !merged
+            });
+            let person = inner
+                .people
+                .iter_mut()
+                .find(|person| person.name == canonical)
+                .expect("the saved person survives its own merge");
+            person.aliases = aliases;
+            person.meetings.extend(absorbed);
+        }
+        let person = inner
+            .people
+            .iter_mut()
+            .find(|person| person.name == canonical)
+            .expect("the saved person is in the registry");
+        if let Some(bio) = update.bio {
+            person.bio = bio;
+        }
+        person.registered = true;
+        Ok(PersonRecord {
+            name: person.name.clone(),
+            aliases: person.aliases.clone(),
+            bio: person.bio.clone(),
+            registered: true,
+        })
+    }
+
+    async fn delete_person(&self, name: &str) -> Result<bool, ServiceError> {
+        let mut inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        let Some(index) = inner.person_index(name) else {
+            return Ok(false);
+        };
+        if !inner.people[index].registered {
+            return Ok(false);
+        }
+        if inner.people[index].meetings.is_empty() {
+            inner.people.remove(index);
+        } else {
+            // Still labelled somewhere: the person stays listed, unregistered.
+            let person = &mut inner.people[index];
+            person.registered = false;
+            person.aliases.clear();
+            person.bio.clear();
+        }
+        Ok(true)
     }
 
     async fn chat_stream(
@@ -1313,6 +1493,99 @@ mod tests {
                 status.cuda_warning.as_deref(),
                 Some("digest mismatch for nvidia_cublas_cu12.whl")
             );
+        });
+    }
+
+    // -- speakers database ---------------------------------------------------
+
+    fn named(name: &str) -> PersonUpdate {
+        PersonUpdate {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saving_an_unknown_name_registers_a_person_and_a_rename_keeps_the_old_name() {
+        run(async {
+            let fake = FakeService::new();
+            assert!(fake.list_people().await.expect("list").is_empty());
+
+            let created = fake.save_person(named("Nikita")).await.expect("create");
+            assert!(created.registered);
+
+            let renamed = fake
+                .save_person(PersonUpdate {
+                    new_name: Some("Nikita L".to_string()),
+                    bio: Some("Lead".to_string()),
+                    ..named("Nikita")
+                })
+                .await
+                .expect("rename");
+            assert_eq!(renamed.name, "Nikita L");
+            assert_eq!(renamed.aliases, vec!["Nikita".to_string()]);
+
+            // Either name reaches the same person.
+            let detail = fake.person_detail("Nikita").await.expect("detail");
+            assert_eq!(detail.name, "Nikita L");
+            assert_eq!(detail.bio, "Lead");
+        });
+    }
+
+    #[test]
+    fn adding_another_persons_name_as_an_alias_merges_them() {
+        run(async {
+            let fake = FakeService::new();
+            for name in ["Nikita", "Никита"] {
+                fake.save_person(named(name)).await.expect("create");
+            }
+
+            fake.save_person(PersonUpdate {
+                aliases: Some(vec!["Никита".to_string()]),
+                ..named("Nikita")
+            })
+            .await
+            .expect("merge");
+
+            let people = fake.list_people().await.expect("list");
+            assert_eq!(people.len(), 1);
+            assert_eq!(people[0].aliases, vec!["Никита".to_string()]);
+        });
+    }
+
+    #[test]
+    fn a_rename_onto_another_person_and_an_unknown_detail_are_refused() {
+        run(async {
+            let fake = FakeService::new();
+            for name in ["Anna", "Boris"] {
+                fake.save_person(named(name)).await.expect("create");
+            }
+
+            let clash = fake
+                .save_person(PersonUpdate {
+                    new_name: Some("Boris".to_string()),
+                    ..named("Anna")
+                })
+                .await;
+            assert!(matches!(clash, Err(ServiceError::Http { status: 400, .. })));
+
+            let unknown = fake.person_detail("Ghost").await;
+            assert!(matches!(
+                unknown,
+                Err(ServiceError::Http { status: 404, .. })
+            ));
+        });
+    }
+
+    #[test]
+    fn deleting_removes_the_entry_and_reports_whether_there_was_one() {
+        run(async {
+            let fake = FakeService::new();
+            fake.save_person(named("Anna")).await.expect("create");
+
+            assert!(fake.delete_person("Anna").await.expect("delete"));
+            assert!(!fake.delete_person("Anna").await.expect("delete again"));
+            assert!(fake.list_people().await.expect("list").is_empty());
         });
     }
 

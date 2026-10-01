@@ -48,6 +48,9 @@ export type RecordingPageProps = {
   onLoadVoiceMemory?: (project: string) => Promise<VoiceStatusView>;
   /** Vouches for the names speaker recognition gave this meeting. */
   onConfirmSpeakers?: (entryId: string) => Promise<void>;
+  /** Reads the canonical names of the speakers database, which the roster
+   * editor offers beside its free-text box. Absent, it offers none. */
+  onLoadSpeakerNames?: () => Promise<string[]>;
   onBack: () => void;
   onReveal: (entryId: string) => void;
   onReadTranscript: (entryId: string) => Promise<TranscriptView>;
@@ -146,6 +149,7 @@ export function RecordingPage({
   onSaveRoster,
   onLoadVoiceMemory,
   onConfirmSpeakers,
+  onLoadSpeakerNames,
   onBack,
   onReveal,
   onReadTranscript,
@@ -287,6 +291,26 @@ export function RecordingPage({
     },
     [project, onSaveRoster],
   );
+
+  // The speakers database's names, read each time the roster editor opens:
+  // a person added on their own page since must be on offer here. A failed
+  // read degrades to no offer — typing a name still works.
+  const [databaseNames, setDatabaseNames] = useState<string[]>([]);
+  const rosterOpen = panel === "roster";
+  useEffect(() => {
+    if (!rosterOpen || !onLoadSpeakerNames) return;
+    let cancelled = false;
+    onLoadSpeakerNames()
+      .then((names) => {
+        if (!cancelled) setDatabaseNames(names ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setDatabaseNames([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rosterOpen, onLoadSpeakerNames]);
 
   // Copy acts on the visible tab; a tab with nothing loaded copies nothing.
   const copyText =
@@ -610,6 +634,7 @@ export function RecordingPage({
         <ProjectRosterPanel
           roster={projectRoster ?? EMPTY_ROSTER}
           siblingNames={projectSpeakers}
+          databaseNames={databaseNames}
           onSave={saveRoster}
           onClose={() => setPanel("none")}
         />

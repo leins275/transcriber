@@ -36,6 +36,10 @@ import type {
   SearchResultView,
   ServiceStatusView,
   SettingsView,
+  SpeakerDetailView,
+  SpeakerRecord,
+  SpeakerUpdate,
+  SpeakerView,
   SummaryView,
   TranscriptLanguage,
   TranscriptView,
@@ -211,6 +215,24 @@ export const api = {
    * is what the editor should keep. */
   saveProjectRoster: (project: string, roster: ProjectRosterView): Promise<ProjectRosterView> =>
     call<ProjectRosterView>("save_project_roster", { project, roster }),
+  // The speakers database (the service's people registry plus everybody a
+  // meeting label names). A person is addressed by any of their names.
+  listSpeakers: (): Promise<SpeakerView[]> => call<SpeakerView[]>("list_speakers"),
+  speakerDetail: (name: string): Promise<SpeakerDetailView> =>
+    call<SpeakerDetailView>("speaker_detail", { name }),
+  /** Creates the person when nobody answers to `name`; otherwise applies the
+   * update. A field the update leaves out travels as `null`, which the Rust
+   * side reads as "leave it alone". */
+  saveSpeaker: (name: string, update: SpeakerUpdate = {}): Promise<SpeakerRecord> =>
+    call<SpeakerRecord>("save_speaker", {
+      name,
+      newName: update.newName ?? null,
+      aliases: update.aliases ?? null,
+      bio: update.bio ?? null,
+    }),
+  /** Removes the registry entry only -- labels in meetings stay. Resolves
+   * `false` when there was no entry to remove. */
+  deleteSpeaker: (name: string): Promise<boolean> => call<boolean>("delete_speaker", { name }),
   /** Replaces a meeting's `note.md` wholesale -- the editor holds the full
    * draft, so a save is by definition the whole note. */
   writeNote: (entryId: string, markdown: string): Promise<void> =>

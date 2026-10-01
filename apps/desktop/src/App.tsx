@@ -14,8 +14,10 @@ import { RecordingPage } from "./components/RecordingPage";
 import { ModelDownloadStep } from "./components/ModelDownloadStep";
 import { ServiceBanner } from "./components/ServiceBanner";
 import { SettingsPage } from "./components/SettingsPage";
+import { SpeakerPage } from "./components/SpeakerPage";
+import { SpeakersTable } from "./components/SpeakersTable";
 import { UpdateNotice } from "./components/UpdateNotice";
-import { VaultPanel } from "./components/VaultPanel";
+import { VaultPanel, type VaultTab } from "./components/VaultPanel";
 import {
   api,
   appVersion,
@@ -28,6 +30,7 @@ import {
 import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { projectCodes } from "./lib/vaultGroups";
+import { DEFAULT_SPEAKER_SORT, type SpeakerSort } from "./lib/speakerSort";
 import { DEFAULT_VAULT_SORT, type VaultSort } from "./lib/vaultSort";
 import { useChat } from "./state/useChat";
 import { useJobs } from "./state/useJobs";
@@ -44,6 +47,7 @@ import type {
   MeetingUpdate,
   ServiceStatusView,
   SettingsView,
+  SpeakerUpdate,
   TranscriptLanguage,
 } from "./types";
 
@@ -127,6 +131,34 @@ function App() {
   // The content-search query, lifted for the same unmount-survival reason.
   const [vaultSearch, setVaultSearch] = useState<string>("");
   const searchVault = useCallback((query: string) => api.searchVault(query, null), []);
+  // The speakers database. A speaker's page is a place of its own, like a
+  // recording's: `openSpeaker` is the name it is open under, `null` for the
+  // library. A recording opened from it sits on top, so Back from that
+  // recording returns to the speaker. The library's tab, the table's filter
+  // and its sort are lifted for the same unmount-survival reason as the
+  // vault's — leaving a speaker's page must land back on the Speakers tab.
+  const [openSpeaker, setOpenSpeaker] = useState<string | null>(null);
+  const [libraryTab, setLibraryTab] = useState<VaultTab>("recordings");
+  const [speakerFilter, setSpeakerFilter] = useState<string>("");
+  const [speakerSort, setSpeakerSort] = useState<SpeakerSort>(DEFAULT_SPEAKER_SORT);
+  const loadSpeakers = useCallback(() => api.listSpeakers(), []);
+  const loadSpeakerNames = useCallback(
+    () => api.listSpeakers().then((people) => (people ?? []).map((person) => person.name)),
+    [],
+  );
+  const addSpeaker = useCallback(async (name: string) => {
+    await api.saveSpeaker(name);
+  }, []);
+  const loadSpeaker = useCallback((name: string) => api.speakerDetail(name), []);
+  const saveSpeaker = useCallback(
+    (name: string, update: SpeakerUpdate) => api.saveSpeaker(name, update),
+    [],
+  );
+  const deleteSpeaker = useCallback(async (name: string) => {
+    await api.deleteSpeaker(name);
+    // The entry is gone; the table re-reads when its tab mounts again.
+    setOpenSpeaker(null);
+  }, []);
   // The Settings page (redesign turn 6): the old sidebar's vault/model/
   // service content, behind the header's gear. Rendered over whatever else
   // is open; closing it returns there untouched.
@@ -669,10 +701,12 @@ function App() {
   // from the main view (mockup 7a) -- on the library the queue itself is
   // already on screen, and a finished job must never yank anyone off the
   // page they are reading; the chip is the deliberate way back.
-  const onMainView = !settingsOpen && !openEntry;
+  const onMainView = !settingsOpen && !openEntry && openSpeaker === null;
   const headerJob = onMainView ? null : activeJobView(jobs);
   const showRecordings = useCallback(() => {
     setOpenEntryId(null);
+    setOpenSpeaker(null);
+    setLibraryTab("recordings");
     setSettingsOpen(false);
   }, []);
 
@@ -801,6 +835,7 @@ function App() {
                   onSaveRoster={(_project, draft) => saveProjectRoster(draft)}
                   onLoadVoiceMemory={loadVoiceMemory}
                   onConfirmSpeakers={confirmSpeakerNames}
+                  onLoadSpeakerNames={loadSpeakerNames}
                   onBack={() => setOpenEntryId(null)}
                   onReveal={handleRevealVaultEntry}
                   onReadTranscript={readTranscript}
@@ -834,6 +869,16 @@ function App() {
                     ])
                   }
                 />
+              ) : openSpeaker !== null ? (
+                <SpeakerPage
+                  name={openSpeaker}
+                  onLoad={loadSpeaker}
+                  onSave={saveSpeaker}
+                  onDelete={deleteSpeaker}
+                  onBack={() => setOpenSpeaker(null)}
+                  onOpenRecording={setOpenEntryId}
+                  onRenamed={setOpenSpeaker}
+                />
               ) : (
                 <>
                   {vaultEntries.length === 0 && jobs.length === 0 ? (
@@ -862,6 +907,19 @@ function App() {
                     onSearchChange={setVaultSearch}
                     onSearch={searchVault}
                     onOpen={setOpenEntryId}
+                    tab={libraryTab}
+                    onTabChange={setLibraryTab}
+                    speakersTab={
+                      <SpeakersTable
+                        onLoad={loadSpeakers}
+                        onAdd={addSpeaker}
+                        onOpen={setOpenSpeaker}
+                        filter={speakerFilter}
+                        onFilterChange={setSpeakerFilter}
+                        sort={speakerSort}
+                        onSortChange={setSpeakerSort}
+                      />
+                    }
                     chatTab={
                       <ChatTab
                         projects={projects}

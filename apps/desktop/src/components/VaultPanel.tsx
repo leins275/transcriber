@@ -8,9 +8,9 @@ import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGr
 import type { VaultSort } from "../lib/vaultSort";
 import type { JobSnapshot, LedgerJobView, SearchResultView, VaultMeetingView } from "../types";
 
-/** The three views: the recordings, the project chat, F2's durable job
- * ledger. */
-type Tab = "recordings" | "chat" | "log";
+/** The four views: the recordings, the speakers database, the project chat,
+ * F2's durable job ledger. */
+export type VaultTab = "recordings" | "speakers" | "chat" | "log";
 
 /** The picker value meaning "only recordings filed under `unsorted/`".
  * Lowercase, so it can never collide with a real project code — the vault
@@ -60,6 +60,14 @@ export type VaultPanelProps = {
    * FirstRun's `modelStep`): the chat's state lives above this panel so it
    * survives tab switches and unmounts. */
   chatTab: React.ReactNode;
+  /** The Speakers tab's content, composed by App the same way. Absent, the
+   * tab is not offered. */
+  speakersTab?: React.ReactNode;
+  /** The open tab, when the caller owns it — App does, so that coming back
+   * from a speaker's page lands on the Speakers tab it was opened from.
+   * Left out, the panel keeps the tab itself and starts on Recordings. */
+  tab?: VaultTab;
+  onTabChange?: (tab: VaultTab) => void;
   onRevealJob: (jobId: string) => void;
   onCancelJob: (jobId: string) => void;
   onLoadServiceLog: () => Promise<LedgerJobView[]>;
@@ -97,11 +105,19 @@ export function VaultPanel({
   onSearch,
   onOpen,
   chatTab,
+  speakersTab,
+  tab: controlledTab,
+  onTabChange,
   onRevealJob,
   onCancelJob,
   onLoadServiceLog,
 }: VaultPanelProps) {
-  const [tab, setTab] = useState<Tab>("recordings");
+  const [ownTab, setOwnTab] = useState<VaultTab>("recordings");
+  const tab = controlledTab ?? ownTab;
+  const setTab = (next: VaultTab) => {
+    setOwnTab(next);
+    onTabChange?.(next);
+  };
   const searchActive = search.trim().length >= 2;
 
   const projects = useMemo(() => projectCodes(entries), [entries]);
@@ -152,6 +168,19 @@ export function VaultPanel({
             Recordings
             <span className={styles.tabCount}>{entries.length}</span>
           </button>
+          {speakersTab !== undefined && (
+            <button
+              type="button"
+              role="tab"
+              id="vault-tab-speakers"
+              aria-selected={tab === "speakers"}
+              aria-controls="vault-panel-speakers"
+              className={styles.tab}
+              onClick={() => setTab("speakers")}
+            >
+              Speakers
+            </button>
+          )}
           <button
             type="button"
             role="tab"
@@ -249,6 +278,17 @@ export function VaultPanel({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {tab === "speakers" && speakersTab !== undefined && (
+        <div
+          role="tabpanel"
+          id="vault-panel-speakers"
+          aria-labelledby="vault-tab-speakers"
+          className={styles.body}
+        >
+          {speakersTab}
         </div>
       )}
 
