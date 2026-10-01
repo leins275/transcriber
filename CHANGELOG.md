@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.27.1 — 2026-10-01
+
+### Bug fixes
+
+- **service**: Compress variable-frame-rate recordings and those over 700 kbps
+
 ## 0.27.0 — 2026-09-30
 
 ### Features
