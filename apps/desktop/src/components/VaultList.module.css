@@ -1,5 +1,58 @@
-.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* A bordered card around the table; a narrow window scrolls the table
+   sideways inside it rather than the whole pane. */
+.wrap {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  vertical-align: middle;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--divider);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table th {
+  background: var(--surface);
+  padding-block: 0;
+  white-space: nowrap;
+}
+
+/* The header label is the sort control: a real button, drawn as the muted
+   column heading it is. */
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: var(--space-2) 0;
+  font: 600 var(--text-sm) var(--font-body);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sortButton:hover {
+  color: var(--text);
+}
+
+.sortMark {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.sortButton[data-active] .sortMark {
+  color: var(--accent-deep);
 }

@@ -67,8 +67,7 @@
   padding-top: var(--space-3);
 }
 
-/* One row of view controls over the same list: narrow to a project, and
-   optionally group by project. */
+/* The view control over the table: narrow to a project. */
 .filterRow {
   display: flex;
   align-items: center;
@@ -84,57 +83,6 @@
   font: 600 var(--text-sm) var(--font-mono);
 }
 
-.groupToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-
-/* The checkbox drawn as a small switch; the input itself stays a checkbox
-   for keyboard and screen-reader purposes. */
-.groupSwitch {
-  appearance: none;
-  margin: 0;
-  width: 30px;
-  height: 16px;
-  border: 1px solid var(--divider);
-  border-radius: 999px;
-  background: var(--bg);
-  position: relative;
-  cursor: pointer;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease;
-}
-
-.groupSwitch::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  transition:
-    transform 120ms ease,
-    background 120ms ease;
-}
-
-.groupSwitch:checked {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg));
-}
-
-.groupSwitch:checked::after {
-  transform: translateX(14px);
-  background: var(--accent);
-}
-
 .hint,
 .empty {
   margin: 0;
@@ -147,37 +95,4 @@
    so it reads as "happening now" rather than as another project group. */
 .pinned {
   border-bottom: 1px solid var(--divider);
-}
-
-.group {
-  display: flex;
-  flex-direction: column;
-}
-
-.groupHead {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-3) 0 var(--space-1);
-}
-
-.groupKicker {
-  font-size: var(--text-xs);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.groupName {
-  font-size: var(--text-md);
-  font-weight: 600;
-  color: var(--accent-deep);
-  margin: 0;
-}
-
-.groupCount {
-  margin-left: auto;
-  font-size: var(--text-sm);
-  color: var(--text-faint);
-  font-feature-settings: "tnum";
 }

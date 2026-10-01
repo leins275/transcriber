@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
@@ -491,7 +491,10 @@ describe("App vault browser", () => {
     await waitFor(() => expect(screen.getByText("Security issue")).toBeInTheDocument());
 
     expect(screen.queryByRole("button", { name: /reveal/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^transcript$/i })).not.toBeInTheDocument();
+    // The table's "Transcript" column header is a sort button; the claim
+    // is about the recording's own row, whose one button is its name.
+    const row = screen.getByText("Security issue").closest("tr") as HTMLElement;
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: /open project/i })).not.toBeInTheDocument();
     await settle();
   });

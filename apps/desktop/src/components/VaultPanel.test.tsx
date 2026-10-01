@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VaultPanel } from "./VaultPanel";
+import { DEFAULT_VAULT_SORT } from "../lib/vaultSort";
 import type { JobSnapshot, LedgerJobView, VaultMeetingView } from "../types";
 
 function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView {
@@ -36,12 +37,12 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
   };
 }
 
-/** The filter/grouped pair is controlled (owned by App in production, so it
+/** The filter/sort pair is controlled (owned by App in production, so it
  * survives the panel's unmount); this harness plays App's role for tests
- * that drive the picker and the group toggle. */
+ * that drive the picker and the column headers. */
 function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>) {
   const [filter, setFilter] = useState(props.filter ?? "");
-  const [grouped, setGrouped] = useState(props.grouped ?? false);
+  const [sort, setSort] = useState(props.sort ?? DEFAULT_VAULT_SORT);
   const [search, setSearch] = useState(props.search ?? "");
   const defaults = {
     entries: [buildEntry()],
@@ -59,8 +60,8 @@ function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>
       {...props}
       filter={filter}
       onFilterChange={setFilter}
-      grouped={grouped}
-      onGroupedChange={setGrouped}
+      sort={sort}
+      onSortChange={setSort}
       search={search}
       onSearchChange={setSearch}
     />
@@ -115,7 +116,7 @@ describe("VaultPanel", () => {
     expect(onCancelJob).toHaveBeenCalledWith("job-7");
   });
 
-  it("renders one flat list — no group headings, no project pages", () => {
+  it("renders one flat table — no group headings, no project pages", () => {
     renderPanel({
       entries: [
         buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
@@ -133,27 +134,30 @@ describe("VaultPanel", () => {
     expect(screen.queryByRole("button", { name: /open project/i })).not.toBeInTheDocument();
   });
 
-  it("groups under project headings when the toggle is on", async () => {
+  it("re-orders the table when a column header is clicked", async () => {
     const user = userEvent.setup();
     renderPanel({
       entries: [
-        buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Els meeting" }),
-        buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Gis meeting" }),
-        buildEntry({ id: "c", project: null, meeting_name: "260810 - loose file" }),
+        buildEntry({ id: "a", project: "GIS", meeting_name: "260812 - Gis meeting" }),
+        buildEntry({ id: "b", project: null, meeting_name: "260811 - loose file" }),
+        buildEntry({ id: "c", project: "ELS", meeting_name: "260810 - Els meeting" }),
       ],
     });
+    const names = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getByRole("button").textContent);
+    expect(names()).toEqual(["Gis meeting", "loose file", "Els meeting"]);
 
-    await user.click(screen.getByRole("checkbox", { name: /group by project/i }));
+    await user.click(screen.getByRole("button", { name: /^project/i }));
 
-    expect(screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)).toEqual([
-      "ELS",
-      "GIS",
-      "Unsorted",
-    ]);
-    // Grouped, not filtered: everything is still on screen.
-    expect(screen.getByText("Els meeting")).toBeInTheDocument();
-    expect(screen.getByText("Gis meeting")).toBeInTheDocument();
-    expect(screen.getByText("loose file")).toBeInTheDocument();
+    // Sorted, not filtered: everything is still on screen, unsorted last.
+    expect(names()).toEqual(["Els meeting", "Gis meeting", "loose file"]);
+    expect(screen.getByRole("columnheader", { name: /^project/i })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
   });
 
   it("narrows to one project through the picker", async () => {
@@ -189,7 +193,6 @@ describe("VaultPanel", () => {
   it("offers no filter row for a single project — there is nothing to choose", () => {
     renderPanel();
     expect(screen.queryByRole("combobox", { name: /project/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /group by project/i })).not.toBeInTheDocument();
   });
 
   it("opens a recording by id when its row is clicked", async () => {
@@ -229,13 +232,13 @@ describe("VaultPanel", () => {
       entries: [buildEntry({ id: "a" }), buildEntry({ id: "b", meeting_name: "260813 - Other" })],
       onSearch: () => Promise.resolve([]),
     });
-    expect(screen.getByRole("list")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
 
     const box = screen.getByRole("searchbox", { name: /search recordings/i });
     await user.type(box, "дедлайн");
-    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
 
     await user.clear(box);
-    expect(screen.getByRole("list")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 });

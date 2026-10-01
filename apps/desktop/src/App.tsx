@@ -28,6 +28,7 @@ import {
 import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { projectCodes } from "./lib/vaultGroups";
+import { DEFAULT_VAULT_SORT, type VaultSort } from "./lib/vaultSort";
 import { useChat } from "./state/useChat";
 import { useJobs } from "./state/useJobs";
 import { useUpdate } from "./state/useUpdate";
@@ -117,11 +118,12 @@ function App() {
       cancelled = true;
     };
   }, [openEntryId]);
-  // The library's filter controls, lifted here so they survive the
+  // The library's filter and sort, lifted here so they survive the
   // VaultPanel unmount that opening a recording (or Settings) causes --
-  // coming back must not silently reset the operator's project filter.
+  // coming back must not silently reset the operator's project filter or
+  // the column they sorted by.
   const [vaultFilter, setVaultFilter] = useState<string>("");
-  const [vaultGrouped, setVaultGrouped] = useState(false);
+  const [vaultSort, setVaultSort] = useState<VaultSort>(DEFAULT_VAULT_SORT);
   // The content-search query, lifted for the same unmount-survival reason.
   const [vaultSearch, setVaultSearch] = useState<string>("");
   const searchVault = useCallback((query: string) => api.searchVault(query, null), []);
@@ -802,8 +804,8 @@ function App() {
                     jobs={jobs}
                     filter={vaultFilter}
                     onFilterChange={setVaultFilter}
-                    grouped={vaultGrouped}
-                    onGroupedChange={setVaultGrouped}
+                    sort={vaultSort}
+                    onSortChange={setVaultSort}
                     search={vaultSearch}
                     onSearchChange={setVaultSearch}
                     onSearch={searchVault}

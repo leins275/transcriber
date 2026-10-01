@@ -83,7 +83,13 @@ function renderRow(props: Partial<React.ComponentProps<typeof VaultRow>> = {}) {
     entry: buildEntry(),
     onOpen: () => {},
   };
-  return render(<VaultRow {...defaults} {...props} />);
+  return render(
+    <table>
+      <tbody>
+        <VaultRow {...defaults} {...props} />
+      </tbody>
+    </table>,
+  );
 }
 
 describe("the meeting type in the rename form", () => {

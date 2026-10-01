@@ -21,7 +21,14 @@ function renderRow(props: Partial<React.ComponentProps<typeof VaultRow>> = {}) {
     entry: buildEntry(),
     onOpen: () => {},
   };
-  return render(<VaultRow {...defaults} {...props} />);
+  // The row is a `<tr>`, so it needs a table around it to be valid DOM.
+  return render(
+    <table>
+      <tbody>
+        <VaultRow {...defaults} {...props} />
+      </tbody>
+    </table>,
+  );
 }
 
 describe("VaultRow", () => {
@@ -47,31 +54,45 @@ describe("VaultRow", () => {
 
   it("says a filed recording is awaiting transcription", () => {
     renderRow({ entry: buildEntry({ has_transcript: false, has_source: true }) });
-    expect(screen.getByText(/filed, no transcript yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no transcript yet/i)).toBeInTheDocument();
   });
 
-  it("opens the recording by id when its name is clicked", async () => {
+  it("says when a meeting folder holds no recording at all", () => {
+    renderRow({ entry: buildEntry({ has_transcript: false, has_source: false }) });
+    expect(screen.getByText(/no recording/i)).toBeInTheDocument();
+  });
+
+  it("opens the recording by id, once, when its name is clicked", async () => {
     const onOpen = vi.fn();
     const user = userEvent.setup();
     renderRow({ entry: buildEntry({ id: "v-42" }), onOpen });
 
     await user.click(screen.getByText("Security issue"));
 
+    expect(onOpen).toHaveBeenCalledTimes(1);
     expect(onOpen).toHaveBeenCalledWith("v-42");
     expect(onOpen).not.toHaveBeenCalledWith(expect.stringContaining("D:\\Meetings"));
   });
 
-  it("names the row's project as a tag", () => {
+  it("opens the recording from anywhere on the row", async () => {
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    renderRow({ entry: buildEntry({ id: "v-42" }), onOpen });
+
+    await user.click(screen.getByText(/transcript ready/i));
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith("v-42");
+  });
+
+  it("names the row's project in its own column", () => {
     renderRow({ entry: buildEntry({ project: "GIS" }) });
     expect(screen.getByText("GIS")).toBeInTheDocument();
   });
 
-  it("omits the project tag when told to (grouped view) and for unsorted rows", () => {
-    const { rerender } = renderRow({ entry: buildEntry({ project: "GIS" }), showProject: false });
-    expect(screen.queryByText("GIS")).not.toBeInTheDocument();
-
-    rerender(<VaultRow entry={buildEntry({ project: null })} onOpen={() => {}} />);
-    expect(screen.queryByText("GIS")).not.toBeInTheDocument();
+  it("says Unsorted where an unsorted row has no project", () => {
+    renderRow({ entry: buildEntry({ project: null }) });
+    expect(screen.getByText("Unsorted")).toBeInTheDocument();
   });
 
   it("carries no per-row action buttons — opening the recording is the row", () => {

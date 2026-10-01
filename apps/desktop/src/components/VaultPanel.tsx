@@ -5,6 +5,7 @@ import { LedgerPanel } from "./LedgerPanel";
 import { VaultList } from "./VaultList";
 import { VaultSearch } from "./VaultSearch";
 import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGroups";
+import type { VaultSort } from "../lib/vaultSort";
 import type { JobSnapshot, LedgerJobView, SearchResultView, VaultMeetingView } from "../types";
 
 /** The three views: the recordings, the project chat, F2's durable job
@@ -45,9 +46,9 @@ export type VaultPanelProps = {
    * when a recording or Settings opens. */
   filter: string;
   onFilterChange: (filter: string) => void;
-  /** The "Group by project" toggle, lifted for the same reason. */
-  grouped: boolean;
-  onGroupedChange: (grouped: boolean) => void;
+  /** The table's column sort, lifted for the same reason. */
+  sort: VaultSort;
+  onSortChange: (sort: VaultSort) => void;
   /** The content-search query, lifted like `filter`. While it is active the
    * results replace the list; the project filter narrows the list, search
    * finds what was said -- two different jobs, both available. */
@@ -74,12 +75,11 @@ export type VaultPanelProps = {
  * place at the top of the same list, and drops out of the pinned section as
  * soon as it is a recording like any other.
  *
- * One list, grouping optional (redesign turn 8): recordings render flat,
- * newest first, each row carrying its project as a small tag. One filter
- * row narrows to a project (or to Unsorted) and can switch to grouped-by-
- * project headers — a view preference over the same list. A project's own
- * page (its recordings + the project chat) opens through a group header or
- * the Open-project button beside the filter.
+ * One table (it replaced the list and its "Group by project" toggle):
+ * recordings render flat, newest first, with a column per section of the
+ * naming convention — project, date, name, type — plus the transcript
+ * state, each sortable from its header. Sorting by project is what grouping
+ * used to be. One filter row narrows to a project (or to Unsorted).
  *
  * Presentational only: no invoke, no listen, no fetch — App.tsx owns
  * fetching and passes every action down.
@@ -89,8 +89,8 @@ export function VaultPanel({
   jobs,
   filter,
   onFilterChange,
-  grouped,
-  onGroupedChange,
+  sort,
+  onSortChange,
   search,
   onSearchChange,
   onSearch,
@@ -130,16 +130,8 @@ export function VaultPanel({
   }, [entries, unsorted, validFilter]);
 
   // The filter row earns its place only when there is something to choose
-  // or to group -- a vault of one project with nothing unsorted needs
-  // neither control (grouping it would draw a single header over the same
-  // list).
+  // -- a vault of one project with nothing unsorted has no use for it.
   const showFilterRow = projects.length + (unsorted.length > 0 ? 1 : 0) > 1;
-
-  // Grouped view: which project groups render, and whether Unsorted tails.
-  const shownProjects =
-    validFilter === "" ? projects : validFilter === UNSORTED_FILTER ? [] : [validFilter];
-  const showUnsortedGroup =
-    (validFilter === "" || validFilter === UNSORTED_FILTER) && unsorted.length > 0;
 
   return (
     <section className={styles.panel} aria-label="Recordings" role="region">
@@ -235,15 +227,6 @@ export function VaultPanel({
                         ))}
                         {unsorted.length > 0 && <option value={UNSORTED_FILTER}>Unsorted</option>}
                       </select>
-                      <label className={styles.groupToggle}>
-                        <input
-                          type="checkbox"
-                          className={styles.groupSwitch}
-                          checked={grouped}
-                          onChange={(event) => onGroupedChange(event.target.checked)}
-                        />
-                        Group by project
-                      </label>
                     </div>
                   )}
                   {validFilter === UNSORTED_FILTER && (
@@ -253,41 +236,12 @@ export function VaultPanel({
                       one and rename it to file it under a project.
                     </p>
                   )}
-                  {!grouped ? (
-                    <VaultList entries={shown} onOpen={onOpen} />
-                  ) : (
-                    <>
-                      {shownProjects.map((code) => {
-                        const group = entriesForProject(entries, code);
-                        return (
-                          <div key={code} className={styles.group}>
-                            <div className={styles.groupHead}>
-                              <span className={styles.groupKicker}>Project</span>
-                              {/* A real heading, not a styled span: this is the
-                              structure of the list, and it is how the group is
-                              reached by anything navigating by headings. */}
-                              <h3 className={`${styles.groupName} mono`}>{code}</h3>
-                              <span className={styles.groupCount}>
-                                {group.length} recording{group.length === 1 ? "" : "s"}
-                              </span>
-                            </div>
-                            <VaultList entries={group} onOpen={onOpen} showProject={false} />
-                          </div>
-                        );
-                      })}
-                      {showUnsortedGroup && (
-                        <div className={styles.group}>
-                          <div className={styles.groupHead}>
-                            <h3 className={`${styles.groupName} mono`}>Unsorted</h3>
-                            <span className={styles.groupCount}>
-                              {unsorted.length} recording{unsorted.length === 1 ? "" : "s"}
-                            </span>
-                          </div>
-                          <VaultList entries={unsorted} onOpen={onOpen} showProject={false} />
-                        </div>
-                      )}
-                    </>
-                  )}
+                  <VaultList
+                    entries={shown}
+                    onOpen={onOpen}
+                    sort={sort}
+                    onSortChange={onSortChange}
+                  />
                 </>
               )}
             </>
