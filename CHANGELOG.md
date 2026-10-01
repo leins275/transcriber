@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.28.0 — 2026-10-01
+
+### Features
+
+- **desktop**: Show recordings as a sortable table
+
 ## 0.27.1 — 2026-10-01
 
 ### Bug fixes
