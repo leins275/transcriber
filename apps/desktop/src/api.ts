@@ -40,6 +40,7 @@ import type {
   TranscriptLanguage,
   TranscriptView,
   VaultMeetingView,
+  VoiceStatusView,
 } from "./types";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 
@@ -175,6 +176,14 @@ export const api = {
   /** Queues one such job per hand-labelled meeting that never had a
    * diarization pass; resolves to how many were queued. */
   diarizeLabelledMeetings: (): Promise<number> => call<number>("diarize_labelled_meetings"),
+  /** The voice memory as one project sees it. Reading is what keeps the
+   * service's index current, so there is nothing to refresh separately. */
+  voiceMemoryStatus: (project: string): Promise<VoiceStatusView> =>
+    call<VoiceStatusView>("voice_memory_status", { project }),
+  /** The operator vouches for the names speaker recognition gave this
+   * meeting: they start counting as references for the voice memory. */
+  confirmSpeakerNames: (entryId: string): Promise<void> =>
+    call<void>("confirm_speaker_names", { entryId }),
   /** Appends a block to a meeting's note.md (the "Add to meeting notes"
    * action under a chat answer). */
   appendToNote: (entryId: string, markdown: string): Promise<void> =>

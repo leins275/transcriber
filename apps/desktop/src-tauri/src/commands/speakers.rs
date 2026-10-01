@@ -19,12 +19,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::llm::{map_service_error, require_transcript};
-use super::meetings::{meeting_name_of, read_speaker_labels, resolve_entry, source_file_in};
+use super::meetings::{
+    confirm_speaker_labels, meeting_name_of, read_speaker_labels, resolve_entry, source_file_in,
+};
 use super::model::ModelDownloadStateView;
 use super::AppState;
 use crate::error::AppError;
 use crate::jobs::JobSnapshot;
-use crate::service::{DiarizationStatus, LlmJobKind, LlmSubmitRequest, ModelDownloadStatus};
+use crate::service::{
+    DiarizationStatus, LlmJobKind, LlmSubmitRequest, ModelDownloadStatus, VoiceStatus,
+};
 
 /// The IPC view of `GET /v1/diarization/status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -287,7 +291,56 @@ pub async fn diarize_labelled_meetings_handler(state: &AppState) -> Result<u32, 
     Ok(queued)
 }
 
+/// `voice_memory_status` -- one project's voice memory for the recording
+/// page's panel: who the project knows, which meetings that knowledge comes
+/// from, and which samples are set aside and why.
+///
+/// The service keeps a derived index of the meetings' labels and refreshes
+/// it on every read, so this call is also what makes the panel current --
+/// there is nothing for the app to invalidate.
+pub async fn voice_memory_status_handler(
+    state: &AppState,
+    project: String,
+) -> Result<VoiceStatus, AppError> {
+    let service = state.service.read().await.clone();
+    service
+        .voice_status(&project)
+        .await
+        .map_err(map_service_error)
+}
+
+/// `confirm_speaker_names` -- the operator vouches for the names speaker
+/// recognition gave this meeting: they become evidence for the project's
+/// voice memory, exactly as if typed by hand.
+pub async fn confirm_speaker_names_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<(), AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    tokio::task::spawn_blocking(move || confirm_speaker_labels(&meeting_dir))
+        .await
+        .map_err(|join_err| {
+            AppError::internal(format!("confirm_speaker_names task panicked: {join_err}"))
+        })?
+}
+
 // -- `#[tauri::command]` wrappers -------------------------------------------
+
+#[tauri::command]
+pub async fn confirm_speaker_names(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), AppError> {
+    confirm_speaker_names_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn voice_memory_status(
+    state: tauri::State<'_, AppState>,
+    project: String,
+) -> Result<VoiceStatus, AppError> {
+    voice_memory_status_handler(&state, project).await
+}
 
 #[tauri::command]
 pub async fn diarization_status(

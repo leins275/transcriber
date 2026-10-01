@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -39,6 +39,11 @@ DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
 # What the stock pipeline's models were trained on; the recording is
 # resampled to it on decode.
 _PIPELINE_SAMPLE_RATE = 16000
+
+# Per-span embedding: spans go through the embedding model in batches of
+# this many, sorted by length so a batch is cropped to its shortest member
+# and loses almost nothing.
+_SPAN_BATCH_SIZE = 32
 
 # Substrings of a raw exception message that indicate the model could not be
 # fetched/loaded (gated repo, missing token, no network, CUDA runtime), as
@@ -408,3 +413,92 @@ class PyannoteDiarizer:
         return DiarizationOutput(
             turns=turns, embeddings=_embeddings_by_label(annotation, embedding_rows)
         )
+
+    @staticmethod
+    def _embed_batch(embedder: Any, crops: list[Any]) -> Any:
+        """Run one batch of equal-length waveform crops through the
+        pipeline's embedding model; one row per crop. The torch seam of
+        `embed_spans`, kept apart so tests can exercise the batching without
+        torch."""
+        import torch  # type: ignore[import-not-found,unused-ignore]  # noqa: PLC0415
+
+        with torch.inference_mode():
+            return embedder(torch.stack(crops).unsqueeze(1))
+
+    def embed_spans(
+        self,
+        audio_path: Path,
+        spans: Sequence[tuple[float, float]],
+        *,
+        cancel: CancelToken,
+        max_span_sec: float,
+        on_progress: ProgressCallback | None = None,
+    ) -> list[list[float] | None]:
+        """One voice embedding per `(start, end)` span of the recording, in
+        the same space as the per-speaker embeddings `diarize` returns (it
+        is the pipeline's own embedding model), or `None` where a span is
+        too short for the model or came back non-finite.
+
+        This is what lets a single segment be compared with the project's
+        known voices instead of inheriting its cluster's name. Optional by
+        design: `jobs.py` looks the method up and an engine without it (or
+        a hand-picked pipeline without the stock embedding model) simply
+        gets no per-segment identification. A span longer than
+        `max_span_sec` is embedded from its middle.
+        """
+        results: list[list[float] | None] = [None] * len(spans)
+        if not spans:
+            return results
+        cancel.raise_if_cancelled()
+        pipeline = self._ensure_pipeline()
+        embedder = getattr(pipeline, "_embedding", None)
+        if embedder is None:
+            return results
+        audio = self._decode(audio_path)
+        cancel.raise_if_cancelled()
+
+        try:
+            waveform = audio["waveform"][0]
+            total = len(waveform)
+            rate = _PIPELINE_SAMPLE_RATE
+            max_samples = max(1, int(max_span_sec * rate))
+            min_samples = max(1, int(getattr(embedder, "min_num_samples", 1) or 1))
+
+            # (length, original position, first sample), shortest first.
+            windows: list[tuple[int, int, int]] = []
+            for position, (start_sec, end_sec) in enumerate(spans):
+                first = max(0, int(start_sec * rate))
+                last = min(total, int(end_sec * rate))
+                length = last - first
+                if length < min_samples:
+                    continue
+                if length > max_samples:
+                    first += (length - max_samples) // 2
+                    length = max_samples
+                windows.append((length, position, first))
+            windows.sort()
+
+            for offset in range(0, len(windows), _SPAN_BATCH_SIZE):
+                cancel.raise_if_cancelled()
+                batch = windows[offset : offset + _SPAN_BATCH_SIZE]
+                shortest = batch[0][0]
+                crops = []
+                for length, _position, first in batch:
+                    begin = first + (length - shortest) // 2
+                    crops.append(waveform[begin : begin + shortest])
+                rows = self._embed_batch(embedder, crops)
+                for (_length, position, _first), row in zip(batch, rows, strict=True):
+                    vector = [float(value) for value in row]
+                    if all(math.isfinite(value) for value in vector):
+                        results[position] = vector
+                if on_progress is not None:
+                    on_progress(
+                        "matching voices in segments",
+                        min(1.0, (offset + len(batch)) / len(windows)),
+                    )
+        except ServiceError:
+            raise
+        except Exception as exc:
+            kind = _classify_diarize_failure(exc)
+            raise ServiceError(kind, f"voice embedding failed on {audio_path.name}: {exc}") from exc
+        return results

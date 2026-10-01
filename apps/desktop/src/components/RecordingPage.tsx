@@ -5,6 +5,7 @@ import { NotePanel } from "./NotePanel";
 import { ProjectRosterPanel } from "./ProjectRosterPanel";
 import { SummaryPanel } from "./SummaryPanel";
 import { TranscriptViewer } from "./TranscriptViewer";
+import { VoiceMemoryPanel } from "./VoiceMemoryPanel";
 import { formatDuration } from "../lib/format";
 import { formatMeetingDate, parseEntryName } from "../lib/meetingName";
 import { EMPTY_ROSTER } from "../lib/roster";
@@ -19,7 +20,14 @@ import type {
   TranscriptLanguage,
   TranscriptView,
   VaultMeetingView,
+  VoiceStatusView,
 } from "../types";
+
+/** A meeting's folder name, the way the service names it in its lists. */
+function folderName(meetingDir: string): string {
+  const parts = meetingDir.split(/[\\/]/).filter((part) => part !== "");
+  return parts[parts.length - 1] ?? meetingDir;
+}
 
 export type RecordingPageProps = {
   entry: VaultMeetingView;
@@ -34,6 +42,12 @@ export type RecordingPageProps = {
   /** Persists the roster edited in the panel. The project is passed back
    * explicitly: the page owns which project the open meeting belongs to. */
   onSaveRoster?: (project: string, roster: ProjectRosterView) => Promise<void>;
+  /** Reads the voice memory as the given project sees it; the "Project
+   * speakers" panel shows it under the roster. Absent, the section is not
+   * rendered. */
+  onLoadVoiceMemory?: (project: string) => Promise<VoiceStatusView>;
+  /** Vouches for the names speaker recognition gave this meeting. */
+  onConfirmSpeakers?: (entryId: string) => Promise<void>;
   onBack: () => void;
   onReveal: (entryId: string) => void;
   onReadTranscript: (entryId: string) => Promise<TranscriptView>;
@@ -109,6 +123,8 @@ export function RecordingPage({
   projectSpeakers,
   projectRoster,
   onSaveRoster,
+  onLoadVoiceMemory,
+  onConfirmSpeakers,
   onBack,
   onReveal,
   onReadTranscript,
@@ -175,10 +191,19 @@ export function RecordingPage({
     };
   }, [entry.id, entry.has_transcript, entry.meeting_dir, onReadTranscript]);
 
+  // Bumped when this page changes what the voice memory is built from, so
+  // an open voice-memory panel reads again and shows the change picked up.
+  const [labelsSaved, setLabelsSaved] = useState(0);
   const saveSpeakers = useCallback(
-    (assignments: Record<string, string>) => onSaveSpeakers(entry.id, assignments),
+    async (assignments: Record<string, string>) => {
+      await onSaveSpeakers(entry.id, assignments);
+      setLabelsSaved((count) => count + 1);
+    },
     [entry.id, onSaveSpeakers],
   );
+  const confirmSpeakers = useCallback(async () => {
+    await onConfirmSpeakers?.(entry.id);
+  }, [entry.id, onConfirmSpeakers]);
 
   // The roster belongs to the project, not to the recording: an unfiled
   // meeting has none, and naming a speaker there stays free text however the
@@ -498,6 +523,18 @@ export function RecordingPage({
           siblingNames={projectSpeakers}
           onSave={saveRoster}
           onClose={() => setPanel("none")}
+        />
+      )}
+
+      {panel === "roster" && project !== null && onLoadVoiceMemory && (
+        <VoiceMemoryPanel
+          project={project}
+          currentMeeting={folderName(entry.meeting_dir)}
+          onLoad={onLoadVoiceMemory}
+          onConfirm={confirmSpeakers}
+          // A finished speaker pass changes the memory as surely as a saved
+          // label does: the job leaving the active list moves the token too.
+          reloadToken={labelsSaved * 2 + (diarizing ? 1 : 0)}
         />
       )}
 

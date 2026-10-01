@@ -588,7 +588,7 @@ async def test_a_diarized_transcription_prefills_speakers_from_a_named_sibling(
         json.dumps(
             {
                 "segments": [
-                    {"id": 0, "start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 1"}
+                    {"id": 0, "start": 0.0, "end": 30.0, "text": "hi", "speaker": "Speaker 1"}
                 ],
                 "diarization": {
                     "status": "succeeded",
@@ -628,7 +628,7 @@ def _write_named_sibling(root: Path) -> Path:
         json.dumps(
             {
                 "segments": [
-                    {"id": 0, "start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 1"}
+                    {"id": 0, "start": 0.0, "end": 30.0, "text": "hi", "speaker": "Speaker 1"}
                 ],
                 "diarization": {
                     "status": "succeeded",

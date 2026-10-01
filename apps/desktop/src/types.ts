@@ -278,6 +278,54 @@ export type IndexStatusView = {
   meetings: IndexMeetingView[];
 };
 
+/** Why the voice memory uses a voice sample (`ok`) or sets it aside:
+ * `unconfirmed` was named by the machine and never by the operator,
+ * `partial` carries its name on only a few of the voice's segments, `short`
+ * holds too little speech, `conflict` sounds like somebody else. */
+export type VoiceSampleQuality = "ok" | "unconfirmed" | "partial" | "short" | "conflict";
+
+/** One diarized voice of one meeting, as the voice memory judges it. */
+export type VoiceSampleView = {
+  label: string;
+  name: string;
+  speech_sec: number;
+  quality: VoiceSampleQuality;
+  conflicts_with: string | null;
+};
+
+/** One meeting's row of the voice-memory panel. */
+export type VoiceMeetingView = {
+  name: string;
+  state: "named" | "unnamed" | "no_voices" | "no_transcript";
+  scanned_at: number | null;
+  voices: VoiceSampleView[];
+};
+
+/** One person a meeting of the project can be named for. */
+export type VoiceSummaryView = {
+  name: string;
+  /** Samples recognition uses, across the whole vault. */
+  samples: number;
+  /** How many of them come from this project's own meetings. */
+  here: number;
+  other_projects: string[];
+  speech_sec: number;
+  set_aside: number;
+};
+
+/** The voice memory as one project sees it (`voice_memory_status`). */
+export type VoiceStatusView = {
+  project: string;
+  /** The project's roster is strict: `voices` is that roster, nothing else. */
+  roster_only: boolean;
+  updated_at: number | null;
+  /** The project's meetings this very read had to re-read. */
+  rescanned: string[];
+  rescanned_elsewhere: number;
+  voices: VoiceSummaryView[];
+  meetings: VoiceMeetingView[];
+};
+
 /** A meeting's requested new identity. `project: null` files it under
  * `unsorted/`; the Rust side validates all four parts against exactly the
  * rules ingest applies to a filename. */

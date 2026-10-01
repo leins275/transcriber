@@ -18,8 +18,9 @@
  *      (`roster` mode) or free text with the sibling-scan names as datalist
  *      hints (`open` mode, and any project whose roster has not loaded).
  *
- * The roster holds names only. It is not a voice store: cross-meeting speaker
- * recognition remains the on-demand sibling scan in the service.
+ * The roster holds names only. It is not a voice store: the voice memory is
+ * the meetings themselves, read by the service -- which also reads this
+ * roster's names to bound whom a strict project may be named for.
  */
 import type { ProjectRosterView } from "../types";
 

@@ -270,8 +270,8 @@ through the rest, top to bottom; every step is skipped once done:
    and cancellable like the other downloads.
 2. **Identify speakers in new recordings.** The `diarize` switch: every
    new transcription runs the pass, cuts segments at changes of voice, and
-   pre-names any voice already named in a sibling meeting of the same
-   project.
+   pre-names any voice you have already named in another meeting -- of any
+   project (see "Voice memory" below).
 3. **Identify speakers in labelled meetings.** One-shot backfill: queues a
    `diarize` job for every meeting you labelled by hand before this was
    set up (oldest first), attaching speaker labels and voice prints to
@@ -282,6 +282,33 @@ through the rest, top to bottom; every step is skipped once done:
 
 Per meeting, the overflow menu's **Identify speakers** runs the same job on
 demand (disabled, pointing here, until step 1 is done).
+
+**Voice memory.** Returning voices are recognized from the names you gave
+by hand. There is nothing to maintain: the memory is read from the meetings
+themselves, and every read re-reads whatever changed since the last one.
+Open any meeting in a project and click **Project speakers**; under the
+roster, the **Voice memory** section shows:
+
+- a status line saying whether that look had to re-read anything ("Just
+  re-read 2 changed meetings", or "Up to date");
+- who a meeting of this project can be named for, with how many voice
+  samples stand behind each name, how much speech, and which other projects
+  they come from -- a person named in one project is recognized in all of
+  them;
+- under "What this project's meetings contribute", each meeting and, when
+  one of its voices is not used, why: *named automatically, not confirmed*
+  (the app never learns from its own guesses), *named on only part of this
+  voice* (a few corrected lines do not name a whole voice), *too little
+  speech* (under 10 seconds), or *sounds like <someone>* (the label
+  contradicts that person's other samples -- usually a wrong name, worth a
+  look).
+
+Names the app gave by itself become references once you either change them
+or press **Confirm these names** in that section while the meeting is open.
+
+A name the project has not met before (not in its own meetings, not on its
+roster) is only given on a strong match over a voice with real speech in
+it; a project whose roster is strict is only ever given the roster's names.
 
 **Project speaker roster.** Independent of the above -- it needs no
 download and no GPU. Naming a voice normally offers a free-text box, which

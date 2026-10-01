@@ -29,13 +29,14 @@ def _write_meeting(
 ) -> None:
     """A minimal diarized meeting: segments 0..n with `speakers` labels,
     `embeddings` under diarization, and optional speakers.json `names`
-    (segment id -> operator name)."""
+    (segment id -> operator name). Every segment is 20 s long, so a named
+    voice clears the minimum speech a reference needs."""
     meeting_dir.mkdir(parents=True, exist_ok=True)
     segments = [
         {
             "id": seg_id,
-            "start": float(seg_id),
-            "end": float(seg_id) + 1.0,
+            "start": float(seg_id) * 20.0,
+            "end": float(seg_id) * 20.0 + 20.0,
             "text": "hi",
             "speaker": label,
         }
@@ -120,7 +121,7 @@ def test_auto_assign_fills_only_unnamed_segments(tmp_path: Path) -> None:
         threshold=0.5,
     )
 
-    assert added == 1  # segment 0 only: 1 was operator-named, 2 is a stranger
+    assert added.named == 1  # segment 0 only: 1 was operator-named, 2 is a stranger
     assert _assignments(new_meeting) == {"0": "Алиса", "1": "Кто-то другой"}
 
 
@@ -133,7 +134,7 @@ def test_auto_assign_without_speaker_memory_writes_nothing(tmp_path: Path) -> No
         new_meeting, {"Speaker 1": ALICE}, [{"id": 0, "speaker": "Speaker 1"}], threshold=0.5
     )
 
-    assert added == 0
+    assert added.named == 0
     assert not (new_meeting / "speakers.json").exists()
 
 
@@ -152,7 +153,7 @@ def test_a_threshold_above_one_disables_auto_naming(tmp_path: Path) -> None:
         new_meeting, {"Speaker 1": ALICE}, [{"id": 0, "speaker": "Speaker 1"}], threshold=1.5
     )
 
-    assert added == 0
+    assert added.named == 0
     assert not (new_meeting / "speakers.json").exists()
 
 
@@ -207,7 +208,7 @@ def test_auto_assign_replaces_a_seeded_generic_label_but_not_a_real_name(tmp_pat
 
     added = auto_assign_speakers(new_meeting, {"Speaker 1": ALICE}, segments, threshold=0.5)
 
-    assert added == 1  # segment 0 only
+    assert added.named == 1  # segment 0 only
     assert _assignments(new_meeting) == {
         "0": "Алиса",
         "1": "Кто-то другой",

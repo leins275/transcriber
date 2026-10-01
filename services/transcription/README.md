@@ -76,7 +76,7 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `diarization_model` | `TRANSCRIBER_DIARIZATION_MODEL` | `pyannote/speaker-diarization-3.1` |
 | `diarization_model_path` | `TRANSCRIBER_DIARIZATION_MODEL_PATH` | none (load from the HF hub/cache) |
 | `diarization_min_speakers` / `diarization_max_speakers` | `TRANSCRIBER_DIARIZATION_MIN_SPEAKERS` / `..._MAX_SPEAKERS` | none (pyannote estimates); overridden for one job by `min_speakers` / `max_speakers` in `POST /v1/jobs` |
-| `speaker_match_threshold` | `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` | `0.5` -- cosine floor for pre-naming a diarized voice already named in a sibling meeting; above `1.0` disables auto-naming; overridden for one job by `speaker_match_threshold` in `POST /v1/jobs` |
+| `speaker_match_threshold` | `TRANSCRIBER_SPEAKER_MATCH_THRESHOLD` | `0.5` -- cosine floor for pre-naming a diarized voice already named in another meeting of the vault (see "Voice memory"); above `1.0` disables auto-naming; overridden for one job by `speaker_match_threshold` in `POST /v1/jobs` |
 | `hf_token` | `TRANSCRIBER_HF_TOKEN` (else `HF_TOKEN`/`HUGGING_FACE_HUB_TOKEN`) | none -- env only, never a CLI flag (FR-9) |
 | `llm_model` | `TRANSCRIBER_LLM_MODEL` | the curated-catalog default (`qwen3.5-9b`, the only entry); a config still naming the retired `qwen3.6-35b-a3b` migrates to the default |
 | `llm_model_path` | `TRANSCRIBER_LLM_MODEL_PATH` | `<app_dir>/models/llm` |
@@ -187,8 +187,8 @@ is what makes that legible; a weighted single bar would only be a guess.
 | `job_type` | phases, in order (`progress`) |
 |---|---|
 | `transcribe` | `preparing` (`0.0` — model load, decode setup, language detection) → *no phase*, whisper's own fraction |
-| `transcribe` with `diarize: true` | the above, then the diarizer's phases relayed verbatim, then `naming speakers` (`null`, cross-meeting auto-naming) |
-| `diarize` | `reading transcript` (`null`) → `loading speaker model` (`null`) → `decoding audio` (`null`) → `segmenting speech` / `counting speakers` / `extracting voice embeddings` / `assigning speakers` (pyannote's `completed / total` where the step reports counts, else `null`) → `assigning speakers` while labels are written |
+| `transcribe` with `diarize: true` | the above, then the diarizer's phases relayed verbatim, then `reading voice memory` (`null`) → `matching voices in segments` (the fraction of segments embedded; skipped when the memory knows nobody) → `naming speakers` (`null`) |
+| `diarize` | `reading transcript` (`null`) → `loading speaker model` (`null`) → `decoding audio` (`null`) → `segmenting speech` / `counting speakers` / `extracting voice embeddings` / `assigning speakers` (pyannote's `completed / total` where the step reports counts, else `null`) → `assigning speakers` while labels are written → `reading voice memory` → `matching voices in segments` → `naming speakers`, as on a diarized `transcribe` |
 | `summarize` | `reading transcript` (`null`) → `writing summary · N tokens`, or `summarizing part k/n · N tokens` for a map-reduced transcript (`null` throughout — the token count is a length, not a percentage) |
 | `export` | `writing export.md` (`null`) → `rendering PDF` (`null`) |
 | `compress` | `compressing video` (the decoded fraction of the recording; `null` while the container's duration is unknown) |
@@ -357,8 +357,10 @@ The desktop app fills them from the meeting's **project speaker roster**
 names has every transcribe, re-transcribe and `diarize` submission for its
 meetings carry `max_speakers: N` together with the app's own lower matching
 threshold (`speaker_match_threshold_strict`, `docs/config-contract.md`).
-The service stays roster-agnostic -- it receives numbers, never names, and
-never learns why a caller capped the speakers or relaxed the matching.
+Those two numbers are all the app sends. The roster's *names* the service
+reads itself, from `<PROJECT>/roster.json`, for one purpose only: the voice
+memory spans projects, and a strict roster is what keeps a project from
+being offered every voice the vault has ever heard (see "Voice memory").
 
 ### `diarize`: speakers for an already-transcribed meeting
 
@@ -370,7 +372,9 @@ every segment id -- the operator's `speakers.json` is keyed by them and is
 never touched (it already outranks the labels wherever they are read). This
 is the backfill behind cross-meeting recognition: a meeting labelled by
 hand while it had no diarization becomes voice memory for every later
-recording in its project. Unlike the transcribe path, a failing pass fails
+recording in the vault. Its result manifest reports what the naming pass
+did: `auto_named_segments`, `segments_named_by_own_voice` and
+`recognized_names`. Unlike the transcribe path, a failing pass fails
 this job (identification is its whole point); a meeting without a
 recording or a transcript is refused up front. It takes the same per-job
 `min_speakers` / `max_speakers` / `speaker_match_threshold` tuning as a
@@ -385,21 +389,86 @@ the job as usual.
 
 When the pipeline also yields per-speaker voice embeddings, they are
 stored in the `diarization` block (`speaker_embeddings`, keyed by display
-label) and immediately put to work: **cross-meeting speaker recognition**
-compares each new voice against voices the operator has already named in
-sibling meetings (their `speakers.json` joined to their stored
-embeddings) and pre-fills the new meeting's `speakers.json` on a match at
-or above `speaker_match_threshold`. Additive only -- an assignment the
-operator made by hand is never overwritten -- and best-effort: any failure
-is a job warning, never a failed job.
+label) and immediately put to work by the voice memory below.
 
-A generic `Speaker N` assignment is not a name and contributes no
-voiceprint. The app's transcript viewer saves the whole speaker map, seeded
-labels included, so a sibling meeting's `speakers.json` can carry
-`"Speaker 2"` for segments nobody ever named; treating that as a name would
-send a placeholder travelling across the project as if it were a person, so
-`speaker_matching` skips it (the UI mirrors the same form in
-`apps/desktop/src/lib/turns.ts`).
+### Voice memory: recognizing returning voices
+
+**Cross-meeting speaker recognition** compares each new voice against
+voices the operator has already named (every meeting's `speakers.json`
+joined to its stored embeddings) and pre-fills the new meeting's
+`speakers.json` on a match at or above `speaker_match_threshold`. Additive
+only -- an assignment the operator made by hand is never overwritten -- and
+best-effort: any failure is a job warning, never a failed job.
+
+**The memory is the meetings.** Nothing else is the source of truth; what
+follows is how the meetings are read.
+
+*What counts as a reference* (`speaker_matching.assess_exemplars`). One
+sample per diarized voice per meeting, named by majority vote over its
+segments. A sample is set aside, with the reason reported, when it is:
+
+| quality | meaning |
+|---|---|
+| `unconfirmed` | most of its name's votes were written by this service, not by the operator -- the machine does not learn from its own guesses |
+| `partial` | the name covers no more than half of the voice's segments: a few corrected lines, not a named voice |
+| `short` | under 10 s of speech: an embedding of a scrap |
+| `conflict` | it sounds like another person's usual voice (median similarity 0.8 or more, and 0.1 above its own name's) -- a wrong label, or two names for one person |
+
+A generic `Speaker N` assignment is not a name and casts no vote (the app's
+transcript viewer saves the whole speaker map, seeded labels included; the
+UI mirrors the same form in `apps/desktop/src/lib/turns.ts`).
+
+*Provenance.* Every name this service writes is also recorded in
+`speakers.json` under `auto` (`segment id -> name`). A segment is
+machine-named exactly while `auto[id] == assignments[id]`; the app carries
+the map over when it saves, so a name the operator changes becomes theirs
+with no diffing, and `confirm_speaker_names` in the app drops the map to
+vouch for a whole meeting. A file without the key is all the operator's. A
+later pass may revise a machine-given name; it never touches the
+operator's.
+
+*Scope: the whole vault.* A person is the same person in every project, so
+a name's samples from every project stand behind it. Per project, a name is
+**at home** when the project's own meetings hold a usable sample of it or
+its `roster.json` lists it (either mode); it is matched at the job's
+threshold. Any other name is a **newcomer** and needs a similarity of 0.8
+on a voice with at least 10 s of speech -- the scraps a diarizer leaves
+behind sound alike in every recording and would otherwise borrow names
+across projects. A project whose roster is in `roster` mode is offered the
+roster's names and nothing else, in the roster's spelling.
+
+*Two layers.* Each diarized voice is matched to at most one name. Then,
+when the engine can embed spans (`PyannoteDiarizer.embed_spans`, the
+pipeline's own embedding model), every nameable segment of 2 s or more is
+embedded on its own and named for the person it sounds like when its best
+name beats the runner-up by 0.1 and at least three segments of the same
+voice agree -- which is what repairs a voice the diarizer merged two people
+into. A failure of this pass is a warning; the per-voice naming still
+happens.
+
+*The index.* `<vault_root>/.transcriber/voices.sqlite3` (next to the search
+index; `voice_index.py`) caches the samples so that naming a meeting does
+not re-parse every transcript. It invalidates itself: every read compares
+each meeting's `transcript.json` and `speakers.json` (size and mtime) with
+what it stored, re-reads the meetings that changed and forgets the ones
+that are gone. Nothing notifies it and there is nothing to rebuild; a
+damaged or foreign file is deleted and refilled, and when it cannot be
+opened at all the meetings are read directly.
+
+`GET /v1/voices/status?project=` answers the memory as one project sees it
+-- `voices` (per name: `samples`, how many of them `here`,
+`other_projects`, `speech_sec`, `set_aside`), `meetings` (per meeting of
+the project: `state` `named | unnamed | no_voices | no_transcript` and each
+voice's `quality`), `roster_only`, and `rescanned` / `rescanned_elsewhere`:
+the meetings this very request had to re-read. It runs no model and answers
+mid-job.
+
+Measured on the operator's vault (29 hand-labelled diarized meetings in
+four projects, each named from the others, compared segment by segment with
+the operator's labels): the previous per-project scan agreed on 79% of
+segments; these rules agree on 88% with the same number of wrong names. The
+largest single effect is discarding `short` samples; sharing voices across
+projects is the second.
 
 ### Model weights and CUDA runtime are prerequisites, not this service's job
 

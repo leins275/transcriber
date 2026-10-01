@@ -121,6 +121,16 @@ pub trait TranscriptionService: Send + Sync {
         })
     }
 
+    /// `GET /v1/voices/status?project=` -- the project's voice memory: who
+    /// it knows, from which meetings, and which samples it sets aside.
+    /// Reading is also what refreshes the service's derived index, so there
+    /// is no separate "rebuild" call. Default: unsupported (the house rule).
+    async fn voice_status(&self, _project: &str) -> Result<VoiceStatus, ServiceError> {
+        Err(ServiceError::Unavailable {
+            detail: "voice memory status is not supported by this service".to_string(),
+        })
+    }
+
     /// `POST /v1/chat` (SSE): streams the local LLM's answer over the
     /// project's materials. `on_event` receives each parsed event on the
     /// runtime's threads until the stream ends, `Done`/`Error` arrives, or
@@ -406,6 +416,80 @@ pub struct IndexStatus {
     pub indexed_count: u64,
     pub total_count: u64,
     pub meetings: Vec<IndexMeeting>,
+}
+
+/// One diarized voice of one meeting, as the voice memory judges it.
+///
+/// The four voice-memory types below are the wire shape, the domain value
+/// and the view at once: the panel shows exactly what the service answers,
+/// nothing in it is a path or an id, and a third copy of four nested
+/// structs would only be a place for the three to drift apart.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VoiceSample {
+    /// The diarization label inside its meeting (`Speaker 2`).
+    pub label: String,
+    pub name: String,
+    pub speech_sec: f64,
+    /// `"ok"` is used for recognition; `"unconfirmed" | "partial" | "short"
+    /// | "conflict"` are set aside. Passed through verbatim.
+    pub quality: String,
+    /// For a conflict: whose voice this sample sounds like.
+    #[serde(default)]
+    pub conflicts_with: Option<String>,
+}
+
+/// One meeting's row of `GET /v1/voices/status`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VoiceMeeting {
+    pub name: String,
+    /// `"named" | "unnamed" | "no_voices" | "no_transcript"`, verbatim.
+    pub state: String,
+    /// Unix seconds this meeting was last read into the index.
+    #[serde(default)]
+    pub scanned_at: Option<i64>,
+    #[serde(default)]
+    pub voices: Vec<VoiceSample>,
+}
+
+/// One person of `GET /v1/voices/status` a meeting of the project can be
+/// named for.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VoiceSummary {
+    pub name: String,
+    /// Samples recognition uses, across the whole vault.
+    pub samples: u64,
+    /// How many of them come from this project's own meetings.
+    #[serde(default)]
+    pub here: u64,
+    /// The other projects the rest come from.
+    #[serde(default)]
+    pub other_projects: Vec<String>,
+    pub speech_sec: f64,
+    /// Samples carrying this name that are set aside.
+    pub set_aside: u64,
+}
+
+/// `GET /v1/voices/status?project=` -- one project's voice memory.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VoiceStatus {
+    pub project: String,
+    /// The project's roster is strict: `voices` is that roster and nothing
+    /// else.
+    #[serde(default)]
+    pub roster_only: bool,
+    /// Unix seconds of the most recent read of one of the project's
+    /// meetings, if any.
+    #[serde(default)]
+    pub updated_at: Option<i64>,
+    /// The project's meetings this very request re-read because they had
+    /// changed.
+    #[serde(default)]
+    pub rescanned: Vec<String>,
+    /// How many meetings of other projects it re-read as well.
+    #[serde(default)]
+    pub rescanned_elsewhere: u64,
+    pub voices: Vec<VoiceSummary>,
+    pub meetings: Vec<VoiceMeeting>,
 }
 
 /// One turn of chat history on its way to `POST /v1/chat`.

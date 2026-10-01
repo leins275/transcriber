@@ -466,6 +466,27 @@ struct SpeakersFile {
     schema_version: u32,
     #[serde(default)]
     assignments: HashMap<String, String>,
+    /// `segment id -> name` for the names the service's speaker recognition
+    /// wrote (`speaker_matching.py`). The app never reads meaning into it;
+    /// it only carries it across a save -- see [`write_speaker_labels`].
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    auto: HashMap<String, String>,
+}
+
+/// The `auto` map of the labels file as it is on disk, empty when the file
+/// is absent, oversized or malformed (the same degradation as
+/// [`read_speaker_labels`]).
+fn read_auto_names(meeting_dir: &Path) -> HashMap<String, String> {
+    let path = meeting_dir.join(SPEAKERS_FILE_NAME);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_SPEAKERS_BYTES => {}
+        _ => return HashMap::new(),
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<SpeakersFile>(&body).ok())
+        .map(|parsed| parsed.auto)
+        .unwrap_or_default()
 }
 
 /// Reads a meeting's speaker labels, or an empty set when the file is
@@ -506,10 +527,42 @@ pub(super) fn read_speaker_labels(meeting_dir: &Path) -> SpeakerLabels {
 /// then a rename, so a reader never observes a half-written map and a
 /// failure mid-write leaves the previous labels intact. Mirrors F2's own
 /// `transcript.write_atomic`.
+///
+/// The file's `auto` map is carried over, minus the entries the new labels
+/// contradict. It records which names the service's speaker recognition
+/// wrote, and a segment counts as machine-named exactly while its name
+/// still equals its `auto` entry. The viewer saves the whole label map on
+/// any edit, so this is what tells the names the operator typed or changed
+/// (evidence for the project's voice memory) from the guesses they merely
+/// left in place (not evidence): the machine must not learn from itself.
 fn write_speaker_labels(meeting_dir: &Path, labels: &SpeakerLabels) -> Result<(), AppError> {
+    let mut auto = read_auto_names(meeting_dir);
+    auto.retain(|segment_id, name| labels.assignments.get(segment_id) == Some(name));
+    write_speakers_file(meeting_dir, labels, auto)
+}
+
+/// Makes every name in the meeting the operator's: drops the `auto` map, so
+/// the names the service's speaker recognition wrote stop being guesses and
+/// start counting as evidence for the project's voice memory. The labels
+/// themselves are untouched; a meeting with nothing machine-made is left
+/// exactly as it is (not even rewritten).
+pub(super) fn confirm_speaker_labels(meeting_dir: &Path) -> Result<(), AppError> {
+    if read_auto_names(meeting_dir).is_empty() {
+        return Ok(());
+    }
+    let labels = read_speaker_labels(meeting_dir);
+    write_speakers_file(meeting_dir, &labels, HashMap::new())
+}
+
+fn write_speakers_file(
+    meeting_dir: &Path,
+    labels: &SpeakerLabels,
+    auto: HashMap<String, String>,
+) -> Result<(), AppError> {
     let file = SpeakersFile {
         schema_version: SPEAKERS_SCHEMA_VERSION,
         assignments: labels.assignments.clone(),
+        auto,
     };
     let body = serde_json::to_string_pretty(&file)
         .map_err(|err| AppError::internal(format!("could not serialize speaker labels: {err}")))?;
@@ -1115,6 +1168,99 @@ mod tests {
         write_speaker_labels(dir.path(), &labels).expect("write labels");
 
         assert_eq!(read_speaker_labels(dir.path()), labels);
+    }
+
+    #[test]
+    fn a_save_keeps_the_machine_made_marks_of_names_the_operator_left_alone() {
+        // The service named segments 0..2; the operator then changes one of
+        // them and the viewer saves the whole map. The two names left as
+        // they were stay marked as machine-made, the changed one becomes
+        // the operator's, and a segment dropped from the map loses its mark.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("speakers.json"),
+            br#"{"schema_version":1,
+                 "assignments":{"0":"Anna","1":"Anna","2":"Anna","3":"Typed"},
+                 "auto":{"0":"Anna","1":"Anna","2":"Anna"}}"#,
+        )
+        .expect("write sidecar");
+
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([
+                    ("0".to_string(), "Anna".to_string()),
+                    ("1".to_string(), "Boris".to_string()),
+                    ("3".to_string(), "Typed".to_string()),
+                ]),
+            },
+        )
+        .expect("write labels");
+
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("speakers.json")).expect("read sidecar"),
+        )
+        .expect("the sidecar is JSON");
+        assert_eq!(written["auto"], serde_json::json!({"0": "Anna"}));
+        assert_eq!(
+            written["assignments"],
+            serde_json::json!({"0": "Anna", "1": "Boris", "3": "Typed"})
+        );
+    }
+
+    #[test]
+    fn confirming_makes_every_name_the_operators_and_keeps_the_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("speakers.json"),
+            br#"{"schema_version":1,
+                 "assignments":{"0":"Anna","1":"Boris"},
+                 "auto":{"0":"Anna"}}"#,
+        )
+        .expect("write sidecar");
+
+        confirm_speaker_labels(dir.path()).expect("confirm");
+
+        let written: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join("speakers.json")).expect("read sidecar"),
+        )
+        .expect("the sidecar is JSON");
+        assert!(written.get("auto").is_none());
+        assert_eq!(
+            written["assignments"],
+            serde_json::json!({"0": "Anna", "1": "Boris"})
+        );
+    }
+
+    #[test]
+    fn confirming_a_meeting_with_nothing_machine_made_touches_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        confirm_speaker_labels(dir.path()).expect("confirm without a file");
+        assert!(!dir.path().join("speakers.json").exists());
+
+        let body = br#"{"schema_version":1,"assignments":{"0":"Anna"}}"#;
+        std::fs::write(dir.path().join("speakers.json"), body).expect("write sidecar");
+        confirm_speaker_labels(dir.path()).expect("confirm");
+        assert_eq!(
+            std::fs::read(dir.path().join("speakers.json")).expect("read"),
+            body
+        );
+    }
+
+    #[test]
+    fn a_sidecar_without_machine_made_names_is_written_without_the_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        write_speaker_labels(
+            dir.path(),
+            &SpeakerLabels {
+                assignments: HashMap::from([("0".to_string(), "Maxim".to_string())]),
+            },
+        )
+        .expect("write labels");
+
+        let body = std::fs::read_to_string(dir.path().join("speakers.json")).expect("read");
+        assert!(!body.contains("\"auto\""), "no empty auto map: {body}");
     }
 
     #[test]

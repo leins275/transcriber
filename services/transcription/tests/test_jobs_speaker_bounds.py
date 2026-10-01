@@ -176,7 +176,7 @@ def _sibling_naming_a_voice(project: Path, *, name: str, embedding: list[float])
         json.dumps(
             {
                 "segments": [
-                    {"id": 0, "start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 2"}
+                    {"id": 0, "start": 0.0, "end": 30.0, "text": "hi", "speaker": "Speaker 2"}
                 ],
                 "diarization": {
                     "status": "succeeded",

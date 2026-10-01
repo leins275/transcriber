@@ -4,8 +4,10 @@
 //! free-text speaker box the app has always had, `roster` turns the name
 //! controls into a pick-list over the listed names. It carries no voice
 //! data and no segment ids, so it is emphatically not the per-project
-//! voice store the project rejected -- recognition stays the sibling scan
-//! in the service.
+//! voice store the project rejected -- the voice memory stays the meetings
+//! themselves, read by the service. The service does read this file's
+//! names: the memory spans projects, and a strict roster is what bounds
+//! which of the vault's voices this project is offered.
 //!
 //! Deliberately a *file* at project level, beside the reserved `chats/`
 //! directory: `vault::list_meetings`, the Python indexer and the MCP

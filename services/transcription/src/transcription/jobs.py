@@ -48,7 +48,14 @@ from transcription.providers.base import CancelToken, ProviderInfo, Transcriptio
 from transcription.schema import DiarizationInfo, Segment, TranscriptDoc
 from transcription.search.index_db import IndexDb
 from transcription.search.indexer import index_vault
-from transcription.speaker_matching import auto_assign_speakers
+from transcription.speaker_matching import (
+    SEGMENT_MAX_SEC,
+    NamingResult,
+    auto_assign_speakers,
+    collect_known_voices,
+    segment_spans,
+)
+from transcription.voice_index import VoiceIndex, voice_index_path
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
@@ -129,6 +136,7 @@ class JobManager:
         llm_factory: Callable[[Config], LlmProvider] | None = None,
         embedder_factory: Callable[[Config], EmbeddingProvider] | None = None,
         index_db_factory: Callable[[Config], IndexDb] | None = None,
+        voice_index_factory: Callable[[Config], VoiceIndex] | None = None,
     ) -> None:
         self._config = config
         self._ledger = ledger
@@ -168,6 +176,16 @@ class JobManager:
                 )
             )
         )
+        # The voice memory's derived index, cached the same way. Unlike the
+        # search index it is optional at every call site: speaker naming
+        # reads the meetings directly when it cannot be opened.
+        self._voice_index: VoiceIndex | None = None
+        self._voice_index_failed = False
+        self._voice_index_factory: Callable[[Config], VoiceIndex] = (
+            voice_index_factory
+            if voice_index_factory is not None
+            else (lambda config: VoiceIndex(voice_index_path(config.index_db_path)))
+        )
         # Guards `self._providers` against two threads racing to construct
         # the same not-yet-cached provider (E15: resolution now happens off
         # the event loop, on arbitrary `asyncio.to_thread` worker threads).
@@ -193,6 +211,9 @@ class JobManager:
         if self._index_db is not None:
             self._index_db.close()
             self._index_db = None
+        if self._voice_index is not None:
+            self._voice_index.close()
+            self._voice_index = None
 
     def _get_provider(self, name: str) -> TranscriptionProvider:
         """Resolve (and cache) the provider instance for `name`.
@@ -251,6 +272,29 @@ class JobManager:
             if self._index_db is None:
                 self._index_db = self._index_db_factory(self._config)
             return self._index_db
+
+    def voice_index(self) -> VoiceIndex | None:
+        """Resolve (and cache) the voice index, or `None` when it cannot be
+        opened (a read-only vault, a locked file): the voice memory is then
+        read straight from the meetings, which is slower and otherwise the
+        same."""
+        with self._provider_lock:
+            if self._voice_index_failed:
+                return None
+            if self._voice_index is None:
+                try:
+                    self._voice_index = self._voice_index_factory(self._config)
+                except Exception:  # noqa: BLE001 - the index is a cache, never a requirement
+                    _logger.warning(
+                        "voice index could not be opened",
+                        exc_info=True,
+                        extra={"event": "voice_index_open_failed"},
+                    )
+                    # Decided once per process: retrying (and logging) on
+                    # every job would only repeat the same failure.
+                    self._voice_index_failed = True
+                    return None
+            return self._voice_index
 
     def llm_budget_tokens(self) -> int:
         """The chat/summarize input budget (`_llm_budget_tokens`, public)."""
@@ -684,6 +728,65 @@ class JobManager:
             return job.speaker_match_threshold
         return self._config.speaker_match_threshold
 
+    def _name_speakers_sync(
+        self,
+        job: JobState,
+        meeting_dir: Path,
+        source: Path,
+        embeddings: dict[str, list[float]],
+        segments: list[dict[str, Any]],
+    ) -> NamingResult:
+        """Name a freshly diarized meeting's voices from the voice
+        memory (runs on the serial executor: the per-segment pass is GPU
+        inference).
+
+        The memory is read first, because a memory that knows nobody makes
+        the per-segment pass pointless. With a memory and an engine that can
+        embed spans, every nameable segment long enough to carry a voice is
+        embedded on its own, which lets `auto_assign_speakers` name a
+        segment for the person it sounds like rather than for its cluster.
+        That pass is a refinement: any failure in it is a warning and the
+        per-cluster naming still happens. Only a cancellation propagates.
+        """
+        _set_phase(job, "reading voice memory", None)
+        known = collect_known_voices(meeting_dir, memory=self.voice_index())
+        if not known:
+            return NamingResult()
+
+        segment_embeddings: dict[str, list[float]] = {}
+        embed_spans = getattr(self._diarizer, "embed_spans", None)
+        if callable(embed_spans):
+            spans = segment_spans(segments, meeting_dir)
+            try:
+                vectors = embed_spans(
+                    source,
+                    [(start, end) for _segment_id, start, end in spans],
+                    cancel=job.cancel_token,
+                    max_span_sec=SEGMENT_MAX_SEC,
+                    on_progress=lambda phase, fraction: _set_phase(job, phase, fraction),
+                )
+                segment_embeddings = {
+                    segment_id: vector
+                    for (segment_id, _start, _end), vector in zip(spans, vectors, strict=True)
+                    if vector is not None
+                }
+            except ServiceError as exc:
+                if exc.kind is ErrorKind.CANCELLED:
+                    raise
+                job.warnings.append(f"per-segment voice matching skipped: {redact(exc.message)}")
+            except Exception as exc:  # noqa: BLE001 - a refinement, never job-fatal
+                job.warnings.append(f"per-segment voice matching skipped: {redact(str(exc))}")
+
+        _set_phase(job, "naming speakers", None)
+        return auto_assign_speakers(
+            meeting_dir,
+            embeddings,
+            segments,
+            threshold=self._match_threshold(job),
+            known=known,
+            segment_embeddings=segment_embeddings,
+        )
+
     async def _diarize_segments(
         self,
         job: JobState,
@@ -816,15 +919,22 @@ class JobManager:
             # (additive only -- operator assignments are never touched).
             # Best-effort like diarization itself: a failure is a warning.
             if diarization_info is not None and diarization_info.speaker_embeddings:
-                _set_phase(job, "naming speakers", None)
                 try:
-                    await asyncio.to_thread(
-                        auto_assign_speakers,
-                        Path(job.output_path),
-                        diarization_info.speaker_embeddings,
-                        segment_dicts,
-                        threshold=self._match_threshold(job),
+                    await loop.run_in_executor(
+                        self._executor,
+                        functools.partial(
+                            self._name_speakers_sync,
+                            job,
+                            Path(job.output_path),
+                            Path(job.source_path),
+                            diarization_info.speaker_embeddings,
+                            segment_dicts,
+                        ),
                     )
+                except ServiceError as exc:
+                    if exc.kind is ErrorKind.CANCELLED:
+                        raise
+                    job.warnings.append(f"speaker auto-naming failed: {redact(exc.message)}")
                 except Exception as exc:  # noqa: BLE001 - never job-fatal
                     job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
 
@@ -1051,15 +1161,16 @@ class JobManager:
         )
         transcript.write_atomic(doc, meeting_dir)
 
-        auto_named = 0
+        naming = NamingResult()
         if info.speaker_embeddings:
             try:
-                auto_named = auto_assign_speakers(
-                    meeting_dir,
-                    info.speaker_embeddings,
-                    labelled,
-                    threshold=self._match_threshold(job),
+                naming = self._name_speakers_sync(
+                    job, meeting_dir, source, info.speaker_embeddings, labelled
                 )
+            except ServiceError as exc:
+                if exc.kind is ErrorKind.CANCELLED:
+                    raise
+                job.warnings.append(f"speaker auto-naming failed: {redact(exc.message)}")
             except Exception as exc:  # noqa: BLE001 - never job-fatal
                 job.warnings.append(f"speaker auto-naming failed: {redact(str(exc))}")
 
@@ -1068,7 +1179,9 @@ class JobManager:
             "speaker_count": info.speaker_count,
             "segments": len(labelled),
             "embeddings": len(info.speaker_embeddings or {}),
-            "auto_named_segments": auto_named,
+            "auto_named_segments": naming.named,
+            "segments_named_by_own_voice": naming.by_segment_voice,
+            "recognized_names": list(naming.names),
         }
 
     def _load_transcript_lines(self, meeting_dir: Path) -> tuple[list[str], dict[str, Any]]:

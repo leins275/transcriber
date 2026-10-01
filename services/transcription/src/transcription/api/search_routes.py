@@ -38,11 +38,13 @@ from transcription.schema import (
     SearchRequest,
     SearchResponse,
     SearchResultModel,
+    VoiceStatusResponse,
 )
 from transcription.search.chat import RetrievedChunk, build_chat_messages
 from transcription.search.dates import extract_query_dates, normalize_date_param
 from transcription.search.service import SearchResult, SearchService
 from transcription.search.speakers import extract_query_speakers, normalize_speaker_param
+from transcription.voice_index import voice_memory_status
 
 _logger = logging.getLogger("transcription")
 
@@ -145,6 +147,35 @@ def build_search_router(require_token: Callable[..., None]) -> APIRouter:
                 total_count=len(meetings),
                 meetings=meetings,
             )
+
+        return await asyncio.to_thread(collect)
+
+    @router.get("/v1/voices/status", response_model=VoiceStatusResponse, dependencies=deps)
+    async def voices_status(request: Request, project: str) -> VoiceStatusResponse:
+        """The voice memory as one project sees it: who its meetings can be
+        named for (from any project's samples), what its own meetings
+        contribute, and which samples are set aside and why.
+
+        Reading is what keeps the index current -- the call re-reads any
+        meeting whose files changed and reports which ones it had to -- so
+        the answer is never stale and needs no "refresh". It touches no
+        model, so it runs off the serial queue and answers mid-job.
+        """
+        manager = _job_manager(request)
+        config = request.app.state.config
+        if not config.vault_root:
+            raise ServiceError(ErrorKind.INVALID_REQUEST, "no vault_root is configured")
+        if not project or any(
+            part in ("", ".", "..") for part in project.replace("\\", "/").split("/")
+        ):
+            raise ServiceError(ErrorKind.INVALID_REQUEST, f"not a project: {project!r}")
+        vault_root = Path(config.vault_root)
+
+        def collect() -> VoiceStatusResponse:
+            index = manager.voice_index()
+            if index is None:
+                raise ServiceError(ErrorKind.INTERNAL, "the voice index could not be opened")
+            return VoiceStatusResponse(**voice_memory_status(index, vault_root, project))
 
         return await asyncio.to_thread(collect)
 

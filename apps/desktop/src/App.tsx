@@ -667,6 +667,11 @@ function App() {
         ? "Chat needs the local language model — download it in Settings."
         : undefined;
   const loadIndexStatus = useCallback((project: string) => api.indexStatus(project), []);
+  const loadVoiceMemory = useCallback((project: string) => api.voiceMemoryStatus(project), []);
+  const confirmSpeakerNames = useCallback(
+    (entryId: string) => api.confirmSpeakerNames(entryId),
+    [],
+  );
   const reindex = useCallback(() => api.reindexVault(), []);
   const addToNotes = useCallback(
     (entryId: string, markdown: string) => api.appendToNote(entryId, markdown),
@@ -765,6 +770,8 @@ function App() {
                   // project; the page passes it back only so it never has to
                   // guess which project it is editing.
                   onSaveRoster={(_project, draft) => saveProjectRoster(draft)}
+                  onLoadVoiceMemory={loadVoiceMemory}
+                  onConfirmSpeakers={confirmSpeakerNames}
                   onBack={() => setOpenEntryId(null)}
                   onReveal={handleRevealVaultEntry}
                   onReadTranscript={readTranscript}

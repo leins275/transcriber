@@ -304,6 +304,62 @@ class IndexStatusResponse(BaseModel):
     meetings: list[IndexMeetingStatus]
 
 
+class VoiceSample(BaseModel):
+    """One diarized voice of one meeting, as the voice memory judges it."""
+
+    label: str
+    name: str
+    speech_sec: float
+    # `ok` is used for recognition; the rest are set aside: `unconfirmed`
+    # (named by the machine, not the operator), `partial` (the name covers
+    # only a few of the voice's segments), `short` (too little speech),
+    # `conflict` (sounds like `conflicts_with`).
+    quality: Literal["ok", "unconfirmed", "partial", "short", "conflict"]
+    conflicts_with: str | None = None
+
+
+class VoiceMeetingStatus(BaseModel):
+    """One meeting's row in the voice-memory view."""
+
+    name: str
+    # `named` contributes the listed voices; `unnamed` is diarized but
+    # nobody is named; `no_voices` was never diarized; `no_transcript` has
+    # nothing to read.
+    state: Literal["named", "unnamed", "no_voices", "no_transcript"]
+    scanned_at: int | None = None
+    voices: list[VoiceSample] = Field(default_factory=list)
+
+
+class VoiceSummary(BaseModel):
+    """One person a meeting of the project can be named for: how many
+    samples recognition uses (``here`` of them from this project, the rest
+    from ``other_projects``), how much speech they hold, and how many
+    samples were set aside."""
+
+    name: str
+    samples: int
+    here: int
+    other_projects: list[str] = Field(default_factory=list)
+    speech_sec: float
+    set_aside: int
+
+
+class VoiceStatusResponse(BaseModel):
+    """``GET /v1/voices/status`` response body."""
+
+    project: str
+    # The project's roster is strict: `voices` is that roster and nothing
+    # else, whoever else the vault knows.
+    roster_only: bool = False
+    updated_at: int | None = None
+    # The project's meetings this very request re-read because they had
+    # changed, and how many it re-read in other projects.
+    rescanned: list[str] = Field(default_factory=list)
+    rescanned_elsewhere: int = 0
+    voices: list[VoiceSummary]
+    meetings: list[VoiceMeetingStatus]
+
+
 class ChatMessageModel(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1)

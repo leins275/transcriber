@@ -706,6 +706,25 @@ impl TranscriptionService for FakeService {
         })
     }
 
+    async fn voice_status(&self, project: &str) -> Result<super::VoiceStatus, ServiceError> {
+        // An honest empty state: the fake knows nobody.
+        let inner = self.inner.lock().expect("fake service mutex poisoned");
+        if inner.down {
+            return Err(ServiceError::Unavailable {
+                detail: "fake service is down".to_string(),
+            });
+        }
+        Ok(super::VoiceStatus {
+            project: project.to_string(),
+            roster_only: false,
+            updated_at: None,
+            rescanned: Vec::new(),
+            rescanned_elsewhere: 0,
+            voices: Vec::new(),
+            meetings: Vec::new(),
+        })
+    }
+
     async fn chat_stream(
         &self,
         req: ChatRequest,

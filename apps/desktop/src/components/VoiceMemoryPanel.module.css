@@ -1,0 +1,115 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 760px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--divider);
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--text-md, 1rem);
+  font-weight: 600;
+}
+
+/* what the read just did: the one line that says the panel is current */
+.freshness {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.lead,
+.note,
+.confirmText {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-sm);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.markUsed {
+  color: var(--accent);
+}
+
+.markAside {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.markNone {
+  color: var(--text-faint);
+}
+
+.name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  min-width: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  margin-left: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.meetings {
+  width: 100%;
+}
+
+.meetingsSummary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: var(--space-1) 0;
+}

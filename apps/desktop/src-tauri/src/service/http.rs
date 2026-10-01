@@ -909,6 +909,23 @@ impl TranscriptionService for HttpTranscriptionService {
         })
     }
 
+    async fn voice_status(&self, project: &str) -> Result<super::VoiceStatus, ServiceError> {
+        let request = self.authorize(
+            self.client
+                .get(self.endpoint("/v1/voices/status"))
+                .query(&[("project", project)]),
+        );
+        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+
+        if !response.status().is_success() {
+            return Err(service_error_from_response(response).await);
+        }
+
+        response.json().await.map_err(|err| ServiceError::Decode {
+            message: err.to_string(),
+        })
+    }
+
     async fn chat_stream(
         &self,
         req: ChatRequest,
@@ -1663,6 +1680,74 @@ mod tests {
             // The biased select saw the (already fired) cancellation before
             // it ever read the body: nothing was forwarded.
             assert!(received.lock().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn voice_status_asks_for_the_project_and_decodes_the_memory() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/voices/status"))
+                .and(wiremock::matchers::query_param("project", "ACME"))
+                .and(header("Authorization", "Bearer token-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "project": "ACME",
+                    "roster_only": true,
+                    "updated_at": 1_790_000_000,
+                    "rescanned": ["260901 - Planning"],
+                    "rescanned_elsewhere": 3,
+                    "voices": [
+                        {
+                            "name": "Anna",
+                            "samples": 2,
+                            "here": 1,
+                            "other_projects": ["OTHER"],
+                            "speech_sec": 310.5,
+                            "set_aside": 1
+                        }
+                    ],
+                    "meetings": [
+                        {
+                            "name": "260901 - Planning",
+                            "state": "named",
+                            "scanned_at": 1_790_000_000,
+                            "voices": [
+                                {
+                                    "label": "Speaker 1",
+                                    "name": "Anna",
+                                    "speech_sec": 120.0,
+                                    "quality": "conflict",
+                                    "conflicts_with": "Boris"
+                                }
+                            ]
+                        },
+                        {"name": "260830 - Empty", "state": "no_transcript", "voices": []}
+                    ]
+                })))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), Some("token-1".to_string()))
+                .expect("loopback base url must be accepted");
+            let status = service
+                .voice_status("ACME")
+                .await
+                .expect("voice_status should succeed");
+
+            assert_eq!(status.project, "ACME");
+            assert_eq!(status.rescanned, vec!["260901 - Planning".to_string()]);
+            assert!(status.roster_only);
+            assert_eq!(status.rescanned_elsewhere, 3);
+            assert_eq!(status.voices[0].samples, 2);
+            assert_eq!(status.voices[0].here, 1);
+            assert_eq!(status.voices[0].other_projects, vec!["OTHER".to_string()]);
+            assert_eq!(status.voices[0].set_aside, 1);
+            assert_eq!(status.meetings.len(), 2);
+            let sample = &status.meetings[0].voices[0];
+            assert_eq!(sample.quality, "conflict");
+            assert_eq!(sample.conflicts_with.as_deref(), Some("Boris"));
+            assert_eq!(status.meetings[1].scanned_at, None);
         });
     }
 
