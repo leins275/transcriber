@@ -16,7 +16,7 @@
 use serde::Serialize;
 
 use crate::error::AppError;
-use crate::service::{LedgerJob, ServiceError};
+use crate::service::{LedgerCompression, LedgerJob, ServiceError};
 
 use super::AppState;
 
@@ -39,6 +39,7 @@ const MAX_LIMIT: u32 = 500;
 pub struct LedgerJobView {
     pub job_id: String,
     pub status: String,
+    pub job_type: Option<String>,
     pub created_at: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -55,6 +56,8 @@ pub struct LedgerJobView {
     pub error_kind: Option<String>,
     pub error_message: Option<String>,
     pub service_version: Option<String>,
+    /// A finished `compress` row's sizes before and after; `null` otherwise.
+    pub compression: Option<LedgerCompression>,
     /// The recording's original file name, when the row recorded one (FR-2).
     /// `None` -- `null` over IPC -- for every row that did not, which the
     /// panel renders via its `source_path`-derived fallback (FR-3).
@@ -66,6 +69,7 @@ impl From<LedgerJob> for LedgerJobView {
         LedgerJobView {
             job_id: job.job_id,
             status: job.status,
+            job_type: job.job_type,
             created_at: job.created_at,
             started_at: job.started_at,
             finished_at: job.finished_at,
@@ -82,6 +86,7 @@ impl From<LedgerJob> for LedgerJobView {
             error_kind: job.error_kind,
             error_message: job.error_message,
             service_version: job.service_version,
+            compression: job.compression,
             original_file_name: job.original_file_name,
         }
     }
@@ -132,6 +137,7 @@ mod tests {
         LedgerJob {
             job_id: "job-1".to_string(),
             status: "succeeded".to_string(),
+            job_type: Some("compress".to_string()),
             created_at: Some("2026-08-24T10:00:00Z".to_string()),
             started_at: Some("2026-08-24T10:00:01Z".to_string()),
             finished_at: Some("2026-08-24T10:03:00Z".to_string()),
@@ -150,6 +156,13 @@ mod tests {
             error_kind: Some("none".to_string()),
             error_message: Some("".to_string()),
             service_version: Some("0.9.0".to_string()),
+            compression: Some(LedgerCompression {
+                replaced: true,
+                encoder: Some("hevc_nvenc".to_string()),
+                before_bytes: 1_347_900_000,
+                after_bytes: 161_700_000,
+                warning: None,
+            }),
             original_file_name: Some("ELS - 260812 - Security issue.mp4".to_string()),
         }
     }
@@ -185,6 +198,8 @@ mod tests {
 
         assert_eq!(view.job_id, job.job_id);
         assert_eq!(view.status, job.status);
+        assert_eq!(view.job_type, job.job_type);
+        assert_eq!(view.compression, job.compression);
         assert_eq!(view.created_at, job.created_at);
         assert_eq!(view.started_at, job.started_at);
         assert_eq!(view.finished_at, job.finished_at);

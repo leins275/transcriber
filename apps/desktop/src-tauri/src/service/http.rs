@@ -33,9 +33,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChatEvent, ChatRequest, DiarizationStatus, IndexMeeting, IndexStatus, JobStatus, LedgerJob,
-    LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest, ModelDownloadState, ModelDownloadStatus,
-    SearchHit, SearchQuery, ServiceError, ServiceHealth, SubmitRequest, TranscriptionService,
+    ChatEvent, ChatRequest, DiarizationStatus, IndexMeeting, IndexStatus, JobStatus,
+    LedgerCompression, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest,
+    ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth,
+    SubmitRequest, TranscriptionService,
 };
 
 /// Default per-request timeout, applied to `submit()`/`health()` (a longer
@@ -557,6 +558,8 @@ struct LedgerJobResponse {
     job_id: String,
     status: String,
     #[serde(default)]
+    job_type: Option<String>,
+    #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     started_at: Option<String>,
@@ -593,6 +596,25 @@ struct LedgerJobResponse {
     /// Absent on every pre-feature row (FR-6), hence the default.
     #[serde(default)]
     meeting_json: Option<String>,
+    /// The ledger's `result_json` column: a derived job's result manifest,
+    /// a JSON *string* like `meeting_json`.
+    #[serde(default)]
+    result_json: Option<String>,
+}
+
+/// A `compress` row's result manifest as the sizes the service log shows.
+///
+/// Total like [`original_file_name_from`]: another job type's manifest, an
+/// unfinished row or a shape this side does not know is "nothing to show",
+/// never a failed listing.
+fn compression_from(
+    job_type: Option<&str>,
+    result_json: Option<&str>,
+) -> Option<LedgerCompression> {
+    if job_type != Some("compress") {
+        return None;
+    }
+    serde_json::from_str(result_json?).ok()
 }
 
 /// Pull the original file name out of a raw `meeting_json` value (FR-2).
@@ -632,6 +654,8 @@ impl From<LedgerJobResponse> for LedgerJob {
             error_kind: row.error_kind,
             error_message: row.error_message,
             service_version: row.service_version,
+            compression: compression_from(row.job_type.as_deref(), row.result_json.as_deref()),
+            job_type: row.job_type,
             original_file_name: original_file_name_from(row.meeting_json.as_deref()),
         }
     }
@@ -1322,7 +1346,8 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::super::{
-        JobState, ModelDownloadState, ServiceError, SubmitRequest, TranscriptionService,
+        JobState, LedgerCompression, ModelDownloadState, ServiceError, SubmitRequest,
+        TranscriptionService,
     };
     use super::HttpTranscriptionService;
 
@@ -2553,6 +2578,72 @@ mod tests {
                 rows[0].original_file_name.as_deref(),
                 Some("ELS - 260812 - Security issue.mp4")
             );
+        });
+    }
+
+    #[test]
+    fn list_ledger_jobs_reads_a_compress_rows_sizes_out_of_result_json() {
+        run(async {
+            let server = MockServer::start().await;
+            // `result_json` is a TEXT column like `meeting_json`: the manifest
+            // crosses the wire as a JSON *string*.
+            let manifest = serde_json::json!({
+                "replaced": true,
+                "path": "C:\\Meetings\\ELS\\260812 - Security issue\\source.mp4",
+                "encoder": "hevc_nvenc",
+                "audio": "copy",
+                "before_bytes": 1_347_900_000_u64,
+                "after_bytes": 161_700_000_u64,
+                "warning": null,
+            })
+            .to_string();
+            Mock::given(method("GET"))
+                .and(path("/v1/jobs"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {
+                        "job_id": "compressed",
+                        "status": "succeeded",
+                        "job_type": "compress",
+                        "result_json": manifest,
+                    },
+                    // Another job type's manifest is not a compression.
+                    {
+                        "job_id": "exported",
+                        "status": "succeeded",
+                        "job_type": "export",
+                        "result_json": "{\"artifacts\": []}",
+                    },
+                    {"job_id": "running", "status": "running", "job_type": "compress"},
+                    {
+                        "job_id": "odd",
+                        "status": "succeeded",
+                        "job_type": "compress",
+                        "result_json": "not json",
+                    },
+                ])))
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let rows = service
+                .list_ledger_jobs(50)
+                .await
+                .expect("list_ledger_jobs should succeed");
+            assert_eq!(rows[0].job_type.as_deref(), Some("compress"));
+            assert_eq!(
+                rows[0].compression,
+                Some(LedgerCompression {
+                    replaced: true,
+                    encoder: Some("hevc_nvenc".to_string()),
+                    before_bytes: 1_347_900_000,
+                    after_bytes: 161_700_000,
+                    warning: None,
+                })
+            );
+            assert_eq!(rows[1].compression, None);
+            assert_eq!(rows[2].compression, None);
+            assert_eq!(rows[3].compression, None);
         });
     }
 

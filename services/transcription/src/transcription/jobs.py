@@ -1485,15 +1485,7 @@ class JobManager:
         )
         if outcome.warning is not None:
             job.warnings.append(outcome.warning)
-        _logger.info(
-            "compress: %s -> %s (%s, audio %s, %d -> %d bytes)",
-            source.name,
-            outcome.path.name,
-            outcome.encoder or "no encode",
-            outcome.audio or "none",
-            outcome.before_bytes,
-            outcome.after_bytes,
-        )
+        _logger.info("compress: %s: %s", meeting_dir.name, outcome.summary())
         return outcome.as_manifest()
 
 

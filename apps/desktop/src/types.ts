@@ -420,6 +420,8 @@ export type LedgerJobView = {
   /** F2's own five-state vocabulary, uncollapsed: `queued`, `running`,
    * `succeeded`, `failed`, `cancelled`. */
   status: string;
+  /** The service's job type (`transcribe`, `summarize`, `compress`, ...). */
+  job_type: string | null;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -442,6 +444,18 @@ export type LedgerJobView = {
   error_kind: string | null;
   error_message: string | null;
   service_version: string | null;
+  /** A finished `compress` row's result; `null` for every other row. */
+  compression: LedgerCompressionView | null;
+};
+
+/** What a `compress` job did to the recording. `replaced: false` means the
+ * original was kept and `warning` says why. */
+export type LedgerCompressionView = {
+  replaced: boolean;
+  encoder: string | null;
+  before_bytes: number;
+  after_bytes: number;
+  warning: string | null;
 };
 
 // Speakers-database extension to the IPC contract (additive). A person has

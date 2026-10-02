@@ -234,17 +234,23 @@ one of them is edited by hand instead of through `--set`.
 
 A dropped **video** goes through one more stage after its transcript,
 summary and export are done: the service re-encodes it to a smaller HEVC
-mp4 (x265 CRF 26, the shorter side capped at 1080p — a 4K screen recording
-comes out at 1080p, about 85 % smaller; a 1080p one keeps its size) and
+mp4 (the shorter side capped at 1080p — a 4K screen recording comes out
+at 1080p, about 85 % smaller; a 1080p one keeps its size) and
 replaces `source.<ext>` with `source.mp4` (the job list shows it as
 "Compressing video" with the decoded fraction). The encode runs in-process
-through PyAV's bundled FFmpeg on the CPU — nothing to install, no
-`ffmpeg.exe` anywhere; audio is copied when an mp4 can hold it. The
+through PyAV's bundled FFmpeg — nothing to install, no `ffmpeg.exe`
+anywhere: on an NVIDIA GPU it is NVENC's HEVC encoder (constant quality,
+CQ 28), and x265 at CRF 26 on the CPU when NVENC will not open (no NVIDIA
+GPU, an old driver). Decoding and downscaling stay on the CPU either way,
+so the CPU is busy during a GPU encode too. Audio is copied when an mp4
+can hold it. The
 original is replaced only after the output is verified and is at least
 15 % smaller; audio-only recordings, recordings already at or under
 700 kbps, and anything that fails along the way are left untouched (the
 reason lands in the job's warnings). A manual re-transcribe, summarize or
-export never triggers it.
+export never triggers it. The library's **Service log** tab shows what each
+compress job did: the size before and after, the share saved and the
+encoder used — or why the original was kept.
 
 Playing the result: VLC, mpv and macOS play HEVC natively; on Windows,
 Edge, Chrome and Movies & TV need the free "HEVC Video Extensions from
@@ -252,7 +258,8 @@ Device Manufacturer" (or the paid store one) installed once.
 
 Settings → **Recordings** has the switch (`compress_video` in
 `config.json`, `docs/config-contract.md`). Budget roughly 25 minutes per
-hour of 4K meeting on a desktop CPU; like every job it holds the serial
+hour of 4K meeting on a desktop CPU and a little over half that with NVENC
+(the GPU output is about 10 % larger); like every job it holds the serial
 queue while it runs, so the next drop's transcription waits behind it.
 
 ## Suggesting a title from the summary

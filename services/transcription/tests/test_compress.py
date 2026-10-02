@@ -21,6 +21,7 @@ from transcription import compress
 from transcription.compress import (
     DEFAULT_ENCODERS,
     HEVC_MP4_TAG,
+    NVENC_HEVC,
     X265,
     CompressOutcome,
     EncoderSpec,
@@ -242,6 +243,30 @@ def test_the_manifest_carries_the_outcome(tmp_path: Path) -> None:
     assert manifest["warning"] is None
 
 
+def test_the_summary_says_how_much_smaller_the_recording_got(tmp_path: Path) -> None:
+    replaced = CompressOutcome(
+        replaced=True,
+        path=tmp_path / "source.mp4",
+        warning=None,
+        encoder="hevc_nvenc",
+        audio="copy",
+        before_bytes=1_347_900_000,
+        after_bytes=161_700_000,
+    )
+    kept = CompressOutcome(
+        replaced=False,
+        path=tmp_path / "source.mp4",
+        warning="already 512 kbps, kept as-is",
+        encoder=None,
+        audio=None,
+        before_bytes=48_000_000,
+        after_bytes=48_000_000,
+    )
+
+    assert replaced.summary() == "1347.9 MB -> 161.7 MB (88% smaller, hevc_nvenc, audio copy)"
+    assert kept.summary() == "kept at 48.0 MB (already 512 kbps, kept as-is)"
+
+
 # ---------------------------------------------------------------- audio
 
 
@@ -368,8 +393,10 @@ def test_an_encoder_that_will_not_open_falls_through_to_the_next(tmp_path: Path)
     assert _leftovers(source.parent) == []
 
 
-def test_the_default_encoder_is_x265_at_crf_26() -> None:
-    assert DEFAULT_ENCODERS == (X265,)
+def test_the_gpu_encoder_goes_first_and_x265_at_crf_26_is_the_fallback() -> None:
+    assert DEFAULT_ENCODERS == (NVENC_HEVC, X265)
+    assert NVENC_HEVC.name == "hevc_nvenc"
+    assert NVENC_HEVC.options == {"preset": "p6", "rc": "vbr", "cq": "28", "b": "0"}
     assert X265.name == "libx265"
     assert X265.options["crf"] == "26"
     assert X265.options["preset"] == "medium"

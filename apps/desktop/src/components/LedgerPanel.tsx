@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import styles from "./LedgerPanel.module.css";
 import { formatCount, formatDuration, formatRealtimeFactor, formatTimestamp } from "../lib/format";
-import type { LedgerJobView } from "../types";
+import { formatBytes } from "../lib/modelDownload";
+import type { LedgerCompressionView, LedgerJobView } from "../types";
 
 export type LedgerPanelProps = {
   /** Loads the newest rows of F2's sqlite job ledger. Rejects with an
@@ -63,6 +64,25 @@ function displayNameOf(row: LedgerJobView): string {
   if (extension && folder) return `${folder}.${extension}`;
 
   return fileNameOf(row.source_path);
+}
+
+/** What a `compress` job did, in one line: "1.3 GB → 154.2 MB · 88% smaller
+ * · hevc_nvenc", or why the original was kept. */
+function compressionText(compression: LedgerCompressionView): string {
+  if (!compression.replaced) {
+    const kept = `Video kept at ${formatBytes(compression.before_bytes)}`;
+    return compression.warning ? `${kept} — ${compression.warning}` : kept;
+  }
+  const saved =
+    compression.before_bytes > 0
+      ? Math.round((1 - compression.after_bytes / compression.before_bytes) * 100)
+      : 0;
+  const parts = [
+    `${formatBytes(compression.before_bytes)} → ${formatBytes(compression.after_bytes)}`,
+    `${saved}% smaller`,
+  ];
+  if (compression.encoder) parts.push(compression.encoder);
+  return parts.join(" · ");
 }
 
 /**
@@ -148,6 +168,7 @@ export function LedgerPanel({ onLoad }: LedgerPanelProps) {
               </div>
               <div className={styles.meta}>
                 <span>{formatTimestamp(row.created_at)}</span>
+                {row.job_type && <span className="pill">{row.job_type}</span>}
                 {row.model && <span className="pill">{row.model}</span>}
                 {row.device && <span className="pill">{row.device}</span>}
                 {row.language && <span className="pill">{row.language.toUpperCase()}</span>}
@@ -160,6 +181,9 @@ export function LedgerPanel({ onLoad }: LedgerPanelProps) {
                   <span>{formatCount(row.segment_count, "segment")}</span>
                 )}
               </div>
+              {row.compression && (
+                <div className={styles.meta}>{compressionText(row.compression)}</div>
+              )}
               {row.error_message && (
                 <p className={styles.error}>
                   {row.error_kind ? `${row.error_kind}: ` : ""}

@@ -8,6 +8,7 @@ function buildRow(overrides: Partial<LedgerJobView> = {}): LedgerJobView {
   return {
     job_id: "job-1",
     status: "succeeded",
+    job_type: "transcribe",
     created_at: "2026-08-22T15:00:00Z",
     started_at: "2026-08-22T15:00:01Z",
     finished_at: "2026-08-22T15:02:01Z",
@@ -27,6 +28,7 @@ function buildRow(overrides: Partial<LedgerJobView> = {}): LedgerJobView {
     error_kind: null,
     error_message: null,
     service_version: "0.1.0",
+    compression: null,
     ...overrides,
   };
 }
@@ -73,6 +75,57 @@ describe("LedgerPanel", () => {
     );
 
     expect(await screen.findByText(/internal: job was interrupted/i)).toBeInTheDocument();
+  });
+
+  it("shows how much a compress job shrank the recording", async () => {
+    render(
+      <LedgerPanel
+        onLoad={() =>
+          Promise.resolve([
+            buildRow({
+              job_type: "compress",
+              compression: {
+                replaced: true,
+                encoder: "hevc_nvenc",
+                before_bytes: 1024 * 1024 * 1000,
+                after_bytes: 1024 * 1024 * 120,
+                warning: null,
+              },
+            }),
+          ])
+        }
+      />,
+    );
+
+    expect(
+      await screen.findByText("1000.0 MB → 120.0 MB · 88% smaller · hevc_nvenc"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("compress")).toBeInTheDocument();
+  });
+
+  it("says why a compress job kept the original", async () => {
+    render(
+      <LedgerPanel
+        onLoad={() =>
+          Promise.resolve([
+            buildRow({
+              job_type: "compress",
+              compression: {
+                replaced: false,
+                encoder: null,
+                before_bytes: 1024 * 1024 * 48,
+                after_bytes: 1024 * 1024 * 48,
+                warning: "already 512 kbps, kept as-is",
+              },
+            }),
+          ])
+        }
+      />,
+    );
+
+    expect(
+      await screen.findByText("Video kept at 48.0 MB — already 512 kbps, kept as-is"),
+    ).toBeInTheDocument();
   });
 
   it("says so plainly when the ledger is empty", async () => {

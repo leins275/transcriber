@@ -1,7 +1,8 @@
 """Video compression for a filed recording -- the drop-to-insights chain's last stage.
 
-Re-encodes ``<meeting>/source.<ext>`` to a smaller HEVC mp4 -- x265 at
-CRF 26, capped at 1080p -- and *replaces* the original with it, so the
+Re-encodes ``<meeting>/source.<ext>`` to a smaller HEVC mp4 -- capped at
+1080p, encoded on the GPU (NVENC) when one is there and with x265 at CRF 26
+otherwise -- and *replaces* the original with it, so the
 vault stops filling up with multi-GB originals. Everything runs in-process
 through PyAV (FFmpeg's libraries bundled in the wheel, the same decoder the
 transcription used): no external ``ffmpeg`` binary, ever (FR-7).
@@ -13,11 +14,16 @@ landed at the source's bitrate and NVENC's constant-quality H.264 at nearly
 twice it -- because the recorder already starves them. Halving the pixels
 is what pays, and on this mostly-static screen-share content HEVC pays
 again: at 1080p, x265 CRF 26 came out at a third of x264 CRF 23's size
-(~334 vs ~995 kbps, 87 % under the source) at the *same* speed, while the
-GPU encoders were 2.5x larger for a quarter more speed -- so x265 is the
-one encoder and there is no NVENC path. Area resampling keeps screen text
-crisper than bilinear at no cost (Lanczos was seven times slower). The
-mp4 carries the ``hvc1`` tag so QuickTime and Safari recognise it.
+(~334 vs ~995 kbps, 87 % under the source) at the *same* speed. NVENC's
+HEVC encoder in constant-quality VBR (CQ 28, no bitrate target) lands
+within 10-15 % of x265's size at nearly twice the speed (4K source, same
+minute: 292 vs 265 kbps, 102 vs 61 fps), so it goes first and x265 is what
+runs when it will not open -- no NVIDIA GPU, an old driver, no free encode
+session. Only the *encode* moves to the GPU: decoding there was measured
+slower than on the CPU (the frames have to come back for the downscale),
+so decode and scale stay where they were. Area resampling keeps screen
+text crisper than bilinear at no cost (Lanczos was seven times slower).
+The mp4 carries the ``hvc1`` tag so QuickTime and Safari recognise it.
 
 Degradation over failure, like every other stage: an audio-only recording,
 one that is already small, an encoder that will not open, a result that is
@@ -103,8 +109,15 @@ X265 = EncoderSpec(
     {"crf": "26", "preset": "medium", "x265-params": "log-level=none"},
 )
 
+NVENC_HEVC = EncoderSpec(
+    "hevc_nvenc",
+    # Constant quality: `b=0` removes the bitrate target, so `cq` alone
+    # decides the size (what x265's CRF does).
+    {"preset": "p6", "rc": "vbr", "cq": "28", "b": "0"},
+)
+
 # Tried in order; a spec that fails to open hands over to the next one.
-DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (X265,)
+DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (NVENC_HEVC, X265)
 
 # HEVC in mp4 needs this four-character tag for QuickTime and Safari;
 # FFmpeg's default `hev1` plays in VLC and Windows but not there.
@@ -127,6 +140,16 @@ class CompressOutcome:
     before_bytes: int
     after_bytes: int
 
+    def summary(self) -> str:
+        """One line for the log: what the recording weighed before and after."""
+        if not self.replaced:
+            return f"kept at {_megabytes(self.before_bytes)} ({self.warning})"
+        saved = 1.0 - self.after_bytes / self.before_bytes if self.before_bytes else 0.0
+        return (
+            f"{_megabytes(self.before_bytes)} -> {_megabytes(self.after_bytes)}"
+            f" ({saved:.0%} smaller, {self.encoder}, audio {self.audio or 'none'})"
+        )
+
     def as_manifest(self) -> dict[str, Any]:
         return {
             "replaced": self.replaced,
@@ -146,10 +169,14 @@ class _Probe:
     kbps: float | None
 
 
+def _megabytes(size: int) -> str:
+    return f"{size / 1_000_000:.1f} MB"
+
+
 def target_size(width: int, height: int) -> tuple[int, int]:
     """The output size for a ``width`` x ``height`` source: the shorter side
     capped at ``MAX_SHORT_SIDE`` with the aspect kept, both sides even
-    (yuv420p h264 refuses odd sizes; at most one pixel is cropped)."""
+    (yuv420p refuses odd sizes; at most one pixel is cropped)."""
     short = min(width, height)
     if short > MAX_SHORT_SIDE:
         scale = MAX_SHORT_SIDE / short
@@ -180,7 +207,7 @@ def compress_recording(
     min_source_kbps: float = MIN_SOURCE_KBPS,
     min_gain: float = MIN_GAIN,
 ) -> CompressOutcome:
-    """Replace ``source`` with a smaller H.264 mp4, or leave it alone and say why.
+    """Replace ``source`` with a smaller HEVC mp4, or leave it alone and say why.
 
     ``on_progress`` receives the decoded fraction of the source (0..1,
     throttled) while encoding; ``cancel`` is polled between packets and is

@@ -22,7 +22,7 @@ ModelState = Literal["unloaded", "loading", "loaded"]
 # (no LLM call). `diarize` runs the speaker-diarization pass over an
 # already-transcribed meeting's recording and writes the speaker labels
 # and voice embeddings into its existing transcript.json (ids untouched).
-# `compress` re-encodes a meeting's video recording to a smaller H.264 mp4
+# `compress` re-encodes a meeting's video recording to a smaller HEVC mp4
 # in its place (no LLM call, in-process FFmpeg via PyAV) -- the chain's
 # last stage.
 # `facts` and `action_items` jobs existed once; both were retired in favour

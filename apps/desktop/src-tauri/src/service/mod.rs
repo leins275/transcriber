@@ -358,7 +358,7 @@ pub enum LlmJobKind {
     /// it shares this enum because it is submitted exactly like the
     /// other per-meeting derived jobs (`input_path` = meeting dir).
     Diarize,
-    /// Re-encode the meeting's video recording to a smaller H.264 mp4 in
+    /// Re-encode the meeting's video recording to a smaller HEVC mp4 in
     /// its place (the drop-to-insights chain's last stage). No LLM runs;
     /// submitted like every other per-meeting derived job.
     Compress,
@@ -723,6 +723,23 @@ pub enum ChatEvent {
     Error { message: String },
 }
 
+/// What a finished `compress` job did to the recording -- the job's result
+/// manifest (`compress.py::CompressOutcome.as_manifest`), as much of it as
+/// the service log shows. Wire shape, domain value and view at once, like
+/// the voice-memory types above: there is no path and no id in it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LedgerCompression {
+    /// `false`: the original was kept, and `warning` says why.
+    pub replaced: bool,
+    /// The encoder that produced the kept output (`hevc_nvenc`, `libx265`).
+    #[serde(default)]
+    pub encoder: Option<String>,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    #[serde(default)]
+    pub warning: Option<String>,
+}
+
 /// One row of F2's sqlite job ledger (`services/transcription/.../ledger.py`
 /// -- the `jobs` table), reduced to the columns worth showing.
 ///
@@ -739,6 +756,9 @@ pub struct LedgerJob {
     /// than collapsed onto [`JobState`]'s four: a ledger reader wants to
     /// see that a job was cancelled rather than that it "failed".
     pub status: String,
+    /// F2's `job_type` (`transcribe`, `summarize`, `compress`, ...), verbatim.
+    /// `None` only against a service older than the column.
+    pub job_type: Option<String>,
     pub created_at: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -755,6 +775,10 @@ pub struct LedgerJob {
     pub error_kind: Option<String>,
     pub error_message: Option<String>,
     pub service_version: Option<String>,
+    /// For a finished `compress` row: the sizes before and after, read out
+    /// of the row's `result_json`. `None` for every other row, and for a
+    /// manifest this side cannot make sense of.
+    pub compression: Option<LedgerCompression>,
     /// The recording's original file name as recorded at submit time (FR-1),
     /// read back out of the row's `meeting_json` column. `None` for every
     /// pre-feature row, for a retranscribe of an already-filed recording
