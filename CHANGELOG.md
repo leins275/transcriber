@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.30.0 — 2026-10-02
+
+### Features
+
+- Compress video on the GPU when NVENC is there, and show the gain in the service log
+
 ## 0.29.0 — 2026-10-01
 
 ### Bug fixes
