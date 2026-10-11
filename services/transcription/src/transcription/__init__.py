@@ -11,6 +11,6 @@ here, and no filesystem or network access happens at import time (NFR-1).
 
 from __future__ import annotations
 
-__version__ = "0.30.1"
+__version__ = "0.31.0"
 
 __all__ = ["__version__"]
