@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.30.1 — 2026-10-11
+
+### Bug fixes
+
+- Decode damaged recordings whole instead of stopping at the first bad packet
+
 ## 0.30.0 — 2026-10-02
 
 ### Features
