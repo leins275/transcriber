@@ -1183,6 +1183,16 @@ class JobManager:
         transcript.write_atomic(doc, meeting_dir)
 
         naming = NamingResult()
+        if not info.speaker_count:
+            # A transcript with words in it came from a recording with a
+            # voice in it. Nobody found is the pass saying it heard nothing
+            # -- a decode that stopped short, a silent track -- and must not
+            # pass as a quiet success (the operator sees "0 speakers" on a
+            # meeting they were just listening to and rightly calls it a bug).
+            job.warnings.append(
+                f"no voices found in {source.name}: the recording's audio could not "
+                "be heard by the speaker model"
+            )
         if info.speaker_embeddings:
             try:
                 naming = self._name_speakers_sync(

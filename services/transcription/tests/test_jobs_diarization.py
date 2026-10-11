@@ -530,6 +530,29 @@ async def test_a_diarize_job_labels_an_existing_transcript_and_keeps_its_ids(
         await manager.aclose()
 
 
+async def test_a_diarize_job_that_hears_nobody_says_so(
+    config: Config, ledger: Ledger, tmp_app_dir: Path
+) -> None:
+    """A transcript with words in it came from a recording with a voice in
+    it, so a pass that finds no speaker at all heard nothing (a decode that
+    stopped short, a silent track). It still succeeds -- the labels are
+    simply absent -- but it must not look like a quiet success: the
+    operator saw exactly that ("0 speakers", no warning) and called it a
+    bug."""
+    providers.register("fake", FakeProvider)
+    meeting = _write_filed_meeting(tmp_app_dir)
+    manager = JobManager(config, ledger, diarizer_factory=lambda _cfg: FakeDiarizer(turns=[]))
+    try:
+        job_id = await _run_diarize(manager, meeting)
+
+        job = manager.status(job_id)
+        assert job.status == "succeeded", job.error_message
+        assert json.loads(job.result_json or "{}")["speaker_count"] == 0
+        assert any("no voices found" in warning for warning in job.warnings), job.warnings
+    finally:
+        await manager.aclose()
+
+
 async def test_a_diarize_job_needs_a_transcript_and_a_recording(
     config: Config, ledger: Ledger, tmp_app_dir: Path
 ) -> None:

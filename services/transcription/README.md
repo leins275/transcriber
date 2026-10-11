@@ -149,6 +149,16 @@ in budget-fitted rounds so any transcript length fits the context window;
 a completion that hits the output-token cap is retried on smaller input
 splits instead of being silently truncated. PDF rendering degrades rather
 than failing the export job: the `.md` is always written first.
+Recordings are decoded by the service's own PyAV loop
+(`providers/audio.py`), shared by transcription and diarization so both
+hear the same audio: a packet FFmpeg's decoder refuses is skipped and its
+duration kept as silence (the skip is logged with where it was), so a
+recording with a few damaged AAC packets still decodes to its full length
+with its timeline intact instead of stopping at the first bad packet; only
+a file no packet of which decodes is an `audio_decode` failure. A `diarize`
+job that finds no voice at all in a transcript that has words still
+succeeds, with a warning saying so, rather than passing as a quiet
+"0 speakers".
 
 Every job type shares the one serial worker: an LLM job queued behind a
 transcription waits, and vice versa -- which is also what guarantees

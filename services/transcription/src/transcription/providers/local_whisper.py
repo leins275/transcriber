@@ -28,7 +28,6 @@ import numpy as np
 from faster_whisper import (  # type: ignore[import-untyped]
     BatchedInferencePipeline,
     WhisperModel,
-    decode_audio,
 )
 from faster_whisper.vad import (  # type: ignore[import-untyped]
     VadOptions,
@@ -38,6 +37,7 @@ from faster_whisper.vad import (  # type: ignore[import-untyped]
 
 from transcription.errors import ErrorKind, ServiceError
 from transcription.filters import apply_filters
+from transcription.providers.audio import decode_audio
 from transcription.providers.base import CancelToken, ProviderInfo, TranscriptResult
 from transcription.segmentation import resegment
 

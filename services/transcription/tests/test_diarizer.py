@@ -361,19 +361,19 @@ def test_a_row_count_mismatch_degrades_to_no_embeddings(
     assert len(output.turns) == 2  # the real artifact is untouched
 
 
-def test_the_recording_is_decoded_by_faster_whisper_and_a_failure_is_audio_decode(
+def test_the_recording_is_decoded_by_the_service_and_a_failure_is_audio_decode(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """pyannote is handed a waveform, never the file path: torchaudio on
-    Windows cannot open the vault's mp4/m4a recordings, faster-whisper's
-    bundled FFmpeg can. A file the decoder rejects is the recording's
-    fault, classified as such."""
-    import faster_whisper.audio as fw_audio
+    Windows cannot open the vault's mp4/m4a recordings, the service's own
+    PyAV decoder (the one the transcription used) can. A file the decoder
+    rejects is the recording's fault, classified as such."""
+    import transcription.providers.audio as service_audio
 
-    def refuse(path: str, sampling_rate: int = 16000) -> None:
+    def refuse(path: Path, sampling_rate: int = 16000) -> None:
         raise RuntimeError(f"no such codec in {path}")
 
-    monkeypatch.setattr(fw_audio, "decode_audio", refuse)
+    monkeypatch.setattr(service_audio, "decode_audio", refuse)
     diarizer = PyannoteDiarizer(_config())
     bad = tmp_path / "meeting.mp4"
     bad.write_bytes(b"not audio")

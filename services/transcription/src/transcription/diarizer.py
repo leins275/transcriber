@@ -317,11 +317,12 @@ class PyannoteDiarizer:
 
         pyannote's own reader is torchaudio, which on Windows has only the
         `soundfile` backend (wav/flac/ogg) -- it cannot open the mp4/m4a/
-        mkv recordings the vault files. faster-whisper's decoder (PyAV, with
-        FFmpeg bundled in its wheel) is what the transcription itself used
-        on the same file, so the pass sees exactly the audio the words came
-        from. A decode failure is the recording's problem (`audio_decode`),
-        never the model's.
+        mkv recordings the vault files. The service's own decoder
+        (`providers/audio.py`: PyAV, with FFmpeg bundled in faster-whisper's
+        wheel, damaged packets skipped as silence) is what the transcription
+        itself used on the same file, so the pass sees exactly the audio the
+        words came from. A decode failure is the recording's problem
+        (`audio_decode`), never the model's.
         """
         try:
             import torch  # type: ignore[import-not-found,unused-ignore]  # noqa: PLC0415
