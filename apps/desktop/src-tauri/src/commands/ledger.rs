@@ -159,6 +159,7 @@ mod tests {
             compression: Some(LedgerCompression {
                 replaced: true,
                 encoder: Some("hevc_nvenc".to_string()),
+                normalized: true,
                 before_bytes: 1_347_900_000,
                 after_bytes: 161_700_000,
                 warning: None,

@@ -29,6 +29,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     diarize: false,
     hf_token_present: false,
     compress_video: true,
+    normalize_audio: true,
     ...overrides,
   };
 }

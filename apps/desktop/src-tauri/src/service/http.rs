@@ -202,6 +202,11 @@ struct LlmSubmitBody<'a> {
     max_speakers: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     speaker_match_threshold: Option<f64>,
+    /// Set on every `compress` submission (the operator's switch, sent
+    /// explicitly); omitted on every other kind, whose bodies the service
+    /// would refuse it on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    normalize_audio: Option<bool>,
 }
 
 /// `POST /v1/jobs` `202` response body.
@@ -879,6 +884,7 @@ impl TranscriptionService for HttpTranscriptionService {
             output_dir: &req.output_dir,
             max_speakers: req.max_speakers,
             speaker_match_threshold: req.speaker_match_threshold,
+            normalize_audio: req.normalize_audio,
         };
         let request = self.authorize(self.client.post(self.endpoint("/v1/jobs")).json(&body));
         let response = request.send().await.map_err(|err| self.unavailable(err))?;
@@ -2591,7 +2597,8 @@ mod tests {
                 "replaced": true,
                 "path": "C:\\Meetings\\ELS\\260812 - Security issue\\source.mp4",
                 "encoder": "hevc_nvenc",
-                "audio": "copy",
+                "audio": "aac",
+                "normalized": true,
                 "before_bytes": 1_347_900_000_u64,
                 "after_bytes": 161_700_000_u64,
                 "warning": null,
@@ -2636,6 +2643,7 @@ mod tests {
                 Some(LedgerCompression {
                     replaced: true,
                     encoder: Some("hevc_nvenc".to_string()),
+                    normalized: true,
                     before_bytes: 1_347_900_000,
                     after_bytes: 161_700_000,
                     warning: None,
@@ -2776,10 +2784,48 @@ mod tests {
                     output_dir: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
                     max_speakers: None,
                     speaker_match_threshold: None,
+                    normalize_audio: None,
                 })
                 .await
                 .expect("submit should succeed");
             assert_eq!(job_id, "job-7");
+        });
+    }
+
+    #[test]
+    fn a_compress_submission_carries_the_levelling_switch_and_nothing_else_does() {
+        run(async {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/v1/jobs"))
+                .and(body_json(serde_json::json!({
+                    "job_type": "compress",
+                    "input_path": "C:\\Meetings\\ELS\\260812 - Sync",
+                    "output_dir": "C:\\Meetings\\ELS\\260812 - Sync",
+                    "normalize_audio": false,
+                })))
+                .respond_with(
+                    ResponseTemplate::new(202)
+                        .set_body_json(serde_json::json!({"job_id": "job-8"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            let service = HttpTranscriptionService::new(&server.uri(), None)
+                .expect("loopback base url must be accepted");
+            let job_id = service
+                .submit_llm(super::super::LlmSubmitRequest {
+                    kind: super::super::LlmJobKind::Compress,
+                    input_path: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+                    output_dir: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
+                    max_speakers: None,
+                    speaker_match_threshold: None,
+                    normalize_audio: Some(false),
+                })
+                .await
+                .expect("submit should succeed");
+            assert_eq!(job_id, "job-8");
         });
     }
 

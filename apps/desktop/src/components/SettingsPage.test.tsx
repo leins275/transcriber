@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPage } from "./SettingsPage";
 import type { ModelDownloadStatus } from "../lib/modelDownload";
@@ -25,6 +25,7 @@ function buildSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     diarize: false,
     hf_token_present: false,
     compress_video: true,
+    normalize_audio: true,
     ...overrides,
   };
 }
@@ -147,6 +148,7 @@ function renderPage(overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
     onSaveHfToken: () => Promise.resolve(),
     onSetDiarizeEnabled: () => Promise.resolve(),
     onSetCompressVideo: () => Promise.resolve(),
+    onSetNormalizeAudio: () => Promise.resolve(),
     onDiarizeLabelledMeetings: () => Promise.resolve(0),
     ...overrides,
   };
@@ -380,6 +382,38 @@ describe("SettingsPage recordings row", () => {
     ).not.toBeChecked();
   });
 
+  it("flips the voice-levelling switch on its own", async () => {
+    const user = userEvent.setup();
+    const onSetNormalizeAudio = vi.fn().mockResolvedValue(undefined);
+    const onSetCompressVideo = vi.fn().mockResolvedValue(undefined);
+    renderPage({ onSetNormalizeAudio, onSetCompressVideo });
+
+    const toggle = screen.getByRole("checkbox", { name: /even out the voices/i });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    expect(onSetNormalizeAudio).toHaveBeenCalledWith(false);
+    expect(onSetCompressVideo).not.toHaveBeenCalled();
+  });
+
+  it("renders the voice-levelling switch off, and greys it out without compression", () => {
+    renderPage({ settings: buildSettings({ normalize_audio: false }) });
+    expect(screen.getByRole("checkbox", { name: /even out the voices/i })).not.toBeChecked();
+
+    cleanup();
+    renderPage({ settings: buildSettings({ compress_video: false }) });
+    expect(screen.getByRole("checkbox", { name: /even out the voices/i })).toBeDisabled();
+  });
+
+  it("shows the levelling save error under its own switch", async () => {
+    const user = userEvent.setup();
+    renderPage({ onSetNormalizeAudio: () => Promise.reject(new Error("config is locked")) });
+
+    await user.click(screen.getByRole("checkbox", { name: /even out the voices/i }));
+
+    expect(await screen.findByText("config is locked")).toBeInTheDocument();
+  });
+
   it("shows the save error under the switch and leaves the speakers row alone", async () => {
     const user = userEvent.setup();
     renderPage({ onSetCompressVideo: () => Promise.reject(new Error("disk is read-only")) });
@@ -478,6 +512,7 @@ describe("SettingsPage speakers row", () => {
           onSaveHfToken,
           onSetDiarizeEnabled: () => Promise.resolve(),
           onSetCompressVideo: () => Promise.resolve(),
+          onSetNormalizeAudio: () => Promise.resolve(),
           onDiarizeLabelledMeetings: () => Promise.resolve(0),
         }}
       />,

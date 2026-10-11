@@ -79,6 +79,23 @@ MIN_GAIN = 0.15
 DURATION_TOLERANCE_SEC = 1.0
 
 AAC_BIT_RATE = 160_000
+
+# Voice levelling (`normalize_audio`): FFmpeg's Dynamic Audio Normalizer,
+# which rides the gain over a short window so a quiet voice is lifted and
+# a loud one held, where `loudnorm` would apply one gain to the whole
+# file. The filter takes the *minimum* gain across its window before
+# smoothing, so its 15 s default window never lifts a quiet speaker
+# between two loud turns: `f=300:g=7` is a 2.1 s window, short enough to
+# follow turns of a few seconds. `r=0.2` aims each window at -14 dBFS RMS
+# rather than at the peak (a spiky voice then lands as loud as a smooth
+# one), `m=20` caps the lift at 26 dB and `p=0.9` leaves 1 dB of headroom.
+# Measured on the operator's vault, per-speaker RMS over the labelled
+# segments of the four meetings with the widest spread between voices:
+# 12-17 dB apart before, 3.4-5.4 dB after (the peak-driven default
+# settings left 5-9 dB, `speechnorm` 4-8 dB). Do not change without
+# re-measuring.
+DYNAUDNORM_OPTIONS = "f=300:g=7:p=0.9:m=20:r=0.2"
+DYNAUDNORM_FILTER = "dynaudnorm"
 PROGRESS_STEP = 0.02
 CANCEL_EVERY_PACKETS = 50
 
@@ -139,6 +156,9 @@ class CompressOutcome:
     audio: str | None
     before_bytes: int
     after_bytes: int
+    # Whether the kept output's audio went through the voice leveller
+    # (`DYNAUDNORM_OPTIONS`); always false when nothing was kept.
+    normalized: bool = False
 
     def summary(self) -> str:
         """One line for the log: what the recording weighed before and after."""
@@ -147,7 +167,8 @@ class CompressOutcome:
         saved = 1.0 - self.after_bytes / self.before_bytes if self.before_bytes else 0.0
         return (
             f"{_megabytes(self.before_bytes)} -> {_megabytes(self.after_bytes)}"
-            f" ({saved:.0%} smaller, {self.encoder}, audio {self.audio or 'none'})"
+            f" ({saved:.0%} smaller, {self.encoder}, audio {self.audio or 'none'}"
+            f"{' normalized' if self.normalized else ''})"
         )
 
     def as_manifest(self) -> dict[str, Any]:
@@ -156,6 +177,7 @@ class CompressOutcome:
             "path": str(self.path),
             "encoder": self.encoder,
             "audio": self.audio,
+            "normalized": self.normalized,
             "before_bytes": self.before_bytes,
             "after_bytes": self.after_bytes,
             "warning": self.warning,
@@ -206,6 +228,7 @@ def compress_recording(
     encoders: Sequence[EncoderSpec] = DEFAULT_ENCODERS,
     min_source_kbps: float = MIN_SOURCE_KBPS,
     min_gain: float = MIN_GAIN,
+    normalize_audio: bool = True,
 ) -> CompressOutcome:
     """Replace ``source`` with a smaller HEVC mp4, or leave it alone and say why.
 
@@ -213,6 +236,10 @@ def compress_recording(
     throttled) while encoding; ``cancel`` is polled between packets and is
     expected to raise ``ServiceError(CANCELLED)``, which propagates
     untouched. Every other failure is a warning on the outcome.
+
+    With ``normalize_audio`` the audio track is levelled across voices
+    (``DYNAUDNORM_OPTIONS``) and always re-encoded to AAC; without it the
+    track is copied whenever an mp4 can hold it.
     """
     meeting_dir = source.parent
     before = source.stat().st_size
@@ -233,8 +260,13 @@ def compress_recording(
     try:
         for spec in encoders:
             try:
-                decoded_sec, audio = _encode(
-                    source, partial, spec, on_progress=on_progress, cancel=cancel
+                decoded_sec, audio, normalized = _encode(
+                    source,
+                    partial,
+                    spec,
+                    on_progress=on_progress,
+                    cancel=cancel,
+                    normalize=normalize_audio,
                 )
             except ServiceError:
                 raise
@@ -257,6 +289,7 @@ def compress_recording(
                 audio=audio,
                 before_bytes=before,
                 after_bytes=after,
+                normalized=normalized,
             )
     except ServiceError:
         raise
@@ -319,14 +352,17 @@ def _encode(
     *,
     on_progress: OnProgress,
     cancel: Cancel | None,
-) -> tuple[float, str | None]:
-    """Transcode ``source`` into ``target``; returns (decoded seconds, audio mode).
+    normalize: bool = False,
+) -> tuple[float, str | None, bool]:
+    """Transcode ``source`` into ``target``; returns (decoded seconds, audio
+    mode, whether the audio was levelled).
 
     The first video stream is re-encoded with ``spec`` at ``target_size``
     and its own frame rate, pts copied in the source time base (variable
-    frame rates survive). The first audio stream is remuxed when an mp4 can
-    hold its codec, else re-encoded to AAC. Everything else (subtitles,
-    chapters, extra streams) is dropped.
+    frame rates survive). The first audio stream is levelled and encoded
+    to AAC when ``normalize`` is on and the filter is there, else remuxed
+    when an mp4 can hold its codec, else re-encoded to AAC. Everything
+    else (subtitles, chapters, extra streams) is dropped.
     """
     import av  # noqa: PLC0415
 
@@ -361,8 +397,11 @@ def _encode(
             audio_mode: str | None = None
             audio: av.AudioStream | None = None
             resampler: av.AudioResampler | None = None
+            leveller: _Leveller | None = None
             if src_audio is not None:
-                if src_audio.codec_context.name in MP4_AUDIO_CODECS:
+                if normalize and _leveller_available():
+                    leveller = _Leveller()
+                if leveller is None and src_audio.codec_context.name in MP4_AUDIO_CODECS:
                     audio = out.add_stream_from_template(src_audio)
                     audio_mode = "copy"
                 else:
@@ -393,6 +432,17 @@ def _encode(
                     for encoded in audio_out.encode(resampled):
                         out.mux(encoded)
 
+            def level_audio(
+                decoded: av.AudioFrame | None,
+                audio_out: av.AudioStream,
+                audio_resampler: av.AudioResampler,
+                audio_leveller: _Leveller,
+            ) -> None:
+                for levelled in audio_leveller.process(decoded):
+                    emit_audio(levelled, audio_out, audio_resampler)
+
+            bad_audio_packets = 0
+
             # At end of file the demuxer yields one empty packet per stream
             # (no dts): decoding it flushes that decoder -- which a
             # frame-threaded decoder needs, or its last frames are lost.
@@ -416,11 +466,32 @@ def _encode(
                             packet.stream = audio
                             out.mux(packet)
                     else:
-                        for decoded in packet.decode():
-                            emit_audio(decoded, audio, resampler)
+                        # A damaged packet (some recorders leave them) is
+                        # dropped, as the ffmpeg CLI does; a remux would
+                        # have carried it through unplayable anyway.
+                        try:
+                            frames = list(packet.decode())
+                        except av.error.InvalidDataError:
+                            bad_audio_packets += 1
+                            continue
+                        for decoded in frames:
+                            if leveller is not None:
+                                level_audio(
+                                    cast("av.AudioFrame", decoded), audio, resampler, leveller
+                                )
+                            else:
+                                emit_audio(decoded, audio, resampler)
+            if bad_audio_packets:
+                _logger.warning(
+                    "compress: %s: %d damaged audio packet(s) skipped",
+                    source.name,
+                    bad_audio_packets,
+                )
             for encoded in video.encode(None):
                 out.mux(encoded)
             if audio is not None and resampler is not None:
+                if leveller is not None:
+                    level_audio(None, audio, resampler, leveller)
                 for resampled in resampler.resample(None):
                     for encoded in audio.encode(resampled):
                         out.mux(encoded)
@@ -432,7 +503,70 @@ def _encode(
             out.close()
     if reported < 1.0:
         on_progress(1.0)
-    return decoded_sec, audio_mode
+    return decoded_sec, audio_mode, leveller is not None
+
+
+def _leveller_available() -> bool:
+    """Whether the bundled FFmpeg carries the voice leveller; a build
+    without it logs once and the audio goes through un-levelled."""
+    import av  # noqa: PLC0415
+    import av.filter  # noqa: PLC0415
+
+    try:
+        av.filter.Filter(DYNAUDNORM_FILTER)
+    except (ValueError, av.error.FFmpegError) as exc:
+        _logger.warning(
+            "compress: audio not normalized, %s is unavailable: %s", DYNAUDNORM_FILTER, exc
+        )
+        return False
+    return True
+
+
+class _Leveller:
+    """The voice-levelling filter graph, built on the first frame (the
+    decoder only knows its sample format once it has decoded one).
+
+    ``process(frame)`` yields the levelled frames ready so far;
+    ``process(None)`` flushes and yields the rest.
+    """
+
+    def __init__(self) -> None:
+        self._graph: Any = None
+
+    def _build(self, frame: av.AudioFrame) -> None:
+        import av.filter  # noqa: PLC0415
+
+        graph = av.filter.Graph()
+        source = graph.add_abuffer(
+            format=frame.format.name,
+            sample_rate=frame.sample_rate,
+            layout=frame.layout.name,
+            time_base=frame.time_base,
+        )
+        leveller = graph.add(DYNAUDNORM_FILTER, DYNAUDNORM_OPTIONS)
+        # The filter works in double precision; back to floats for AAC.
+        to_float = graph.add("aformat", "sample_fmts=fltp")
+        sink = graph.add("abuffersink")
+        source.link_to(leveller)
+        leveller.link_to(to_float)
+        to_float.link_to(sink)
+        graph.configure()
+        self._graph = graph
+
+    def process(self, frame: av.AudioFrame | None) -> list[av.AudioFrame]:
+        import av  # noqa: PLC0415
+
+        if self._graph is None:
+            if frame is None:
+                return []
+            self._build(frame)
+        self._graph.push(frame)
+        ready: list[av.AudioFrame] = []
+        while True:
+            try:
+                ready.append(cast("av.AudioFrame", self._graph.pull()))
+            except (av.error.BlockingIOError, av.error.EOFError):
+                return ready
 
 
 def _verify(target: Path, expected_sec: float, source_bytes: int, min_gain: float) -> str | None:

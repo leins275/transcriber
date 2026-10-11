@@ -137,7 +137,13 @@ def _leftovers(meeting: Path) -> list[str]:
 
 
 def _run(source: Path, **overrides: object) -> CompressOutcome:
-    kwargs: dict[str, object] = {"on_progress": lambda _fraction: None, "encoders": (FAST_X265,)}
+    # Audio levelling is off here so the rest of the suite pins the copy /
+    # re-encode rules; the levelling tests below switch it on.
+    kwargs: dict[str, object] = {
+        "on_progress": lambda _fraction: None,
+        "encoders": (FAST_X265,),
+        "normalize_audio": False,
+    }
     kwargs.update(overrides)
     return compress_recording(source, **kwargs)  # type: ignore[arg-type]
 
@@ -287,6 +293,159 @@ def test_pcm_audio_is_re_encoded_to_aac(tmp_path: Path) -> None:
     assert outcome.replaced is True
     assert outcome.audio == "aac"
     assert _audio_codec(outcome.path) == "aac"
+
+
+def _write_two_level_tone(
+    out: av.container.OutputContainer, stream: av.AudioStream, seconds: float
+) -> None:
+    """A tone at full amplitude for the first half and at 1/30 of it after
+    -- two voices, one loud and one almost silent."""
+    total = int(seconds * SAMPLE_RATE)
+    written = 0
+    while written < total:
+        count = min(1024, total - written)
+        frame = av.AudioFrame(format="fltp", layout="mono", samples=count)
+        frame.sample_rate = SAMPLE_RATE
+        data = b"".join(
+            struct.pack(
+                "<f",
+                (0.6 if (written + k) < total // 2 else 0.02)
+                * math.sin(2 * math.pi * 440 * (written + k) / SAMPLE_RATE),
+            )
+            for k in range(count)
+        )
+        plane = frame.planes[0]
+        plane.update(data + bytes(plane.buffer_size - len(data)))
+        frame.pts = written
+        frame.time_base = Fraction(1, SAMPLE_RATE)
+        for packet in stream.encode(frame):
+            out.mux(packet)
+        written += count
+    for packet in stream.encode(None):
+        out.mux(packet)
+
+
+def make_two_voice_recording(tmp_path: Path, *, seconds: float = 8.0) -> Path:
+    """`source.mkv` whose AAC track is loud for the first half and nearly
+    silent for the second."""
+    meeting = tmp_path / "ELS" / MEETING_NAME
+    meeting.mkdir(parents=True, exist_ok=True)
+    path = meeting / "source.mkv"
+    with av.open(str(path), "w") as out:
+        video_stream = out.add_stream(
+            "libx264", rate=FPS, options={"crf": "0", "preset": "ultrafast"}
+        )
+        video_stream.width, video_stream.height = 128, 128
+        video_stream.pix_fmt = "yuv420p"
+        video_stream.time_base = Fraction(1, FPS)
+        audio_stream = out.add_stream("aac", rate=SAMPLE_RATE)
+        for index in range(int(seconds * FPS)):
+            frame = av.VideoFrame(128, 128, "yuv420p")
+            for plane in frame.planes:
+                plane.update(os.urandom(plane.buffer_size))
+            frame.pts = index
+            frame.time_base = Fraction(1, FPS)
+            for packet in video_stream.encode(frame):
+                out.mux(packet)
+        for packet in video_stream.encode(None):
+            out.mux(packet)
+        _write_two_level_tone(out, audio_stream, seconds)
+    return path
+
+
+def _half_rms_db(path: Path) -> tuple[float, float]:
+    """RMS of the first and second half of the decoded audio, in dBFS."""
+    squares: list[float] = []
+    with av.open(str(path)) as container:
+        stream = container.streams.audio[0]
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=SAMPLE_RATE)
+        for packet in container.demux(stream):
+            for decoded in packet.decode():
+                for frame in resampler.resample(decoded):
+                    squares.extend(
+                        x * x
+                        for x in struct.unpack(
+                            f"<{frame.samples}f", bytes(frame.planes[0])[: frame.samples * 4]
+                        )
+                    )
+    half = len(squares) // 2
+
+    def db(values: list[float]) -> float:
+        return 20 * math.log10(max(1e-9, math.sqrt(sum(values) / max(1, len(values)))))
+
+    return db(squares[:half]), db(squares[half:])
+
+
+def test_a_quiet_voice_is_lifted_towards_the_loud_one(tmp_path: Path) -> None:
+    source = make_two_voice_recording(tmp_path)
+    loud_before, quiet_before = _half_rms_db(source)
+    spread_before = loud_before - quiet_before
+    assert spread_before > 25  # the fixture really is lopsided
+    duration_before = _duration(source)
+
+    outcome = _run(source, normalize_audio=True)
+
+    assert outcome.replaced is True
+    assert outcome.normalized is True
+    assert outcome.audio == "aac"
+    assert _audio_codec(outcome.path) == "aac"
+    loud_after, quiet_after = _half_rms_db(outcome.path)
+    spread_after = loud_after - quiet_after
+    # The leveller's window needs a couple of seconds to settle after the
+    # change of voice, so the halves never match exactly; a large share of
+    # the gap closing is the point.
+    assert spread_after < spread_before / 2, (spread_before, spread_after)
+    assert quiet_after > quiet_before + 6, (quiet_before, quiet_after)
+    assert abs(_duration(outcome.path) - duration_before) <= 1.0
+
+
+def test_levelling_re_encodes_an_aac_track_instead_of_copying_it(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv", audio="aac")
+
+    outcome = _run(source, normalize_audio=True)
+
+    assert outcome.audio == "aac"
+    assert outcome.normalized is True
+
+
+def test_levelling_off_leaves_the_copy_rule_in_force(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv", audio="aac")
+
+    outcome = _run(source, normalize_audio=False)
+
+    assert outcome.audio == "copy"
+    assert outcome.normalized is False
+
+
+def test_levelling_is_on_unless_switched_off() -> None:
+    import inspect
+
+    assert inspect.signature(compress_recording).parameters["normalize_audio"].default is True
+
+
+def test_a_missing_leveller_falls_back_to_the_plain_track(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(compress, "DYNAUDNORM_FILTER", "no_such_filter")
+    source = make_recording(tmp_path, ext="mkv", audio="aac")
+
+    with caplog.at_level("WARNING", logger="transcription"):
+        outcome = _run(source, normalize_audio=True)
+
+    assert outcome.replaced is True
+    assert outcome.normalized is False
+    assert outcome.audio == "copy"
+    assert any("no_such_filter" in record.getMessage() for record in caplog.records)
+
+
+def test_the_manifest_and_summary_say_when_the_audio_was_levelled(tmp_path: Path) -> None:
+    source = make_recording(tmp_path, ext="mkv", audio="aac")
+
+    outcome = _run(source, normalize_audio=True)
+
+    assert outcome.as_manifest()["normalized"] is True
+    assert outcome.summary().endswith("audio aac normalized)")
+    assert "normalized" not in _run(make_recording(tmp_path / "b", ext="mkv")).summary()
 
 
 def test_a_silent_video_is_compressed_without_an_audio_stream(tmp_path: Path) -> None:

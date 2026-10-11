@@ -27,6 +27,10 @@ export type SettingsView = {
    * and export are done (the app's `compress_video` key, on when unset).
    * Additive. */
   compress_video: boolean;
+  /** Whether the compress stage levels the voices in the audio track, a
+   * quiet speaker lifted towards a loud one (the app's `normalize_audio`
+   * key, on when unset). */
+  normalize_audio: boolean;
 };
 
 /** `GET /v1/diarization/status` through the Rust shell: which of speaker
@@ -453,6 +457,8 @@ export type LedgerJobView = {
 export type LedgerCompressionView = {
   replaced: boolean;
   encoder: string | null;
+  /** Whether the kept output's audio was levelled across voices. */
+  normalized: boolean;
   before_bytes: number;
   after_bytes: number;
   warning: string | null;

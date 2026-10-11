@@ -90,6 +90,7 @@ fn llm_request() -> LlmSubmitRequest {
         output_dir: "C:\\Meetings\\ELS\\260812 - Security issue".to_string(),
         max_speakers: None,
         speaker_match_threshold: None,
+        normalize_audio: None,
     }
 }
 
@@ -188,6 +189,7 @@ fn diarize_submission_carries_the_speaker_cap_and_the_strict_threshold() {
                 kind: LlmJobKind::Diarize,
                 max_speakers: Some(2),
                 speaker_match_threshold: Some(0.3),
+                normalize_audio: None,
                 ..llm_request()
             })
             .await

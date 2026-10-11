@@ -146,6 +146,14 @@ pub struct Settings {
     /// on (`compress_video_enabled`), and it is never serialized as `null`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compress_video: Option<bool>,
+    /// Whether the compress stage levels the voices in the audio track
+    /// (a quiet speaker lifted towards a loud one) on its way into the
+    /// smaller mp4. Read by the **app** only, like `compress_video`: the
+    /// registry sends it as the compress submission's `normalize_audio`,
+    /// so the service never reads the key itself. Absent means on
+    /// (`normalize_audio_enabled`), and it is never serialized as `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalize_audio: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, serde_json::Value>,
 }
@@ -165,6 +173,7 @@ impl Default for Settings {
             hf_token: None,
             speaker_match_threshold_strict: None,
             compress_video: None,
+            normalize_audio: None,
             extra: Map::new(),
         }
     }
@@ -185,6 +194,8 @@ pub struct SettingsView {
     pub hf_token_present: bool,
     /// `compress_video`, resolved to its default (on) when unset.
     pub compress_video: bool,
+    /// `normalize_audio`, resolved to its default (on) when unset.
+    pub normalize_audio: bool,
 }
 
 /// The path `config.json` lives at, inside `dir`.
@@ -254,6 +265,7 @@ pub fn settings_view(settings: &Settings) -> SettingsView {
             .as_deref()
             .is_some_and(|token| !token.trim().is_empty()),
         compress_video: compress_video_enabled(settings),
+        normalize_audio: normalize_audio_enabled(settings),
     }
 }
 
@@ -271,6 +283,23 @@ pub fn set_compress_video(
     enabled: bool,
 ) -> Result<(), AppError> {
     settings.compress_video = Some(enabled);
+    save(dir, settings)
+}
+
+/// Whether the compress stage levels the voices: `normalize_audio` when
+/// the key is present, else on -- an untouched install levels.
+pub fn normalize_audio_enabled(settings: &Settings) -> bool {
+    settings.normalize_audio.unwrap_or(true)
+}
+
+/// Persists the voice-levelling switch; the same discipline as
+/// [`set_compress_video`].
+pub fn set_normalize_audio(
+    dir: &Path,
+    settings: &mut Settings,
+    enabled: bool,
+) -> Result<(), AppError> {
+    settings.normalize_audio = Some(enabled);
     save(dir, settings)
 }
 
@@ -453,6 +482,51 @@ mod tests {
         assert!(compress_video_enabled(&settings));
         assert!(settings_view(&settings).compress_video);
         assert!(compress_video_enabled(&Settings::default()));
+    }
+
+    #[test]
+    fn normalize_audio_absent_reads_as_on() {
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(
+            config_path(dir.path()),
+            r#"{"schema_version": 1, "meetings_root": null, "service": {"base_url": null}, "model": {"id": null, "path": null}}"#,
+        )
+        .expect("write config");
+
+        let settings = load(dir.path()).expect("load");
+
+        assert_eq!(settings.normalize_audio, None);
+        assert!(normalize_audio_enabled(&settings));
+        assert!(settings_view(&settings).normalize_audio);
+        assert!(normalize_audio_enabled(&Settings::default()));
+    }
+
+    #[test]
+    fn set_normalize_audio_persists_false_and_round_trips() {
+        let dir = tempdir().expect("tempdir");
+        let mut settings = Settings::default();
+
+        set_normalize_audio(dir.path(), &mut settings, false).expect("save must succeed");
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(config_path(dir.path())).unwrap())
+                .unwrap();
+        assert_eq!(doc["normalize_audio"], json!(false));
+        assert_eq!(
+            doc.get("compress_video"),
+            None,
+            "the sibling switch is untouched"
+        );
+        let reloaded = load(dir.path()).expect("reload");
+        assert_eq!(reloaded.normalize_audio, Some(false));
+        assert!(!normalize_audio_enabled(&reloaded));
+        assert!(!settings_view(&reloaded).normalize_audio);
+
+        set_normalize_audio(dir.path(), &mut settings, true).expect("save must succeed");
+        assert_eq!(
+            load(dir.path()).expect("reload").normalize_audio,
+            Some(true)
+        );
     }
 
     #[test]

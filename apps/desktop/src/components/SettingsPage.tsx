@@ -50,6 +50,9 @@ export type SettingsPageProps = {
   /** Flips `compress_video`: whether a dropped video is re-encoded to a
    * smaller mp4 once the rest of the chain is done. No restart involved. */
   onSetCompressVideo: (enabled: boolean) => Promise<void>;
+  /** Flips `normalize_audio`: whether that re-encode levels the voices so
+   * a quiet speaker comes out as loud as the others. No restart involved. */
+  onSetNormalizeAudio: (enabled: boolean) => Promise<void>;
   /** Queues speaker identification over every hand-labelled meeting that
    * never had a pass; resolves to how many were queued. */
   onDiarizeLabelledMeetings: () => Promise<number>;
@@ -225,6 +228,7 @@ export function SettingsPage({
   onSaveHfToken,
   onSetDiarizeEnabled,
   onSetCompressVideo,
+  onSetNormalizeAudio,
   onDiarizeLabelledMeetings,
 }: SettingsPageProps) {
   const anyLlmTransferring = llmModels?.models.some(isTransferring) ?? false;
@@ -244,6 +248,8 @@ export function SettingsPage({
   // failed save there never reads as a speakers problem (or vice versa).
   const [switchingCompress, setSwitchingCompress] = useState(false);
   const [compressError, setCompressError] = useState<string | null>(null);
+  const [switchingNormalize, setSwitchingNormalize] = useState(false);
+  const [normalizeError, setNormalizeError] = useState<string | null>(null);
   const [backfillState, setBackfillState] = useState<
     { kind: "idle" } | { kind: "queueing" } | { kind: "queued"; count: number }
   >({ kind: "idle" });
@@ -270,6 +276,14 @@ export function SettingsPage({
     onSetCompressVideo(enabled)
       .catch((caught: unknown) => setCompressError(errorMessageOf(caught)))
       .finally(() => setSwitchingCompress(false));
+  };
+
+  const toggleNormalize = (enabled: boolean) => {
+    setSwitchingNormalize(true);
+    setNormalizeError(null);
+    onSetNormalizeAudio(enabled)
+      .catch((caught: unknown) => setNormalizeError(errorMessageOf(caught)))
+      .finally(() => setSwitchingNormalize(false));
   };
 
   const toggleDiarize = (enabled: boolean) => {
@@ -477,6 +491,23 @@ export function SettingsPage({
             Re-encodes a dropped video to a smaller HEVC mp4 (at most 1080p) once its transcript,
             summary and export are done. The original is replaced only when the result is at least
             15% smaller; audio-only recordings are left alone.
+          </p>
+          <div className={styles.line}>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={settings.normalize_audio}
+                disabled={switchingNormalize || !settings.compress_video}
+                onChange={(event) => toggleNormalize(event.target.checked)}
+              />
+              Even out the voices while compressing
+            </label>
+          </div>
+          {normalizeError && <p className={styles.warning}>{normalizeError}</p>}
+          <p className={styles.hint}>
+            Lifts a quiet speaker towards the loud ones in the compressed recording (the audio is
+            re-encoded instead of copied). The transcript is made from the original audio either
+            way.
           </p>
         </div>
       </div>

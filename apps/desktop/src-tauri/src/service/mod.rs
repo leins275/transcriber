@@ -422,6 +422,10 @@ pub struct LlmSubmitRequest {
     /// registry alongside `max_speakers` on a strict-roster meeting (FR-7).
     /// `None` leaves the service's own configured threshold in force.
     pub speaker_match_threshold: Option<f64>,
+    /// Whether a `Compress` job levels the voices in the audio track, the
+    /// operator's `normalize_audio` switch, sent explicitly on every
+    /// compress submission. `None` on every other kind, which omits the key.
+    pub normalize_audio: Option<bool>,
 }
 
 /// `POST /v1/search` request body.
@@ -734,6 +738,10 @@ pub struct LedgerCompression {
     /// The encoder that produced the kept output (`hevc_nvenc`, `libx265`).
     #[serde(default)]
     pub encoder: Option<String>,
+    /// Whether the kept output's audio was levelled across voices; absent
+    /// on a manifest older than the switch.
+    #[serde(default)]
+    pub normalized: bool,
     pub before_bytes: u64,
     pub after_bytes: u64,
     #[serde(default)]

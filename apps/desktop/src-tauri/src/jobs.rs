@@ -208,6 +208,10 @@ struct Shared {
     /// Set at startup and by the Settings switch; the same plain mutex
     /// discipline as `strict_speaker_match_threshold`.
     compress_video: StdMutex<bool>,
+    /// Whether that stage levels the voices in the audio track
+    /// (`config.json`'s app-only `normalize_audio`, on by default); sent
+    /// explicitly on every compress submission. Same discipline.
+    normalize_audio: StdMutex<bool>,
     jobs: RwLock<HashMap<String, JobSnapshot>>,
     /// `this app's job id -> F2's job id`, for jobs currently in flight.
     ///
@@ -240,6 +244,14 @@ impl Shared {
             .compress_video
             .lock()
             .expect("compress_video mutex poisoned")
+    }
+
+    /// Whether the compress stage levels the voices.
+    fn normalize_audio(&self) -> bool {
+        *self
+            .normalize_audio
+            .lock()
+            .expect("normalize_audio mutex poisoned")
     }
 
     /// The speaker cap the meeting's project roster imposes, and the
@@ -345,6 +357,7 @@ impl JobRegistry {
                 crate::config::DEFAULT_STRICT_SPEAKER_MATCH_THRESHOLD,
             ),
             compress_video: StdMutex::new(true),
+            normalize_audio: StdMutex::new(true),
             jobs: RwLock::new(HashMap::new()),
             service_job_ids: RwLock::new(HashMap::new()),
             poll_interval,
@@ -425,6 +438,23 @@ impl JobRegistry {
     /// Whether the chain's compress stage is currently switched on.
     pub fn compress_video(&self) -> bool {
         self.shared.compress_video()
+    }
+
+    /// Switches the compress stage's voice levelling on or off
+    /// (`config.json`'s `normalize_audio`); a fresh registry has it on,
+    /// the key's default. Read at submit time, so it takes effect on the
+    /// next compress submission, queued or not.
+    pub fn set_normalize_audio(&self, enabled: bool) {
+        *self
+            .shared
+            .normalize_audio
+            .lock()
+            .expect("normalize_audio mutex poisoned") = enabled;
+    }
+
+    /// Whether the compress stage currently levels the voices.
+    pub fn normalize_audio(&self) -> bool {
+        self.shared.normalize_audio()
     }
 
     /// Registers each path as a new `Pending` job and returns their initial
@@ -974,13 +1004,20 @@ async fn queue_follow_up(shared: &Arc<Shared>, finished: &JobSnapshot, next: Fol
     };
     // Chained derived stages (`summarize` / `export` / `compress`) run no
     // diarization pass, so they carry no speaker bounds -- their bodies
-    // stay the three pre-feature keys.
+    // stay the three pre-feature keys, plus the levelling switch on the
+    // compress stage alone (sent explicitly, so the service's own default
+    // never decides it).
+    let normalize_audio = match kind {
+        LlmJobKind::Compress => Some(shared.normalize_audio()),
+        _ => None,
+    };
     let request = LlmSubmitRequest {
         kind,
         input_path: meeting_dir,
         output_dir,
         max_speakers: None,
         speaker_match_threshold: None,
+        normalize_audio,
     };
 
     // The same registration `enqueue_llm` performs: a `Pending` snapshot
@@ -1497,6 +1534,11 @@ mod tests {
             assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Summarize);
             assert_eq!(submissions[1].kind, crate::service::LlmJobKind::Export);
             assert_eq!(submissions[2].kind, crate::service::LlmJobKind::Compress);
+            // The levelling switch travels on the compress stage only, and
+            // explicitly -- on by default.
+            assert_eq!(submissions[0].normalize_audio, None);
+            assert_eq!(submissions[1].normalize_audio, None);
+            assert_eq!(submissions[2].normalize_audio, Some(true));
 
             let meeting_dir = snapshot_meeting_dir(&registry, &snapshot.id).await;
             assert_eq!(submissions[0].input_path, meeting_dir);
@@ -1637,6 +1679,36 @@ mod tests {
     }
 
     #[test]
+    fn the_compress_submission_carries_the_levelling_switch_as_set() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let source = write_recording(dir.path(), "ELS - 260101 - Planning.mp4");
+            let fake = Arc::new(FakeService::with_llm_model_absent());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+            assert!(registry.normalize_audio(), "a fresh registry has it on");
+            registry.set_normalize_audio(false);
+
+            let snapshot = registry.enqueue(vec![source]).await.remove(0);
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            let submissions = wait_for_llm_submissions(&fake, 1, Duration::from_secs(5)).await;
+            assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Compress);
+            assert_eq!(submissions[0].normalize_audio, Some(false));
+        });
+    }
+
+    #[test]
     fn compress_is_not_chained_while_the_toggle_is_off() {
         run(async {
             let dir = tempdir().expect("tempdir");
@@ -1725,6 +1797,7 @@ mod tests {
                     output_dir: meeting,
                     max_speakers: None,
                     speaker_match_threshold: None,
+                    normalize_audio: None,
                 })
                 .await;
             wait_for(
@@ -1764,6 +1837,7 @@ mod tests {
             output_dir: meeting,
             max_speakers: None,
             speaker_match_threshold: None,
+            normalize_audio: None,
         };
         (registry, request)
     }
@@ -1822,6 +1896,7 @@ mod tests {
                     output_dir: meeting,
                     max_speakers: None,
                     speaker_match_threshold: None,
+                    normalize_audio: None,
                 })
                 .await;
             wait_for(&registry, &pending.id, is_terminal, Duration::from_secs(5)).await;

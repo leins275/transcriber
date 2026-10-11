@@ -172,6 +172,7 @@ async fn enqueue_diarize(state: &AppState, meeting_dir: &Path) -> JobSnapshot {
             output_dir: dir,
             max_speakers: None,
             speaker_match_threshold: None,
+            normalize_audio: None,
         })
         .await
 }

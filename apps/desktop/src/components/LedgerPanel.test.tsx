@@ -87,6 +87,7 @@ describe("LedgerPanel", () => {
               compression: {
                 replaced: true,
                 encoder: "hevc_nvenc",
+                normalized: false,
                 before_bytes: 1024 * 1024 * 1000,
                 after_bytes: 1024 * 1024 * 120,
                 warning: null,
@@ -103,6 +104,32 @@ describe("LedgerPanel", () => {
     expect(screen.getByText("compress")).toBeInTheDocument();
   });
 
+  it("says when a compress job evened out the voices", async () => {
+    render(
+      <LedgerPanel
+        onLoad={() =>
+          Promise.resolve([
+            buildRow({
+              job_type: "compress",
+              compression: {
+                replaced: true,
+                encoder: "libx265",
+                normalized: true,
+                before_bytes: 1024 * 1024 * 1000,
+                after_bytes: 1024 * 1024 * 120,
+                warning: null,
+              },
+            }),
+          ])
+        }
+      />,
+    );
+
+    expect(
+      await screen.findByText("1000.0 MB → 120.0 MB · 88% smaller · libx265 · voices evened out"),
+    ).toBeInTheDocument();
+  });
+
   it("says why a compress job kept the original", async () => {
     render(
       <LedgerPanel
@@ -113,6 +140,7 @@ describe("LedgerPanel", () => {
               compression: {
                 replaced: false,
                 encoder: null,
+                normalized: false,
                 before_bytes: 1024 * 1024 * 48,
                 after_bytes: 1024 * 1024 * 48,
                 warning: "already 512 kbps, kept as-is",

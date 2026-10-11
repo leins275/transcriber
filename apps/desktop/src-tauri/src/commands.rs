@@ -115,6 +115,9 @@ pub struct SettingsResponse {
     /// Whether a dropped video is compressed after the rest of the chain
     /// (`config.rs`'s `compress_video`, on when unset). Additive.
     pub compress_video: bool,
+    /// Whether the compress stage levels the voices in the audio track
+    /// (`config.rs`'s `normalize_audio`, on when unset). Additive.
+    pub normalize_audio: bool,
 }
 
 /// `%USERPROFILE%\Meetings` (E2/FR-10) -- outside the application folder by
@@ -139,6 +142,7 @@ fn build_settings_response(settings: &Settings, config_error: Option<String>) ->
         diarize: view.diarize,
         hf_token_present: view.hf_token_present,
         compress_video: view.compress_video,
+        normalize_audio: view.normalize_audio,
         supported_extensions: paths::supported_extensions()
             .iter()
             .map(|ext| ext.to_string())
@@ -468,6 +472,7 @@ impl AppState {
         registry
             .set_strict_speaker_match_threshold(config::strict_speaker_match_threshold(&settings));
         registry.set_compress_video(config::compress_video_enabled(&settings));
+        registry.set_normalize_audio(config::normalize_audio_enabled(&settings));
         AppState {
             config_dir,
             app_dir,
@@ -766,6 +771,24 @@ pub async fn set_compress_video_handler(
     };
     state.registry.read().await.set_compress_video(enabled);
     // A successful save writes a fresh, valid `config.json` (E3).
+    *state.config_error.write().await = None;
+    Ok(build_settings_response(&updated, None))
+}
+
+/// `set_normalize_audio` -- persists the voice-levelling switch and hands
+/// it to the job registry, which sends it on the next compress
+/// submission. The app's own key, like `compress_video`: no sidecar
+/// restart.
+pub async fn set_normalize_audio_handler(
+    state: &AppState,
+    enabled: bool,
+) -> Result<SettingsResponse, AppError> {
+    let updated = {
+        let mut settings = state.settings.write().await;
+        config::set_normalize_audio(&state.config_dir, &mut settings, enabled)?;
+        settings.clone()
+    };
+    state.registry.read().await.set_normalize_audio(enabled);
     *state.config_error.write().await = None;
     Ok(build_settings_response(&updated, None))
 }
@@ -1104,6 +1127,14 @@ pub async fn set_compress_video(
     enabled: bool,
 ) -> Result<SettingsResponse, AppError> {
     set_compress_video_handler(&state, enabled).await
+}
+
+#[tauri::command]
+pub async fn set_normalize_audio(
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<SettingsResponse, AppError> {
+    set_normalize_audio_handler(&state, enabled).await
 }
 
 #[tauri::command]
@@ -2197,6 +2228,46 @@ mod tests {
                 .expect("set_compress_video must succeed");
             assert!(response.compress_video);
             assert!(state.registry.read().await.compress_video());
+        });
+    }
+
+    #[test]
+    fn set_normalize_audio_persists_the_key_and_flips_the_registry_without_a_restart() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let sidecar = Arc::new(RecordingSidecarController::default());
+            let state = state_with_full(
+                settings_with_root(root.path()),
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                sidecar.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            assert!(
+                state.registry.read().await.normalize_audio(),
+                "an untouched install levels the voices"
+            );
+
+            let response = set_normalize_audio_handler(&state, false)
+                .await
+                .expect("set_normalize_audio must succeed");
+
+            assert!(!response.normalize_audio);
+            assert!(response.compress_video, "the sibling switch is untouched");
+            assert!(!state.registry.read().await.normalize_audio());
+            let saved = config::load(root.path()).expect("config.json reloads");
+            assert_eq!(saved.normalize_audio, Some(false));
+            assert_eq!(saved.compress_video, None);
+            assert!(
+                sidecar.calls().is_empty(),
+                "the key is the app's own: no sidecar restart"
+            );
+
+            let response = set_normalize_audio_handler(&state, true)
+                .await
+                .expect("set_normalize_audio must succeed");
+            assert!(response.normalize_audio);
+            assert!(state.registry.read().await.normalize_audio());
         });
     }
 

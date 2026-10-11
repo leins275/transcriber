@@ -242,22 +242,29 @@ through PyAV's bundled FFmpeg — nothing to install, no `ffmpeg.exe`
 anywhere: on an NVIDIA GPU it is NVENC's HEVC encoder (constant quality,
 CQ 28), and x265 at CRF 26 on the CPU when NVENC will not open (no NVIDIA
 GPU, an old driver). Decoding and downscaling stay on the CPU either way,
-so the CPU is busy during a GPU encode too. Audio is copied when an mp4
-can hold it. The
+so the CPU is busy during a GPU encode too. The audio track is **evened
+out** on the way: a quiet speaker is lifted towards the loud ones (FFmpeg's
+Dynamic Audio Normalizer, in-process like the rest) and the track is
+re-encoded to AAC — measured on this vault's worst meetings, voices 12–17 dB
+apart came out 3–5 dB apart. With that switched off the audio is copied as-is
+when an mp4 can hold it. The transcript and the voice memory are made from
+the original audio either way, so neither changes. The
 original is replaced only after the output is verified and is at least
 15 % smaller; audio-only recordings, recordings already at or under
 700 kbps, and anything that fails along the way are left untouched (the
 reason lands in the job's warnings). A manual re-transcribe, summarize or
 export never triggers it. The library's **Service log** tab shows what each
-compress job did: the size before and after, the share saved and the
-encoder used — or why the original was kept.
+compress job did: the size before and after, the share saved, the
+encoder used and whether the voices were evened out — or why the original
+was kept.
 
 Playing the result: VLC, mpv and macOS play HEVC natively; on Windows,
 Edge, Chrome and Movies & TV need the free "HEVC Video Extensions from
 Device Manufacturer" (or the paid store one) installed once.
 
-Settings → **Recordings** has the switch (`compress_video` in
-`config.json`, `docs/config-contract.md`). Budget roughly 25 minutes per
+Settings → **Recordings** has both switches (`compress_video` and
+`normalize_audio` in `config.json`, `docs/config-contract.md`); the second
+only matters while the first is on. Budget roughly 25 minutes per
 hour of 4K meeting on a desktop CPU and a little over half that with NVENC
 (the GPU output is about 10 % larger); like every job it holds the serial
 queue while it runs, so the next drop's transcription waits behind it.

@@ -304,6 +304,7 @@ def create_app(
             min_speakers=payload.min_speakers,
             max_speakers=payload.max_speakers,
             speaker_match_threshold=payload.speaker_match_threshold,
+            normalize_audio=payload.normalize_audio,
         )
         return {"job_id": job_id}
 

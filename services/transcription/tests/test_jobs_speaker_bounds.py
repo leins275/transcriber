@@ -337,6 +337,30 @@ def test_speaker_tuning_is_refused_on_a_job_that_never_diarizes(
     assert client.get("/v1/jobs", headers=AUTH).json() == []
 
 
+@pytest.mark.parametrize(
+    "job_type",
+    [
+        pytest.param("summarize", id="summarize"),
+        pytest.param("export", id="export"),
+        pytest.param("diarize", id="diarize"),
+        pytest.param("index", id="index"),
+    ],
+)
+def test_normalize_audio_is_refused_on_a_job_that_never_compresses(
+    client: TestClient, tmp_app_dir: Path, job_type: str
+) -> None:
+    meeting = _filed_meeting(tmp_app_dir / "ACME")
+    paths = {} if job_type == "index" else {"input_path": str(meeting), "output_dir": str(meeting)}
+    body = {"job_type": job_type, **paths, "normalize_audio": False}
+
+    response = client.post("/v1/jobs", json=body, headers=AUTH)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error_kind"] == "invalid_request"
+    assert response.json()["error_message"] == "request validation failed"
+    assert client.get("/v1/jobs", headers=AUTH).json() == []
+
+
 def test_the_job_status_echoes_neither_the_bounds_nor_the_threshold(
     config: Config, tmp_app_dir: Path
 ) -> None:

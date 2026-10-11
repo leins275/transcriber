@@ -928,6 +928,56 @@ async def test_a_compress_job_replaces_the_recording_and_records_the_manifest(
         await manager.aclose()
 
 
+@pytest.mark.parametrize(
+    ("normalize_audio", "expected"),
+    [
+        pytest.param(None, True, id="absent-means-on"),
+        pytest.param(True, True, id="on"),
+        pytest.param(False, False, id="off"),
+    ],
+)
+async def test_a_compress_job_hands_the_levelling_switch_to_the_stage(
+    config: Config,
+    ledger: Ledger,
+    meeting_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    normalize_audio: bool | None,
+    expected: bool,
+) -> None:
+    from transcription.compress import CompressOutcome
+
+    seen: list[bool] = []
+
+    def fake_compress(source: Path, *, normalize_audio: bool, **_kw: Any) -> CompressOutcome:
+        seen.append(normalize_audio)
+        return CompressOutcome(
+            replaced=False,
+            path=source,
+            warning="video kept as-is: test",
+            encoder=None,
+            audio=None,
+            before_bytes=1,
+            after_bytes=1,
+        )
+
+    monkeypatch.setattr(jobs.compress, "compress_recording", fake_compress)
+    manager = _manager(config, ledger, FakeLlm())
+    try:
+        await manager.start()
+        job_id = await manager.submit(
+            job_type="compress",
+            input_path=str(meeting_dir),
+            output_dir=str(meeting_dir),
+            normalize_audio=normalize_audio,
+        )
+        await _wait_until_terminal(manager, job_id)
+
+        assert manager.status(job_id).status == "succeeded"
+        assert seen == [expected]
+    finally:
+        await manager.aclose()
+
+
 async def test_a_compress_job_without_a_recording_fails_as_invalid_request(
     config: Config, ledger: Ledger, meeting_dir: Path
 ) -> None:

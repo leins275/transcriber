@@ -23,6 +23,7 @@ const settings: SettingsView = {
   diarize: false,
   hf_token_present: false,
   compress_video: true,
+  normalize_audio: true,
 };
 
 const entry = {

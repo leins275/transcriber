@@ -177,6 +177,10 @@ export const api = {
    * chain. The app's own key: no sidecar restart. */
   setCompressVideo: (enabled: boolean): Promise<SettingsView> =>
     call<SettingsView>("set_compress_video", { enabled }),
+  /** Persists whether the compress stage levels the voices in the audio
+   * track. The app's own key: no sidecar restart. */
+  setNormalizeAudio: (enabled: boolean): Promise<SettingsView> =>
+    call<SettingsView>("set_normalize_audio", { enabled }),
   /** Queues one such job per hand-labelled meeting that never had a
    * diarization pass; resolves to how many were queued. */
   diarizeLabelledMeetings: (): Promise<number> => call<number>("diarize_labelled_meetings"),

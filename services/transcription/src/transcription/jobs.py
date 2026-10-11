@@ -102,6 +102,9 @@ class JobState:
     min_speakers: int | None = None
     max_speakers: int | None = None
     speaker_match_threshold: float | None = None
+    # A `compress` job's voice levelling switch; `None` (the request gave
+    # none) means on.
+    normalize_audio: bool | None = None
     # The current phase's real fraction, or None while the running phase has
     # no linear signal; `phase` names that sub-step (FR-1).
     progress: float | None = 0.0
@@ -397,6 +400,7 @@ class JobManager:
         min_speakers: int | None = None,
         max_speakers: int | None = None,
         speaker_match_threshold: float | None = None,
+        normalize_audio: bool | None = None,
     ) -> str:
         """Validate, insert the ledger row and enqueue a job (FR-2, FR-9).
 
@@ -412,6 +416,9 @@ class JobManager:
         `speaker_match_threshold`) for this job alone; `None` defers to the
         configured value. Range and job-type checks live in
         `schema.JobCreate`, before any ledger row exists.
+
+        `normalize_audio` is a `compress` job's voice-levelling switch
+        (`compress.compress_recording`); `None` means on.
         """
         if job_type not in KNOWN_JOB_TYPES:
             known = ", ".join(sorted(KNOWN_JOB_TYPES))
@@ -562,6 +569,7 @@ class JobManager:
             min_speakers=min_speakers,
             max_speakers=max_speakers,
             speaker_match_threshold=speaker_match_threshold,
+            normalize_audio=normalize_audio,
         )
         self._jobs[job_id] = job
 
@@ -1492,6 +1500,7 @@ class JobManager:
             source,
             on_progress=lambda fraction: _set_phase(job, phase, fraction),
             cancel=job.cancel_token.raise_if_cancelled,
+            normalize_audio=job.normalize_audio is not False,
         )
         if outcome.warning is not None:
             job.warnings.append(outcome.warning)

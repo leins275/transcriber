@@ -237,6 +237,7 @@ pub fn run() {
             commands::transcribe_vault_entry,
             commands::set_diarization_settings,
             commands::set_compress_video,
+            commands::set_normalize_audio,
             commands::speakers::diarization_status,
             commands::speakers::diarization_runtime_download_status,
             commands::speakers::start_diarization_runtime_download,

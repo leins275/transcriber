@@ -67,7 +67,7 @@ function displayNameOf(row: LedgerJobView): string {
 }
 
 /** What a `compress` job did, in one line: "1.3 GB → 154.2 MB · 88% smaller
- * · hevc_nvenc", or why the original was kept. */
+ * · hevc_nvenc · voices evened out", or why the original was kept. */
 function compressionText(compression: LedgerCompressionView): string {
   if (!compression.replaced) {
     const kept = `Video kept at ${formatBytes(compression.before_bytes)}`;
@@ -82,6 +82,7 @@ function compressionText(compression: LedgerCompressionView): string {
     `${saved}% smaller`,
   ];
   if (compression.encoder) parts.push(compression.encoder);
+  if (compression.normalized) parts.push("voices evened out");
   return parts.join(" · ");
 }
 

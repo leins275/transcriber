@@ -108,7 +108,7 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` (with the action items as a section) |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
 | `diarize` | `<meeting>/source.<ext>` + `<meeting>/transcript.json` (no LLM call; the pyannote engine) | `<meeting>/transcript.json` rewritten in place with speaker labels and the `diarization` block, ids untouched -- see "Speaker diarization" below |
-| `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: HEVC (`hevc_nvenc` preset p6, constant-quality VBR at CQ 28, when NVENC opens; else `libx265` CRF 26, preset medium; `hvc1`-tagged so QuickTime/Safari play it), the shorter side capped at 1080p (a 4K recording becomes 1080p, area-resampled; smaller sources keep their size), same frame rate, audio copied when an mp4 can hold it else AAC 160k. Skipped with a warning for an audio-only or already-small (<= 700 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio` and the byte counts, and the service logs one line per job with the sizes before and after. (Measured on the operator's 4K screen recordings: x265 at 1080p was a third of x264's size; NVENC HEVC at CQ 28 with no bitrate target is about 10 % larger than x265 at nearly twice the speed. Only the encode runs on the GPU -- GPU decoding was slower than the CPU's) |
+| `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: HEVC (`hevc_nvenc` preset p6, constant-quality VBR at CQ 28, when NVENC opens; else `libx265` CRF 26, preset medium; `hvc1`-tagged so QuickTime/Safari play it), the shorter side capped at 1080p (a 4K recording becomes 1080p, area-resampled; smaller sources keep their size), same frame rate; the audio track is levelled across voices (FFmpeg's `dynaudnorm`, `compress.DYNAUDNORM_OPTIONS` -- a 2.1 s window aimed at -14 dBFS RMS, lift capped at 26 dB; measured on the operator's vault, voices 12-17 dB apart came out 3.4-5.4 dB apart) and re-encoded to AAC 160k, unless the request says `normalize_audio: false`, when it is copied when an mp4 can hold it else AAC 160k; a damaged audio packet is skipped with a log line rather than failing the encode. Skipped with a warning for an audio-only or already-small (<= 700 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio`, `normalized` and the byte counts, and the service logs one line per job with the sizes before and after. (Measured on the operator's 4K screen recordings: x265 at 1080p was a third of x264's size; NVENC HEVC at CQ 28 with no bitrate target is about 10 % larger than x265 at nearly twice the speed. Only the encode runs on the GPU -- GPU decoding was slower than the CPU's) |
 | `suggest_title` | `<meeting>/summary.md` (no transcript needed; only what fits the context window is read) | **nothing** -- the job's result manifest (`GET /v1/jobs/{id}/result`) is `{"title": "..."}`, a short meeting name proposed by the LLM. The caller decides what to do with it; the service never renames a folder |
 
 A `suggest_title` submission is refused with `invalid_request` when the
@@ -376,6 +376,13 @@ refused rather than quietly ignored: any of the three on a `summarize`,
 `invalid_request`** before the job is created, so no ledger row is left
 behind. None of the three is echoed by `GET /v1/jobs/{id}` -- `JobStatus`
 returns no request tuning at all.
+
+A `compress` job takes one optional field of its own, `normalize_audio`
+(`bool`): whether the audio track is levelled across voices on its way into
+the smaller mp4 (the `compress` row of the job table above). Absent means
+on; the desktop app sends the operator's Settings switch explicitly on every
+compress submission. On any other job type it is refused the same way, **400
+`invalid_request`** with no ledger row.
 
 The desktop app fills them from the meeting's **project speaker roster**
 (`docs/setup.md`): a project whose `roster.json` is in strict mode with N

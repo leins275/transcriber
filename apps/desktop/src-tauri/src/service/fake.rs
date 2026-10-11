@@ -1596,6 +1596,7 @@ mod tests {
             output_dir: "C:\\Meetings\\ELS\\260812 - Sync".to_string(),
             max_speakers: None,
             speaker_match_threshold: None,
+            normalize_audio: None,
         }
     }
 

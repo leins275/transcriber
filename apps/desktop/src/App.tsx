@@ -443,6 +443,10 @@ function App() {
     const updated = await api.setCompressVideo(enabled);
     setSettings(updated);
   }, []);
+  const handleSetNormalizeAudio = useCallback(async (enabled: boolean) => {
+    const updated = await api.setNormalizeAudio(enabled);
+    setSettings(updated);
+  }, []);
   const handleDiarizeLabelledMeetings = useCallback(() => api.diarizeLabelledMeetings(), []);
   const speakersReady = !!diarization?.runtime_present && !!diarization?.model_present;
 
@@ -811,6 +815,7 @@ function App() {
               onSaveHfToken={handleSaveHfToken}
               onSetDiarizeEnabled={handleSetDiarizeEnabled}
               onSetCompressVideo={handleSetCompressVideo}
+              onSetNormalizeAudio={handleSetNormalizeAudio}
               onDiarizeLabelledMeetings={handleDiarizeLabelledMeetings}
             />
           ) : inSetup ? (

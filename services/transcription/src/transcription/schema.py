@@ -181,6 +181,11 @@ class JobCreate(BaseModel):
     min_speakers: int | None = Field(default=None, ge=1)
     max_speakers: int | None = Field(default=None, ge=1)
     speaker_match_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    # `compress` only: whether the audio track is levelled across voices
+    # (`compress.DYNAUDNORM_OPTIONS`) on its way into the smaller mp4.
+    # `None` means on -- the service's own default; the app sends the
+    # operator's switch explicitly either way.
+    normalize_audio: bool | None = None
 
     @model_validator(mode="after")
     def _require_the_path_matching_the_job_type(self) -> JobCreate:
@@ -205,6 +210,10 @@ class JobCreate(BaseModel):
             and self.min_speakers > self.max_speakers
         ):
             raise ValueError("min_speakers must not exceed max_speakers")
+        if self.normalize_audio is not None and self.job_type != "compress":
+            raise ValueError(
+                f"normalize_audio applies only to compress jobs, not to a {self.job_type} job"
+            )
         if self.job_type == "index":
             if self.audio_path is not None or self.input_path is not None or self.output_dir:
                 raise ValueError("an index job takes no paths; it walks the configured vault")
