@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.32.0 — 2026-10-12
+
+### Features
+
+- Identify speakers on the CPU when there is no NVIDIA GPU
+
 ## 0.31.0 — 2026-10-11
 
 ### Features
