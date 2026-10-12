@@ -15,20 +15,33 @@ import gen_diarization_runtime as gen  # noqa: E402
 
 
 def test_the_committed_manifest_matches_the_lock() -> None:
-    rendered = gen.render(gen.compute_wheels())
+    rendered = gen.render(gen.compute_manifest())
     assert gen.OUTPUT_FILE.read_text(encoding="utf-8") == rendered, (
         "run: uv run scripts/gen_diarization_runtime.py"
     )
 
 
 def test_the_cuda_overrides_track_the_locked_torch_versions() -> None:
-    wheels = {wheel.name: wheel for wheel in gen.compute_wheels()}
+    cuda = {wheel.name: wheel for wheel in gen.compute_wheels(variant="cuda")}
+    cpu = {wheel.name: wheel for wheel in gen.compute_wheels(variant="cpu")}
     lock = gen.Lock(gen.LOCK_FILE)
     for name, override in gen.CUDA_OVERRIDES.items():
         locked = lock.entry(name, None, frozenset())["version"]
         assert override.version.split("+", 1)[0] == locked
-        assert wheels[name] is override
+        assert cuda[name] is override
         assert override.version.endswith(f"+{gen.TORCH_CUDA_VARIANT}")
+        # The CPU variant keeps the lock's own (PyPI) build of the same version.
+        assert cpu[name].version == locked
+        assert cpu[name].filename.endswith(f"-{gen.PLATFORM}.whl")
+
+
+def test_the_variants_share_everything_but_the_torch_pair() -> None:
+    manifest = gen.compute_manifest()
+    assert tuple(manifest) == gen.RUNTIME_VARIANTS == ("cuda", "cpu")
+    cuda = {wheel.name: wheel for wheel in manifest["cuda"]}
+    cpu = {wheel.name: wheel for wheel in manifest["cpu"]}
+    assert set(cuda) == set(cpu)
+    assert {name for name in cuda if cuda[name] != cpu[name]} == set(gen.CUDA_OVERRIDES)
 
 
 def test_conflict_extra_markers_evaluate_against_the_active_extras() -> None:

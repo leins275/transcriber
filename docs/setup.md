@@ -295,15 +295,22 @@ reason and leaves the meeting's name untouched.
 
 Speaker identification (pyannote diarization + cross-meeting voice
 recognition) is switched off by default, and its runtime is not installed:
-it is gigabytes of GPU-specific payload. The pyannote **models** ship
+on a GPU it is gigabytes of payload. The pyannote **models** ship
 inside the installer (see "How the models get into the installer" below),
 so an operator never touches Hugging Face. Settings → **Speakers** walks
 through the rest, top to bottom; every step is skipped once done:
 
-1. **Enable speaker identification (~3 GB).** Fetches the pyannote +
-   CUDA torch runtime into `<install dir>\runtime\diarization\`. Needs an
-   NVIDIA GPU (the row says so and offers nothing otherwise). Resumable
-   and cancellable like the other downloads.
+1. **Enable speaker identification.** Fetches the pyannote + torch
+   runtime into `<install dir>\runtime\diarization\`, in the build the
+   machine calls for: with an NVIDIA GPU the CUDA build (~3 GB, the row
+   says "pyannote + CUDA torch"), without one the CPU build (~340 MB,
+   "pyannote + CPU torch", with a note that the pass runs on the CPU and
+   is considerably slower). The two differ only in the torch pair; the
+   service decides from whether `nvidia-smi` is on `PATH`, and a GPU that
+   appears or disappears later re-offers the fetch in the other build
+   (the old tree is replaced, never mixed). Resumable and cancellable
+   like the other downloads. Windows only — a macOS dev environment
+   installs the service's `diarization` extra instead.
 2. **Identify speakers in new recordings.** The `diarize` switch: every
    new transcription runs the pass, cuts segments at changes of voice, and
    pre-names any voice you have already named in another meeting -- of any

@@ -3,9 +3,14 @@
 Two payloads, two download slots, both fetched only on the operator's
 request (Settings -> "Identify speakers"):
 
-- **The runtime**: ``pyannote.audio`` and the torch stack under it, in its
-  CUDA build -- the ``diarization`` extra the installer never bakes
-  (gigabytes of GPU-specific payload). Every archive pinned in
+- **The runtime**: ``pyannote.audio`` and the torch stack under it -- the
+  ``diarization`` extra the installer never bakes (gigabytes of payload
+  in its CUDA build). It comes in two variants that differ only in the
+  torch pair, ``cuda`` (~3 GB, the ``cu126`` builds) and ``cpu`` (~340 MB,
+  the PyPI builds); :func:`select_runtime_variant` picks ``cuda`` when an
+  NVIDIA GPU is present and ``cpu`` otherwise, and the fetched tree counts
+  as present only while it is the variant this machine selects (a GPU
+  that comes or goes re-offers the fetch). Every archive pinned in
   `diarization_runtime_packages.py` (generated from ``uv.lock`` by
   ``scripts/gen_diarization_runtime.py``) rides the existing
   :class:`~transcription.cuda_runtime.CudaRuntimeDownload` machinery
@@ -45,6 +50,7 @@ from typing import TYPE_CHECKING, Any
 from transcription.cuda_runtime import RUNTIME_DIRNAME, CudaPackage, CudaRuntimeDownload
 from transcription.diarization_runtime_packages import (
     DIARIZATION_WHEELS,
+    RUNTIME_VARIANTS,
     TORCH_CUDA_VARIANT,
     TOTAL_BYTES,
 )
@@ -68,23 +74,27 @@ _RUNTIME_MARKER_RELPATH = f"{DIARIZATION_SUBDIR}/.ready"
 MODELS_SUBDIR: tuple[str, ...] = ("models", "diarization")
 _MODELS_MARKER = ".ready"
 
-RUNTIME_TOTAL_BYTES = TOTAL_BYTES
 RUNTIME_CUDA_VARIANT = TORCH_CUDA_VARIANT
 
-DIARIZATION_PACKAGES: tuple[CudaPackage, ...] = tuple(
-    CudaPackage(
-        name=wheel.name,
-        version=wheel.version,
-        filename=wheel.filename,
-        url=wheel.url,
-        size=wheel.size,
-        sha256=wheel.sha256,
-        extract_prefix=wheel.extract_prefix,
-        dest_subdir=DIARIZATION_SUBDIR,
-        archive_root=wheel.archive_root,
+# The two runtime variants (`cuda`, `cpu`), each the full package tree the
+# fetch lands -- they differ only in the torch pair.
+DIARIZATION_PACKAGES: dict[str, tuple[CudaPackage, ...]] = {
+    variant: tuple(
+        CudaPackage(
+            name=wheel.name,
+            version=wheel.version,
+            filename=wheel.filename,
+            url=wheel.url,
+            size=wheel.size,
+            sha256=wheel.sha256,
+            extract_prefix=wheel.extract_prefix,
+            dest_subdir=DIARIZATION_SUBDIR,
+            archive_root=wheel.archive_root,
+        )
+        for wheel in DIARIZATION_WHEELS[variant]
     )
-    for wheel in DIARIZATION_WHEELS
-)
+    for variant in RUNTIME_VARIANTS
+}
 
 
 # -- the runtime ------------------------------------------------------------
@@ -95,21 +105,60 @@ def diarization_runtime_dir(app_dir: str | Path) -> Path:
     return Path(app_dir) / RUNTIME_DIRNAME / DIARIZATION_SUBDIR
 
 
-def _manifest_versions(packages: tuple[CudaPackage, ...] = DIARIZATION_PACKAGES) -> dict[str, str]:
+def runtime_offered() -> bool:
+    """Whether this platform can fetch the runtime at all: the manifest
+    pins ``win_amd64`` wheels, so only Windows is offered one (a dev
+    environment elsewhere installs the extra itself)."""
+    return sys.platform == "win32"
+
+
+def select_runtime_variant() -> str | None:
+    """The variant this machine gets: ``cuda`` with an NVIDIA GPU, ``cpu``
+    without one, ``None`` where no runtime is offered.
+
+    Deliberately a hardware question, not a config one: ``device: cpu``
+    in the config still runs the pass on the CPU (`diarizer.py` honours
+    it), it just does so on whichever torch build the hardware called
+    for. A fetched tree counts as present only while it is the selected
+    variant, so a GPU that appears after a CPU fetch re-offers the CUDA
+    build, and one that disappears re-offers the CPU build in its place.
+    """
+    if not runtime_offered():
+        return None
+    return "cuda" if gpu_present() else "cpu"
+
+
+def runtime_total_bytes(variant: str | None) -> int:
+    """What a fetch of ``variant`` transfers; 0 when none is offered."""
+    return TOTAL_BYTES[variant] if variant is not None else 0
+
+
+def _manifest_versions(packages: tuple[CudaPackage, ...]) -> dict[str, str]:
     return {pkg.name: pkg.version for pkg in packages}
 
 
+def _selected_packages() -> tuple[CudaPackage, ...] | None:
+    variant = select_runtime_variant()
+    return DIARIZATION_PACKAGES[variant] if variant is not None else None
+
+
 def is_diarization_runtime_present(
-    app_dir: str | Path, packages: tuple[CudaPackage, ...] = DIARIZATION_PACKAGES
+    app_dir: str | Path, packages: tuple[CudaPackage, ...] | None = None
 ) -> bool:
     """Whether a prior fetch landed *this* manifest: the ``.ready`` marker
-    exists and records exactly the pinned package versions.
+    exists and records exactly the pinned package versions of ``packages``
+    (by default, the variant this machine selects).
 
     A build that re-pins the runtime (a torch bump, say) must not treat an
     older tree as usable -- it would import a mix the pins were never
     tested against -- so a stale marker reads as "absent", the Settings row
-    offers the fetch again, and the fetch replaces the tree.
+    offers the fetch again, and the fetch replaces the tree. The other
+    variant's tree reads as absent for the same reason.
     """
+    if packages is None:
+        packages = _selected_packages()
+        if packages is None:
+            return False
     marker = Path(app_dir) / RUNTIME_DIRNAME / _RUNTIME_MARKER_RELPATH
     try:
         if not marker.is_file():
@@ -158,23 +207,45 @@ def activate_runtime(app_dir: str | Path) -> Path | None:
 def build_diarization_runtime_download(
     config: Config, *, transport: Transport | None = None
 ) -> CudaRuntimeDownload:
-    """The runtime fetch, on the same machinery as the STT CUDA runtime.
+    """The runtime fetch, on the same machinery as the STT CUDA runtime,
+    for the variant this machine selects.
 
-    A tree left by an older manifest (its marker names other versions) is
-    removed first: the download only ever *adds* files, and a torch of one
-    version over the DLLs of another is not a runtime anyone tested.
+    A tree left by an older manifest (its marker names other versions --
+    an older pin, or the other variant) is removed first: the download
+    only ever *adds* files, and a torch of one build over the DLLs of
+    another is not a runtime anyone tested.
     """
+    variant = select_runtime_variant()
+    if variant is None:
+        raise ServiceError(
+            ErrorKind.INVALID_REQUEST,
+            "the speaker runtime is only offered on Windows; a dev environment installs "
+            "the service's 'diarization' extra instead",
+        )
     runtime_dir = diarization_runtime_dir(config.app_dir)
-    if runtime_dir.exists() and not is_diarization_runtime_present(config.app_dir):
+    packages = DIARIZATION_PACKAGES[variant]
+    if runtime_dir.exists() and not is_diarization_runtime_present(config.app_dir, packages):
         logger.info(
             "replacing a stale diarization runtime",
-            extra={"event": "diarization_runtime_replaced", "path": str(runtime_dir)},
+            extra={
+                "event": "diarization_runtime_replaced",
+                "path": str(runtime_dir),
+                "variant": variant,
+            },
         )
         shutil.rmtree(runtime_dir, ignore_errors=True)
+    logger.info(
+        "diarization runtime fetch prepared",
+        extra={
+            "event": "diarization_runtime_variant",
+            "variant": variant,
+            "total_bytes": TOTAL_BYTES[variant],
+        },
+    )
     return CudaRuntimeDownload(
         app_dir=config.app_dir,
         allowed_roots=(Path(config.app_dir),),
-        packages=DIARIZATION_PACKAGES,
+        packages=packages,
         transport=transport,
         marker_relpath=_RUNTIME_MARKER_RELPATH,
     )
@@ -546,7 +617,8 @@ def hub_offline(enabled: bool) -> Iterator[None]:
 
 def gpu_present() -> bool:
     """The same "is there an NVIDIA GPU at all" probe the STT runtime
-    download decides on (`api.model_routes._nvidia_gpu_present`)."""
+    download decides on (`api.model_routes._nvidia_gpu_present`); it picks
+    the runtime variant (`select_runtime_variant`)."""
     if sys.platform != "win32":
         return False
     from transcription.api.model_routes import (  # noqa: PLC0415 - avoids an import cycle
@@ -558,13 +630,16 @@ def gpu_present() -> bool:
 
 def diarization_status(config: Config) -> dict[str, Any]:
     """`GET /v1/diarization/status`: everything the app needs to render the
-    Speakers settings row -- which prerequisites are met and whether the
-    feature is switched on."""
+    Speakers settings row -- which prerequisites are met, which runtime
+    variant a fetch would land (``None`` where none is offered) and
+    whether the feature is switched on."""
+    variant = select_runtime_variant()
     return {
         "runtime_present": runtime_available(config.app_dir),
         "model_present": is_diarization_model_present(config.app_dir),
         "token_present": bool(config.hf_token),
         "enabled": bool(config.diarize),
         "gpu_present": gpu_present(),
-        "runtime_total_bytes": RUNTIME_TOTAL_BYTES,
+        "runtime_variant": variant,
+        "runtime_total_bytes": runtime_total_bytes(variant),
     }

@@ -22,7 +22,11 @@ from transcription import diarization_runtime as dr
 from transcription.app import create_app
 from transcription.config import Config
 from transcription.cuda_runtime import CudaPackage, CudaRuntimeDownload
-from transcription.diarization_runtime_packages import DIARIZATION_WHEELS, TOTAL_BYTES
+from transcription.diarization_runtime_packages import (
+    DIARIZATION_WHEELS,
+    RUNTIME_VARIANTS,
+    TOTAL_BYTES,
+)
 from transcription.errors import ErrorKind
 from transcription.model_download import DownloadState
 
@@ -32,30 +36,80 @@ AUTH = {"Authorization": "Bearer test-token"}
 # -- the pinned manifest ------------------------------------------------------
 
 
-def test_the_manifest_holds_the_cuda_torch_pair_and_every_file_once() -> None:
-    names = {wheel.name for wheel in DIARIZATION_WHEELS}
+def test_the_manifest_carries_a_cuda_and_a_cpu_variant() -> None:
+    assert RUNTIME_VARIANTS == ("cuda", "cpu")
+    assert set(DIARIZATION_WHEELS) == set(TOTAL_BYTES) == {"cuda", "cpu"}
+
+
+@pytest.mark.parametrize("variant", RUNTIME_VARIANTS)
+def test_each_variant_holds_the_torch_pair_and_every_file_once(variant: str) -> None:
+    wheels = DIARIZATION_WHEELS[variant]
+    names = {wheel.name for wheel in wheels}
     assert {"pyannote-audio", "torch", "torchaudio"} <= names
-    by_name = {wheel.name: wheel for wheel in DIARIZATION_WHEELS}
-    assert by_name["torch"].version.endswith(f"+{dr.RUNTIME_CUDA_VARIANT}")
-    assert by_name["torchaudio"].version.endswith(f"+{dr.RUNTIME_CUDA_VARIANT}")
-    assert "download.pytorch.org" in by_name["torch"].url
-    filenames = [wheel.filename for wheel in DIARIZATION_WHEELS]
+    filenames = [wheel.filename for wheel in wheels]
     assert len(filenames) == len(set(filenames))
-    assert TOTAL_BYTES == sum(wheel.size for wheel in DIARIZATION_WHEELS)
-    assert all(len(wheel.sha256) == 64 for wheel in DIARIZATION_WHEELS)
+    assert TOTAL_BYTES[variant] == sum(wheel.size for wheel in wheels)
+    assert all(len(wheel.sha256) == 64 for wheel in wheels)
 
 
-def test_source_tarballs_name_their_importable_root() -> None:
-    tarballs = [wheel for wheel in DIARIZATION_WHEELS if wheel.filename.endswith(".tar.gz")]
+def test_the_variants_differ_only_in_the_torch_pair() -> None:
+    cuda = {wheel.name: wheel for wheel in DIARIZATION_WHEELS["cuda"]}
+    cpu = {wheel.name: wheel for wheel in DIARIZATION_WHEELS["cpu"]}
+    assert set(cuda) == set(cpu)
+    for name in ("torch", "torchaudio"):
+        assert cuda[name].version.endswith(f"+{dr.RUNTIME_CUDA_VARIANT}")
+        assert "download.pytorch.org" in cuda[name].url
+        assert "+" not in cpu[name].version
+        assert "pythonhosted.org" in cpu[name].url
+        assert cuda[name].version.split("+", 1)[0] == cpu[name].version
+    assert {name for name in cuda if cuda[name] != cpu[name]} == {"torch", "torchaudio"}
+    # The CPU build is a fraction of the CUDA one -- the reason it exists.
+    assert TOTAL_BYTES["cpu"] < TOTAL_BYTES["cuda"] / 5
+
+
+@pytest.mark.parametrize("variant", RUNTIME_VARIANTS)
+def test_source_tarballs_name_their_importable_root(variant: str) -> None:
+    wheels = DIARIZATION_WHEELS[variant]
+    tarballs = [wheel for wheel in wheels if wheel.filename.endswith(".tar.gz")]
     assert tarballs, "the manifest is expected to carry the two wheel-less pure-Python packages"
     for wheel in tarballs:
         assert wheel.archive_root.startswith(wheel.filename.removesuffix(".tar.gz") + "/")
 
 
-def test_packages_land_in_the_diarization_subdir_whole() -> None:
-    assert all(pkg.dest_subdir == dr.DIARIZATION_SUBDIR for pkg in dr.DIARIZATION_PACKAGES)
-    wheels = [pkg for pkg in dr.DIARIZATION_PACKAGES if pkg.filename.endswith(".whl")]
+@pytest.mark.parametrize("variant", RUNTIME_VARIANTS)
+def test_packages_land_in_the_diarization_subdir_whole(variant: str) -> None:
+    packages = dr.DIARIZATION_PACKAGES[variant]
+    assert all(pkg.dest_subdir == dr.DIARIZATION_SUBDIR for pkg in packages)
+    wheels = [pkg for pkg in packages if pkg.filename.endswith(".whl")]
     assert all(pkg.extract_prefix == "" and pkg.archive_root == "" for pkg in wheels)
+
+
+# -- which variant a machine gets ---------------------------------------------
+
+
+def test_the_variant_follows_the_gpu_and_the_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: True)
+    monkeypatch.setattr(dr, "gpu_present", lambda: True)
+    assert dr.select_runtime_variant() == "cuda"
+    assert dr.runtime_total_bytes("cuda") == TOTAL_BYTES["cuda"]
+
+    monkeypatch.setattr(dr, "gpu_present", lambda: False)
+    assert dr.select_runtime_variant() == "cpu"
+    assert dr.runtime_total_bytes("cpu") == TOTAL_BYTES["cpu"]
+
+    monkeypatch.setattr(dr, "runtime_offered", lambda: False)
+    assert dr.select_runtime_variant() is None
+    assert dr.runtime_total_bytes(None) == 0
+
+
+def test_the_runtime_is_offered_on_windows_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert dr.runtime_offered()
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert not dr.runtime_offered()
+    assert dr.select_runtime_variant() is None
 
 
 # -- extraction --------------------------------------------------------------
@@ -156,11 +210,12 @@ def test_activate_runtime_puts_a_fetched_tree_on_sys_path_once(
 ) -> None:
     import sys
 
+    _select_cuda(monkeypatch)
     app_dir = tmp_path / "app"
     assert dr.activate_runtime(app_dir) is None
     runtime = dr.diarization_runtime_dir(app_dir)
     runtime.mkdir(parents=True)
-    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES["cuda"]), encoding="utf-8")
     monkeypatch.setattr(sys, "path", list(sys.path))
 
     assert dr.activate_runtime(app_dir) == runtime
@@ -332,7 +387,7 @@ def config(tmp_app_dir: Path) -> Config:
 
 
 def test_status_reports_every_prerequisite(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dr, "gpu_present", lambda: True)
+    _select_cuda(monkeypatch)
     monkeypatch.setattr(dr, "pyannote_importable", lambda: False)
 
     status = dr.diarization_status(config)
@@ -343,18 +398,55 @@ def test_status_reports_every_prerequisite(config: Config, monkeypatch: pytest.M
         "token_present": True,
         "enabled": True,
         "gpu_present": True,
-        "runtime_total_bytes": TOTAL_BYTES,
+        "runtime_variant": "cuda",
+        "runtime_total_bytes": TOTAL_BYTES["cuda"],
     }
 
     runtime = dr.diarization_runtime_dir(config.app_dir)
     runtime.mkdir(parents=True)
-    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES["cuda"]), encoding="utf-8")
     assert dr.diarization_status(config)["runtime_present"] is True
+
+
+def test_status_offers_the_cpu_variant_without_a_gpu(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: True)
+    monkeypatch.setattr(dr, "gpu_present", lambda: False)
+    monkeypatch.setattr(dr, "pyannote_importable", lambda: False)
+
+    status = dr.diarization_status(config)
+
+    assert status["gpu_present"] is False
+    assert status["runtime_variant"] == "cpu"
+    assert status["runtime_total_bytes"] == TOTAL_BYTES["cpu"]
+    assert status["runtime_present"] is False
+
+    runtime = dr.diarization_runtime_dir(config.app_dir)
+    runtime.mkdir(parents=True)
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES["cpu"]), encoding="utf-8")
+    assert dr.diarization_status(config)["runtime_present"] is True
+
+
+def test_status_offers_no_runtime_off_windows(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: False)
+    monkeypatch.setattr(dr, "gpu_present", lambda: False)
+    monkeypatch.setattr(dr, "pyannote_importable", lambda: True)
+
+    status = dr.diarization_status(config)
+
+    assert status["runtime_variant"] is None
+    assert status["runtime_total_bytes"] == 0
+    # A dev environment with the extra installed still counts.
+    assert status["runtime_present"] is True
 
 
 def test_status_route_is_token_guarded_and_mirrors_the_dict(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: True)
     monkeypatch.setattr(dr, "gpu_present", lambda: False)
     from fakes import FakeProvider
 
@@ -370,7 +462,8 @@ def test_status_route_is_token_guarded_and_mirrors_the_dict(
     assert body["token_present"] is True
     assert body["enabled"] is True
     assert body["gpu_present"] is False
-    assert body["runtime_total_bytes"] == TOTAL_BYTES
+    assert body["runtime_variant"] == "cpu"
+    assert body["runtime_total_bytes"] == TOTAL_BYTES["cpu"]
 
 
 def test_the_two_download_slots_answer_on_their_own_routes(config: Config, tmp_path: Path) -> None:
@@ -462,9 +555,22 @@ def _marker_for(packages) -> str:  # noqa: ANN001
     return json.dumps({"packages": {pkg.name: pkg.version for pkg in packages}})
 
 
+def _select_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the machine to "Windows with an NVIDIA GPU" -- the CUDA variant
+    -- whatever the test host is."""
+    monkeypatch.setattr(dr, "runtime_offered", lambda: True)
+    monkeypatch.setattr(dr, "gpu_present", lambda: True)
+
+
+def _select_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: True)
+    monkeypatch.setattr(dr, "gpu_present", lambda: False)
+
+
 def test_a_runtime_from_another_manifest_reads_as_absent_and_is_replaced_on_fetch(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _select_cuda(monkeypatch)
     app_dir = tmp_path / "app"
     runtime = dr.diarization_runtime_dir(app_dir)
     runtime.mkdir(parents=True)
@@ -486,11 +592,14 @@ def test_a_runtime_from_another_manifest_reads_as_absent_and_is_replaced_on_fetc
     assert not download.already_present()
 
 
-def test_a_runtime_matching_the_manifest_is_present(tmp_path: Path) -> None:
+def test_a_runtime_matching_the_manifest_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _select_cuda(monkeypatch)
     app_dir = tmp_path / "app"
     runtime = dr.diarization_runtime_dir(app_dir)
     runtime.mkdir(parents=True)
-    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES), encoding="utf-8")
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES["cuda"]), encoding="utf-8")
 
     assert dr.is_diarization_runtime_present(app_dir)
     config = Config(app_dir=app_dir, config_path=app_dir / "config.json")
@@ -498,6 +607,55 @@ def test_a_runtime_matching_the_manifest_is_present(tmp_path: Path) -> None:
         config, transport=FakeTransport({})
     ).already_present()
     assert runtime.exists()
+
+
+def test_the_fetch_lands_the_variant_the_machine_selects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_dir = tmp_path / "app"
+    config = Config(app_dir=app_dir, config_path=app_dir / "config.json")
+
+    _select_cpu(monkeypatch)
+    download = dr.build_diarization_runtime_download(config, transport=FakeTransport({}))
+    assert download.total_bytes == TOTAL_BYTES["cpu"]
+
+    _select_cuda(monkeypatch)
+    download = dr.build_diarization_runtime_download(config, transport=FakeTransport({}))
+    assert download.total_bytes == TOTAL_BYTES["cuda"]
+
+
+def test_the_other_variant_s_tree_reads_as_absent_and_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A CPU runtime on a machine that has since gained a GPU (or the
+    reverse) is offered again as the other build, and the fetch replaces
+    the tree rather than mixing two torch builds."""
+    app_dir = tmp_path / "app"
+    runtime = dr.diarization_runtime_dir(app_dir)
+    runtime.mkdir(parents=True)
+    (runtime / ".ready").write_text(_marker_for(dr.DIARIZATION_PACKAGES["cpu"]), encoding="utf-8")
+
+    _select_cpu(monkeypatch)
+    assert dr.is_diarization_runtime_present(app_dir)
+
+    _select_cuda(monkeypatch)
+    assert not dr.is_diarization_runtime_present(app_dir)
+    config = Config(app_dir=app_dir, config_path=app_dir / "config.json")
+    download = dr.build_diarization_runtime_download(config, transport=FakeTransport({}))
+    assert not runtime.exists()
+    assert not download.already_present()
+
+
+def test_no_fetch_is_built_where_no_runtime_is_offered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(dr, "runtime_offered", lambda: False)
+    config = Config(app_dir=tmp_path / "app", config_path=tmp_path / "app" / "config.json")
+
+    with pytest.raises(dr.ServiceError) as excinfo:
+        dr.build_diarization_runtime_download(config, transport=FakeTransport({}))
+
+    assert excinfo.value.kind is ErrorKind.INVALID_REQUEST
 
 
 # -- pyannote 3 on huggingface_hub 1 -------------------------------------------

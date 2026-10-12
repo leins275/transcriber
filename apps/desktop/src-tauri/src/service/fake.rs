@@ -1027,6 +1027,7 @@ impl TranscriptionService for FakeService {
             token_present: inner.hf_token_present,
             enabled: inner.diarize_enabled,
             gpu_present: true,
+            runtime_variant: Some("cuda".to_string()),
             runtime_total_bytes: 3_000_000_000,
         })
     }

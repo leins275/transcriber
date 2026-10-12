@@ -395,9 +395,12 @@ pub struct DiarizationStatus {
     pub token_present: bool,
     /// `diarize`: new transcriptions run the pass.
     pub enabled: bool,
-    /// An NVIDIA GPU is present -- the CUDA runtime is the only build
-    /// offered, so without one the feature is not offered at all.
+    /// An NVIDIA GPU is present: the runtime fetch lands its CUDA build;
+    /// without one it lands the CPU build.
     pub gpu_present: bool,
+    /// Which runtime variant a fetch would land (`"cuda"` or `"cpu"`);
+    /// `None` where no runtime is offered (the wheels are Windows-only).
+    pub runtime_variant: Option<String>,
     /// What the runtime fetch would transfer (for the button's label).
     pub runtime_total_bytes: u64,
 }

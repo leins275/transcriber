@@ -37,6 +37,7 @@ function diarizationStatus(overrides: Partial<DiarizationStatusView> = {}): Diar
     token_present: false,
     enabled: false,
     gpu_present: true,
+    runtime_variant: "cuda",
     runtime_total_bytes: 2_690_000_000,
     ...overrides,
   };
@@ -446,10 +447,39 @@ describe("SettingsPage speakers row", () => {
     ).toBeDisabled();
   });
 
-  it("does not offer the feature on a machine without an NVIDIA GPU", () => {
-    renderPage({ diarization: diarizationStatus({ gpu_present: false }) });
+  it("offers the CPU runtime on a machine without an NVIDIA GPU", () => {
+    renderPage({
+      diarization: diarizationStatus({
+        gpu_present: false,
+        runtime_variant: "cpu",
+        runtime_total_bytes: 335_663_575,
+      }),
+    });
 
-    expect(screen.getByText(/needs an nvidia gpu/i)).toBeInTheDocument();
+    expect(screen.getByText(/pyannote \+ CPU torch/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /enable speaker identification \(~336 MB\)/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/identified on the CPU/i)).toBeInTheDocument();
+  });
+
+  it("names the CUDA runtime and says nothing about the CPU on a machine with a GPU", () => {
+    renderPage({ diarization: diarizationStatus() });
+
+    expect(screen.getByText(/pyannote \+ CUDA torch/)).toBeInTheDocument();
+    expect(screen.queryByText(/identified on the CPU/i)).not.toBeInTheDocument();
+  });
+
+  it("does not offer the feature where no runtime is offered", () => {
+    renderPage({
+      diarization: diarizationStatus({
+        gpu_present: false,
+        runtime_variant: null,
+        runtime_total_bytes: 0,
+      }),
+    });
+
+    expect(screen.getByText(/not available on this platform/i)).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /enable speaker identification/i }),
     ).not.toBeInTheDocument();

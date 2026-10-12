@@ -483,6 +483,8 @@ struct DiarizationStatusResponse {
     enabled: bool,
     gpu_present: bool,
     #[serde(default)]
+    runtime_variant: Option<String>,
+    #[serde(default)]
     runtime_total_bytes: u64,
 }
 
@@ -1242,6 +1244,7 @@ impl TranscriptionService for HttpTranscriptionService {
             token_present: parsed.token_present,
             enabled: parsed.enabled,
             gpu_present: parsed.gpu_present,
+            runtime_variant: parsed.runtime_variant,
             runtime_total_bytes: parsed.runtime_total_bytes,
         })
     }

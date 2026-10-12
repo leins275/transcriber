@@ -14,10 +14,11 @@ runtime the app fetches is exactly the dependency set the lock resolved:
 
 - every package the `diarization` extra adds on top of what the installer
   bakes (`build_pyenv.BASE_EXTRAS`), for CPython 3.12 on `win_amd64`;
-- `torch` and `torchaudio` swapped for the CUDA builds PyTorch publishes on
-  its own index (`CUDA_OVERRIDES` below) -- the lock pins the PyPI (CPU)
-  builds, and the override must carry the *same* version so the rest of the
-  closure stays valid. A drift fails this script loudly.
+- in two variants that differ only in the torch pair: `cuda` swaps `torch`
+  and `torchaudio` for the CUDA builds PyTorch publishes on its own index
+  (`CUDA_OVERRIDES` below), `cpu` keeps the PyPI builds the lock pins. The
+  override must carry the *same* version so the rest of the closure stays
+  valid; a drift fails this script loudly.
 
 Output: `services/transcription/src/transcription/diarization_runtime_packages.py`
 (committed; `--check` verifies it is up to date, which `make lint` runs).
@@ -102,6 +103,11 @@ SDIST_ROOTS: dict[str, tuple[str, str]] = {
     "docopt": ("", "docopt.py"),
 }
 
+
+# The two runtime variants the service can fetch: `cuda` on a machine with
+# an NVIDIA GPU, `cpu` otherwise. Only the torch pair differs; the service
+# picks the variant at fetch time (`diarization_runtime.select_runtime_variant`).
+RUNTIME_VARIANTS: tuple[str, ...] = ("cuda", "cpu")
 
 # The CUDA builds of the two torch packages, from PyTorch's own wheel index.
 # Same versions as `uv.lock` pins from PyPI (asserted below), only the build
@@ -303,7 +309,11 @@ def _pick_sdist(package: dict[str, Any]) -> Wheel:
     )
 
 
-def compute_wheels(lock_path: Path = LOCK_FILE) -> list[Wheel]:
+def compute_wheels(lock_path: Path = LOCK_FILE, variant: str = "cuda") -> list[Wheel]:
+    """The runtime's wheels for one variant: `cuda` carries the
+    `CUDA_OVERRIDES` torch pair, `cpu` the PyPI builds the lock pins."""
+    if variant not in RUNTIME_VARIANTS:
+        raise SystemExit(f"unknown runtime variant {variant!r}; one of {RUNTIME_VARIANTS}")
     lock = Lock(lock_path)
     base = _closure(lock, frozenset(BASE_EXTRAS))
     full = _closure(lock, frozenset(BASE_EXTRAS) | {RUNTIME_EXTRA})
@@ -324,18 +334,51 @@ def compute_wheels(lock_path: Path = LOCK_FILE) -> list[Wheel]:
                     f"{name}: uv.lock pins {locked} but CUDA_OVERRIDES carries "
                     f"{override.version}; re-pin the override to the locked version"
                 )
-            wheels.append(override)
-            continue
+            if variant == "cuda":
+                wheels.append(override)
+                continue
         wheels.append(_pick_wheel(package, supported))
     return wheels
+
+
+def compute_manifest(lock_path: Path = LOCK_FILE) -> dict[str, list[Wheel]]:
+    """Every variant's wheels, keyed by variant name."""
+    return {variant: compute_wheels(lock_path, variant) for variant in RUNTIME_VARIANTS}
 
 
 def _quoted(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def render(wheels: list[Wheel]) -> str:
-    total = sum(w.size for w in wheels)
+def _render_wheel(lines: list[str], wheel: Wheel, indent: str) -> None:
+    lines.append(f"{indent}Wheel(")
+    lines.append(f"{indent}    name={_quoted(wheel.name)},")
+    lines.append(f"{indent}    version={_quoted(wheel.version)},")
+    lines.append(f"{indent}    filename={_quoted(wheel.filename)},")
+    lines.append(f"{indent}    url={_quoted(wheel.url)},")
+    lines.append(f"{indent}    size={wheel.size},")
+    lines.append(f"{indent}    sha256={_quoted(wheel.sha256)},")
+    if wheel.archive_root or wheel.extract_prefix:
+        lines.append(f"{indent}    archive_root={_quoted(wheel.archive_root)},")
+        lines.append(f"{indent}    extract_prefix={_quoted(wheel.extract_prefix)},")
+    lines.append(f"{indent}),")
+
+
+def render(manifest: dict[str, list[Wheel]]) -> str:
+    """The generated module: the wheels every variant shares, written once,
+    then the torch pair per variant, then the per-variant totals."""
+    if tuple(manifest) != RUNTIME_VARIANTS:
+        raise SystemExit(f"manifest variants {tuple(manifest)} != {RUNTIME_VARIANTS}")
+    reference = manifest[RUNTIME_VARIANTS[0]]
+    shared = [wheel for wheel in reference if wheel.name not in CUDA_OVERRIDES]
+    per_variant = {
+        variant: [wheel for wheel in wheels if wheel.name in CUDA_OVERRIDES]
+        for variant, wheels in manifest.items()
+    }
+    for variant, wheels in manifest.items():
+        if [wheel for wheel in wheels if wheel.name not in CUDA_OVERRIDES] != shared:
+            raise SystemExit(f"variant {variant!r} differs from {RUNTIME_VARIANTS[0]!r} beyond torch")
+    totals = {variant: sum(w.size for w in wheels) for variant, wheels in manifest.items()}
     lines = [
         '"""The pinned wheels of the first-run diarization runtime.',
         "",
@@ -343,9 +386,11 @@ def render(wheels: list[Wheel]) -> str:
         "`services/transcription/uv.lock` -- do not edit by hand; `make lint`",
         "fails when this file drifts from the lock. Every package the",
         f"`{RUNTIME_EXTRA}` extra adds on top of the baked environment, for",
-        f"CPython {PYTHON_VERSION[0]}.{PYTHON_VERSION[1]} on {PLATFORM}, with torch/torchaudio",
-        f"swapped for their `{TORCH_CUDA_VARIANT}` builds (see the generator's",
-        "`CUDA_OVERRIDES`). Consumed by `transcription.diarization_runtime`.",
+        f"CPython {PYTHON_VERSION[0]}.{PYTHON_VERSION[1]} on {PLATFORM}, in two variants that",
+        "differ only in the torch pair: `cuda` swaps torch/torchaudio for their",
+        f"`{TORCH_CUDA_VARIANT}` builds (see the generator's `CUDA_OVERRIDES`), `cpu` keeps",
+        "the PyPI builds the lock pins. Consumed by",
+        "`transcription.diarization_runtime`.",
         '"""',
         "",
         "from __future__ import annotations",
@@ -367,23 +412,33 @@ def render(wheels: list[Wheel]) -> str:
         "",
         "",
         f"TORCH_CUDA_VARIANT = {_quoted(TORCH_CUDA_VARIANT)}",
-        f"TOTAL_BYTES = {total}",
+        "RUNTIME_VARIANTS: tuple[str, ...] = ("
+        + ", ".join(_quoted(v) for v in RUNTIME_VARIANTS)
+        + ")",
         "",
-        "DIARIZATION_WHEELS: tuple[Wheel, ...] = (",
+        "# Every package but the torch pair: the same files in both variants.",
+        "SHARED_WHEELS: tuple[Wheel, ...] = (",
     ]
-    for wheel in wheels:
-        lines.append("    Wheel(")
-        lines.append(f"        name={_quoted(wheel.name)},")
-        lines.append(f"        version={_quoted(wheel.version)},")
-        lines.append(f"        filename={_quoted(wheel.filename)},")
-        lines.append(f"        url={_quoted(wheel.url)},")
-        lines.append(f"        size={wheel.size},")
-        lines.append(f"        sha256={_quoted(wheel.sha256)},")
-        if wheel.archive_root or wheel.extract_prefix:
-            lines.append(f"        archive_root={_quoted(wheel.archive_root)},")
-            lines.append(f"        extract_prefix={_quoted(wheel.extract_prefix)},")
-        lines.append("    ),")
+    for wheel in shared:
+        _render_wheel(lines, wheel, "    ")
     lines.append(")")
+    lines.append("")
+    lines.append("# The torch pair per variant.")
+    lines.append("TORCH_WHEELS: dict[str, tuple[Wheel, ...]] = {")
+    for variant in RUNTIME_VARIANTS:
+        lines.append(f"    {_quoted(variant)}: (")
+        for wheel in per_variant[variant]:
+            _render_wheel(lines, wheel, "        ")
+        lines.append("    ),")
+    lines.append("}")
+    lines.append("")
+    lines.append("DIARIZATION_WHEELS: dict[str, tuple[Wheel, ...]] = {")
+    lines.append("    variant: SHARED_WHEELS + TORCH_WHEELS[variant] for variant in RUNTIME_VARIANTS")
+    lines.append("}")
+    lines.append("TOTAL_BYTES: dict[str, int] = {")
+    for variant in RUNTIME_VARIANTS:
+        lines.append(f"    {_quoted(variant)}: {totals[variant]},")
+    lines.append("}")
     return "\n".join(lines) + "\n"
 
 
@@ -398,7 +453,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=OUTPUT_FILE, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    rendered = render(compute_wheels(args.lock))
+    manifest = compute_manifest(args.lock)
+    rendered = render(manifest)
     if args.check:
         current = args.output.read_text(encoding="utf-8") if args.output.is_file() else ""
         if current != rendered:
@@ -412,9 +468,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     args.output.write_text(rendered, encoding="utf-8", newline="\n")
-    count = rendered.count("    Wheel(")
-    total = sum(w.size for w in compute_wheels(args.lock))
-    print(f"wrote {args.output} ({count} wheels, {total / 1e9:.2f} GB)")
+    summary = ", ".join(
+        f"{variant}: {len(wheels)} wheels, {sum(w.size for w in wheels) / 1e9:.2f} GB"
+        for variant, wheels in manifest.items()
+    )
+    print(f"wrote {args.output} ({summary})")
     return 0
 
 

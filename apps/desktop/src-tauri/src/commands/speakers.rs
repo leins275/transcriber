@@ -38,6 +38,8 @@ pub struct DiarizationStatusView {
     pub token_present: bool,
     pub enabled: bool,
     pub gpu_present: bool,
+    /// `"cuda"` or `"cpu"`; `None` where no runtime is offered.
+    pub runtime_variant: Option<String>,
     pub runtime_total_bytes: u64,
 }
 
@@ -49,6 +51,7 @@ impl From<DiarizationStatus> for DiarizationStatusView {
             token_present: status.token_present,
             enabled: status.enabled,
             gpu_present: status.gpu_present,
+            runtime_variant: status.runtime_variant,
             runtime_total_bytes: status.runtime_total_bytes,
         }
     }

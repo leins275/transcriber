@@ -495,8 +495,12 @@ class DiarizationStatus(BaseModel):
     token_present: bool
     # `diarize`: new transcriptions run the pass.
     enabled: bool
-    # An NVIDIA GPU is present -- the CUDA runtime is the only build offered.
+    # An NVIDIA GPU is present: the runtime fetch lands its CUDA build
+    # (`runtime_variant == "cuda"`); without one the CPU build (`"cpu"`).
     gpu_present: bool
+    # Which runtime variant a fetch would land, `None` where no runtime
+    # is offered (the wheels are Windows-only).
+    runtime_variant: str | None
     # What the runtime fetch would transfer, for the button's label.
     runtime_total_bytes: int
 

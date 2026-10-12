@@ -44,8 +44,12 @@ export type DiarizationStatusView = {
   token_present: boolean;
   /** `diarize`: new transcriptions run the pass. */
   enabled: boolean;
-  /** An NVIDIA GPU is present -- without one the feature is not offered. */
+  /** An NVIDIA GPU is present: the runtime fetch lands its CUDA build;
+   * without one it lands the CPU build. */
   gpu_present: boolean;
+  /** Which runtime variant a fetch would land; `null` where no runtime is
+   * offered (the wheels are Windows-only). */
+  runtime_variant: "cuda" | "cpu" | null;
   /** What the runtime fetch would transfer, for the button's label. */
   runtime_total_bytes: number;
 };

@@ -104,6 +104,7 @@ function extensionList(extensions: string[]): string {
 
 function sizeLabel(sizeBytes: number | null): string {
   if (sizeBytes === null) return "";
+  if (sizeBytes < 1_000_000_000) return `~${Math.round(sizeBytes / 1_000_000)} MB`;
   return `~${(sizeBytes / 1_000_000_000).toFixed(1)} GB`;
 }
 
@@ -517,16 +518,17 @@ export function SettingsPage({
         <div className={styles.value}>
           {diarization === null ? (
             <div className={styles.line}>Speaker identification</div>
-          ) : !diarization.gpu_present ? (
+          ) : diarization.runtime_variant === null && !diarization.runtime_present ? (
             <>
               <div className={styles.line}>Speaker identification</div>
-              <p className={styles.hint}>Needs an NVIDIA GPU; not available on this machine.</p>
+              <p className={styles.hint}>Not available on this platform.</p>
             </>
           ) : (
             <>
               <div className={styles.line}>
                 {diarization.runtime_present && CHECK_ICON}
-                Speaker runtime (pyannote + CUDA torch)
+                Speaker runtime (pyannote +{" "}
+                {diarization.runtime_variant === "cuda" ? "CUDA" : "CPU"} torch)
                 {isDownloading(diarizationRuntimeDownload) ? (
                   <>
                     {`Downloading · ${Math.round(diarizationRuntimeDownload?.percent ?? 0)}%`}
@@ -553,6 +555,12 @@ export function SettingsPage({
               </div>
               {diarizationRuntimeDownload?.error_message && (
                 <p className={styles.warning}>{diarizationRuntimeDownload.error_message}</p>
+              )}
+              {diarization.runtime_variant === "cpu" && (
+                <p className={styles.hint}>
+                  No NVIDIA GPU was found, so speakers are identified on the CPU: a much smaller
+                  download, but considerably slower than on a GPU.
+                </p>
               )}
 
               {/* The installer ships the models, so the token step only ever

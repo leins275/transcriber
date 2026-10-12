@@ -320,13 +320,21 @@ Two prerequisites, both optional by design:
   environment gets it from the `diarization` extra (`uv sync --extra
   diarization`, CPU torch from PyPI). The installed app never bakes it:
   `POST /v1/diarization-runtime/download` fetches the pinned wheel set --
-  every package the extra adds on top of the baked environment, with
-  torch/torchaudio swapped for their `cu126` CUDA builds (~3 GB in all)
-  -- into `<app_dir>/runtime/diarization/`, which the diarizer puts on
-  `sys.path` before importing pyannote. The manifest
-  (`diarization_runtime_packages.py`) is generated from `uv.lock` by
-  `scripts/gen_diarization_runtime.py`; `make lint` fails when it drifts.
-  Nothing imports any of it until the first diarized job runs.
+  every package the extra adds on top of the baked environment -- into
+  `<app_dir>/runtime/diarization/`, which the diarizer puts on `sys.path`
+  before importing pyannote. The set comes in two variants that differ
+  only in the torch pair: `cuda` (torch/torchaudio swapped for their
+  `cu126` builds, ~3 GB in all) on a machine with an NVIDIA GPU
+  (`nvidia-smi` on `PATH`), `cpu` (the PyPI builds the lock pins, ~340 MB)
+  otherwise (`diarization_runtime.select_runtime_variant`). A fetched tree
+  counts as present only while it is the variant the machine selects, so
+  a GPU that appears or disappears re-offers the fetch in the other build
+  and the old tree is replaced rather than mixed; `device: cpu` in the
+  config does not change the variant, only where the pass runs. The
+  manifest (`diarization_runtime_packages.py`) is generated from `uv.lock`
+  by `scripts/gen_diarization_runtime.py`; `make lint` fails when it
+  drifts. Nothing imports any of it until the first diarized job runs.
+  The wheels are `win_amd64`, so off Windows no runtime is offered.
 - **The models and a Hugging Face token**: `pyannote/speaker-diarization-3.1`
   and `pyannote/segmentation-3.0` are gated -- accept their terms on the
   hub once (signed in as the token's owner), then supply a read token
@@ -348,8 +356,10 @@ Two prerequisites, both optional by design:
   pipeline's `config.yaml`) for fully offline loads.
 
 `GET /v1/diarization/status` reports which prerequisites are met
-(`runtime_present`, `model_present`, `token_present`, `gpu_present` -- the
-CUDA runtime is the only build offered) and whether `diarize` is on.
+(`runtime_present`, `model_present`, `token_present`, `gpu_present`), which
+runtime build a fetch would land (`runtime_variant`: `"cuda"`, `"cpu"`, or
+`null` off Windows, with its `runtime_total_bytes`) and whether `diarize`
+is on.
 
 ### Per-job speaker tuning
 
