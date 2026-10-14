@@ -24,24 +24,27 @@ batch decision, repo-wide QA entry points belong to F4.
 A dropped recording is filed by its own filename:
 
 ```text
-<Project code> - <date> - <Title>[ - <Type>].<ext>
+<Project code> - <date> - <Title>[ - <tag>, <tag>, …].<ext>
 ```
 
 `-` is reserved as the separator: the stem is split on **every** hyphen,
 the spaces around a separator are optional (`ELS-260812-Title.mp4` parses
 like `ELS - 260812 - Title.mp4`) and each section is trimmed of ASCII
 spaces, while spaces inside a section are kept. Three sections are an
-untyped meeting, four carry the optional meeting type (same character
-rules as the title), fewer than three are a missing separator, and five or
-more mean a section contained the reserved `-` — those go to `unsorted/`,
-never rejected. Only an unsupported extension is rejected outright.
+untagged meeting, four carry the optional comma-separated tags
+(`vault::tags::validate`: each tag follows the title's character rules, is
+trimmed, blank entries are dropped and duplicates fold case-insensitively
+keeping the first spelling; a comma inside the title is never split),
+fewer than three are a missing separator, and five or more mean a section
+contained the reserved `-` — those go to `unsorted/`, never rejected. Only
+an unsupported extension is rejected outright.
 
 ## Vault layout
 
 ```text
 <vault root>/
   <PROJECT>/
-    <date> - <Title>[ - <Type>]/
+    <date> - <Title>[ - <tag>, <tag>]/
       source.<ext>
   unsorted/
     <YYMMDD of ingest> - <original stem>/
@@ -50,11 +53,13 @@ never rejected. Only an unsupported extension is rejected outright.
 
 Every ingested recording — sorted or unsorted — gets its own folder, so
 later artifacts (a transcript, eventually a summary) can be written next to
-the source. The meeting type is persisted in the folder name and nowhere
-else: `vault::paths::meeting_folder_name(date, title, kind)` writes it and
-`vault::parse_meeting_folder_name(name)` reads it back (two sections →
-untyped, three → typed, anything else → `None`). An unsorted folder name
-keeps the original stem verbatim, hyphens included.
+the source. The tags are persisted in the folder name and nowhere else:
+`vault::paths::meeting_folder_name(date, title, tags)` writes them in the
+canonical `, `-joined form and `vault::parse_meeting_folder_name(name)`
+reads them back (two sections → untagged, three → the third split on `,`,
+anything else → `None`; a folder written before tags existed, `… - Standup`,
+reads as one tag). An unsorted folder name keeps the original stem
+verbatim, hyphens included.
 
 ## Reserved names
 

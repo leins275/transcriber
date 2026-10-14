@@ -11,7 +11,7 @@
 //! A source filename is expected to match:
 //!
 //! ```text
-//! <Project code> - <date> - <Title>[ - <Type>].<ext>
+//! <Project code> - <date> - <Title>[ - <tag>, <tag>, …].<ext>
 //! ```
 //!
 //! `-` is **reserved as the separator**: the stem is split on *every*
@@ -22,39 +22,41 @@
 //! `^[A-Za-z][A-Za-z0-9]{1,9}$` (case-normalized to uppercase), `<date>`
 //! is exactly six digits in `YYMMDD` form denoting a real calendar date,
 //! `<Title>` is any non-empty, Windows-legal string that is not a reserved
-//! device name, `<Type>` — the optional fourth section, the meeting type —
-//! follows exactly the title's rules, and `<ext>` is one of the ten
-//! recording media extensions: `mp4`, `mkv`, `mov`, `webm`, `avi`, `m4a`,
+//! device name, the optional fourth section is a comma-separated list of
+//! **tags** — each held to exactly the title's rules, so `,` and `-` can
+//! appear in neither a tag nor between a tag's words — and `<ext>` is one
+//! of the ten recording media extensions: `mp4`, `mkv`, `mov`, `webm`, `avi`, `m4a`,
 //! `mp3`, `wav`, `flac`, `ogg`.
 //!
 //! The number of sections is therefore part of the grammar:
 //!
 //! ```text
-//! ELS - 260812 - Security issue.mp4              → ELS / 260812 / "Security issue", no type
-//! ELS - 260812 - Security issue - Standup.mp4    → … with the type "Standup"
-//! ELS-260812-Security issue-Standup.mp4          → the same, compact
+//! ELS - 260812 - Security issue.mp4               → ELS / 260812 / "Security issue", no tags
+//! ELS - 260812 - Security issue - Standup.mp4     → … with the tag "Standup"
+//! ELS - 260812 - Security issue - Standup, Q3.mp4 → … with the tags "Standup" and "Q3"
+//! ELS-260812-Security issue-Standup,Q3.mp4        → the same, compact
 //! ELS - 260812 - Security - issue - part 2.mp4   → unsorted (five sections)
 //! just one - separator.mp4                       → unsorted (two sections)
 //! ```
 //!
 //! A filename that matches the convention is a *sorted* recording. Any
 //! other reason for non-conformance (a bad code, a bad date, a bad title,
-//! a bad or empty type, too few separators, or five or more sections —
+//! a bad or empty tag list, too few separators, or five or more sections —
 //! meaning a section itself contained the reserved `-`) yields an
 //! *unsorted* recording — routed to `unsorted/`, never rejected outright,
 //! because every media file must land somewhere. Only an unsupported
 //! extension is rejected outright.
 //!
-//! The type is persisted in the meeting folder name and nowhere else:
-//! [`paths::meeting_folder_name`] writes it, and
-//! [`parse_meeting_folder_name`] reads it back.
+//! The tags are persisted in the meeting folder name and nowhere else:
+//! [`paths::meeting_folder_name`] writes them (one `, ` between tags), and
+//! [`parse_meeting_folder_name`] reads them back.
 //!
 //! ## On-disk layout
 //!
 //! ```text
 //! <vault root>/
 //!   <PROJECT>/
-//!     <date> - <Title>[ - <Type>]/
+//!     <date> - <Title>[ - <tag>, <tag>]/
 //!       source.<ext>
 //!       summary.md                      (F2's LLM summary; carries the
 //!                                        action items as a section)
@@ -78,9 +80,9 @@
 //! that later artifacts (a transcript, a summary, a per-recording export)
 //! can be written next to the source; an unsorted meeting folder takes
 //! exactly the same contents as a filed one. A sorted meeting folder name
-//! carries the meeting type as its third section when the recording had
-//! one (`260812 - Security issue - Standup`) and only date and title when
-//! it did not; an unsorted folder name keeps the original stem verbatim,
+//! carries the meeting's tags as its third section when the recording had
+//! any (`260812 - Security issue - Standup, Q3`) and only date and title
+//! when it did not; an unsorted folder name keeps the original stem verbatim,
 //! hyphens included. `source.*`,
 //! `transcript.json`, `summary.md`, `note.md`, `action items` (legacy — the retired
 //! extraction job's tree, still reserved), `facts` (legacy — the retired
@@ -129,6 +131,9 @@ pub mod date;
 /// Title rules — Windows-illegal characters, trimming, reserved device
 /// names.
 pub mod title;
+
+/// Tag rules — the comma-separated last section of a name.
+pub mod tags;
 
 /// Project code pattern and the reserved `unsorted` word.
 pub mod code;
@@ -179,3 +184,4 @@ pub use paths::{
     EXPORTS_DIR_NAME, FACTS_DIR_NAME, NOTE_FILE_NAME, REPORTS_DIR_NAME, RESERVED_PROJECT_DIR_NAMES,
     ROSTER_FILE_NAME, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };
+pub use tags::TAG_SEPARATOR;

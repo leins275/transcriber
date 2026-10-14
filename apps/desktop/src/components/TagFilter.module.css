@@ -1,0 +1,81 @@
+/* One row under the search input: a kicker, the tag chips, and -- once a
+   chip is pressed -- the any/all switch and Clear. Wraps when narrow. */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.kicker {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* A chip looks like the read-only `.pill` a row shows, and fills with the
+   accent tint when pressed so the active choice reads at a glance. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--text-faint);
+  border-radius: 999px;
+  padding: 1px 9px;
+  background: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
+/* The any/all switch: a two-button segmented control. */
+.match {
+  display: inline-flex;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.matchButton {
+  padding: 1px var(--space-2);
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.matchButton + .matchButton {
+  border-left: 1px solid var(--divider);
+}
+
+.matchButton[aria-checked="true"] {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.clear {
+  font-size: var(--text-sm);
+}

@@ -210,7 +210,7 @@ describe("api.updateVaultEntry", () => {
     has_transcript: true,
   };
 
-  it("sends the meeting type as the kind argument when the update carries one", async () => {
+  it("sends the tag list as the tags argument", async () => {
     const seen: Array<{ cmd: string; payload: unknown }> = [];
     mockIPC((cmd, payload) => {
       seen.push({ cmd, payload });
@@ -222,7 +222,7 @@ describe("api.updateVaultEntry", () => {
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: "Retro",
+      tags: ["Retro", "Q3"],
     });
 
     expect(result).toEqual(view);
@@ -233,12 +233,12 @@ describe("api.updateVaultEntry", () => {
         project: "ELS",
         date: "260812",
         title: "Security issue",
-        kind: "Retro",
+        tags: ["Retro", "Q3"],
       },
     });
   });
 
-  it("sends an explicit null kind when the update carries no type, so the rename strips one", async () => {
+  it("sends an empty tag list when the update carries no tags, so the rename strips them", async () => {
     const seen: Array<{ cmd: string; payload: unknown }> = [];
     mockIPC((cmd, payload) => {
       seen.push({ cmd, payload });
@@ -250,6 +250,7 @@ describe("api.updateVaultEntry", () => {
       project: "ELS",
       date: "260812",
       title: "Security issue",
+      tags: [],
     });
 
     expect(seen).toContainEqual({
@@ -259,7 +260,7 @@ describe("api.updateVaultEntry", () => {
         project: "ELS",
         date: "260812",
         title: "Security issue",
-        kind: null,
+        tags: [],
       },
     });
   });

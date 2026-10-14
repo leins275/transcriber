@@ -337,14 +337,14 @@ pub async fn read_transcript_handler(
 ///
 /// `project: None` files the meeting under `unsorted/`; `Some(code)` files it
 /// under that project, creating or reusing the folder case-insensitively.
-/// `kind` is the optional meeting type: `None` (or a blank string) means the
-/// meeting has no type, which also strips one it currently has, and a type
-/// persists as the folder name's third section (`<date> - <title> - <type>`).
-/// Validation of all four parts happens inside F1
-/// (`vault::manage::rename_meeting`) against exactly the rules ingest applies
-/// to a filename — including the refusal of a `-` inside the title or the
-/// type — so the app never grows a second, drifting copy of the naming
-/// convention.
+/// `tags` is the meeting's tag list: empty (or all blank) means the meeting
+/// has no tags, which also strips the ones it currently has, and the tags
+/// persist as the folder name's comma-separated third section
+/// (`<date> - <title> - <tag>, <tag>`). Validation of all four parts happens
+/// inside F1 (`vault::manage::rename_meeting`) against exactly the rules
+/// ingest applies to a filename — including the refusal of a `-` inside the
+/// title or a tag — so the app never grows a second, drifting copy of the
+/// naming convention.
 ///
 /// The entry keeps its id: the index is rewritten to the new path so the
 /// row the operator just renamed stays actionable.
@@ -354,7 +354,7 @@ pub async fn update_vault_entry_handler(
     project: Option<String>,
     date: &str,
     title: &str,
-    kind: Option<String>,
+    tags: Vec<String>,
 ) -> Result<VaultMeetingView, AppError> {
     let (root, meeting_dir) = resolve_entry(state, entry_id).await?;
 
@@ -375,7 +375,7 @@ pub async fn update_vault_entry_handler(
         project,
         date: date.to_string(),
         title: title.to_string(),
-        kind,
+        tags,
     };
 
     let moved = {
@@ -1534,7 +1534,7 @@ mod tests {
                 Some("ELS".to_string()),
                 "260812",
                 "Renamed while busy",
-                None,
+                Vec::new(),
             )
             .await
             .expect_err("a rename during an active job must be refused");

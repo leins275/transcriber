@@ -48,6 +48,7 @@ use crate::date;
 use crate::error::{IoFailure, Rejection, VaultError};
 use crate::layout;
 use crate::paths::{self, UNSORTED_DIR_NAME};
+use crate::tags;
 use crate::title;
 
 /// The highest numeric collision suffix probed before giving up, mirroring
@@ -58,11 +59,11 @@ const MAX_SUFFIX: u32 = 999;
 ///
 /// Every part is always supplied — a rename is expressed as the complete
 /// target name rather than a patch — so a caller that is only changing the
-/// project still passes the meeting's current date, title and type back.
+/// project still passes the meeting's current date, title and tags back.
 /// That keeps this type free of "unchanged" sentinels and makes the
 /// resulting folder name a pure function of the request; in particular an
-/// absent [`MeetingUpdate::kind`] means "this meeting has no type", not
-/// "leave the type it has alone".
+/// empty [`MeetingUpdate::tags`] means "this meeting has no tags", not
+/// "leave the tags it has alone".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeetingUpdate {
     /// The target project code, or `None` to file the meeting under
@@ -76,15 +77,16 @@ pub struct MeetingUpdate {
     /// is (FR-6): never repaired, only accepted or reported. A `-` in it is
     /// [`crate::error::Rejection::ReservedSeparator`].
     pub title: String,
-    /// The target meeting type — the optional fourth section of the name
-    /// (FR-6), persisted as the third section of the folder name.
+    /// The target tags — the optional fourth section of the name (FR-6),
+    /// persisted as the third section of the folder name.
     ///
-    /// `None` and a blank or whitespace-only `Some` mean the same thing:
-    /// the meeting has no type, which also **strips** the type a folder
-    /// currently carries. A present value is trimmed and held to the
-    /// title's character rules through [`crate::title::validate_kind`], and
-    /// a `-` in it is [`crate::error::Rejection::ReservedSeparator`].
-    pub kind: Option<String>,
+    /// An empty list, or one whose entries are all blank, means the meeting
+    /// has no tags, which also **strips** the tags a folder currently
+    /// carries. Entries are joined and read through [`crate::tags::validate`]
+    /// — so an entry that itself holds a comma is simply several tags —
+    /// each trimmed and held to the title's character rules, and a `-` in
+    /// any of them is [`crate::error::Rejection::ReservedSeparator`].
+    pub tags: Vec<String>,
 }
 
 /// A meeting folder that has passed [`resolve_meeting`]'s checks.
@@ -194,13 +196,14 @@ pub fn rename_meeting(
 ) -> Result<PathBuf, VaultError> {
     let resolved = resolve_meeting(root, meeting_dir)?;
 
-    // An emptied Type field arrives as whitespace and means "no type".
-    let requested_kind = update
-        .kind
-        .as_deref()
-        .map(str::trim)
-        .filter(|kind| !kind.is_empty());
-    if update.title.contains('-') || requested_kind.is_some_and(|kind| kind.contains('-')) {
+    // An emptied Tags field arrives as nothing, or as whitespace, and means
+    // "no tags". The entries are re-joined so that the one validator reads
+    // them exactly as it reads a dropped file's tag section.
+    let requested_tags = update.tags.join(",");
+    let has_tags = requested_tags
+        .split(tags::TAG_SEPARATOR)
+        .any(|piece| !piece.trim().is_empty());
+    if update.title.contains('-') || requested_tags.contains('-') {
         return Err(VaultError::InvalidMeetingName {
             reason: Rejection::ReservedSeparator,
         });
@@ -219,10 +222,12 @@ pub fn rename_meeting(
         date::validate(&update.date).map_err(|reason| VaultError::InvalidMeetingName { reason })?;
     let valid_title = title::validate(&update.title)
         .map_err(|reason| VaultError::InvalidMeetingName { reason })?;
-    let valid_kind = requested_kind
-        .map(title::validate_kind)
-        .transpose()
-        .map_err(|reason| VaultError::InvalidMeetingName { reason })?;
+    let valid_tags = if has_tags {
+        tags::validate(&requested_tags)
+            .map_err(|reason| VaultError::InvalidMeetingName { reason })?
+    } else {
+        Vec::new()
+    };
 
     let parent = match project.as_deref() {
         Some(code) => layout::ensure_project_dir(&resolved.root, code)?,
@@ -234,8 +239,7 @@ pub fn rename_meeting(
     };
     let parent = paths::simplify_extended_prefix(parent);
 
-    let base_name =
-        paths::meeting_folder_name(valid_date.as_str(), &valid_title, valid_kind.as_deref());
+    let base_name = paths::meeting_folder_name(valid_date.as_str(), &valid_title, &valid_tags);
     let target = free_destination(&parent, &base_name, &resolved.meeting_dir)?;
     if target == resolved.meeting_dir {
         return Ok(target);
@@ -379,13 +383,13 @@ mod tests {
             project: project.map(str::to_owned),
             date: date.to_string(),
             title: title.to_string(),
-            kind: None,
+            tags: Vec::new(),
         }
     }
 
-    fn typed_update(project: Option<&str>, date: &str, title: &str, kind: &str) -> MeetingUpdate {
+    fn tagged_update(project: Option<&str>, date: &str, title: &str, tags: &str) -> MeetingUpdate {
         MeetingUpdate {
-            kind: Some(kind.to_string()),
+            tags: vec![tags.to_string()],
             ..update(project, date, title)
         }
     }
@@ -517,7 +521,7 @@ mod tests {
         let moved = rename_meeting(
             dir.path(),
             &meeting,
-            &typed_update(Some("ELS"), "260814", "Weekly sync", " Retro "),
+            &tagged_update(Some("ELS"), "260814", "Weekly sync", " Retro "),
         )
         .expect("should rename");
 
@@ -531,7 +535,7 @@ mod tests {
 
         for request in [
             update(Some("ELS"), "260814", "Weekly - sync"),
-            typed_update(Some("ELS"), "260814", "Weekly sync", "Re-tro"),
+            tagged_update(Some("ELS"), "260814", "Weekly sync", "Re-tro"),
         ] {
             assert_eq!(
                 rename_meeting(dir.path(), &meeting, &request),

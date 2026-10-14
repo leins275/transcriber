@@ -81,7 +81,7 @@ Each names the automated coverage that stands in for it in the meantime.
       from summary**. Expected: the item reads "Suggesting title…" and is
       disabled while the job runs; when it finishes the rename form opens
       with the Title prefilled by a short name in the summary's language,
-      the date and type unchanged, and the folder is renamed only after
+      the date and tags unchanged, and the folder is renamed only after
       Save (Cancel keeps the old name). The item is absent on a meeting
       without a summary and with no language model installed. Automated:
       `test_llm_title.py`, `test_suggest_title_job.py`,

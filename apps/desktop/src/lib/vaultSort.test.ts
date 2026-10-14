@@ -21,7 +21,7 @@ function buildEntry(
 
 // Newest first, the way the vault listing arrives.
 const entries = [
-  buildEntry("a", "GIS", "260812 - Weekly - Sync"),
+  buildEntry("a", "GIS", "260812 - Weekly - Sync, Planning"),
   buildEntry("b", null, "260811 - loose file", { has_transcript: false }),
   buildEntry("c", "ELS", "260810 - Budget"),
   buildEntry("d", "ELS", "260809 - Audit - Review", { has_source: false, has_transcript: false }),
@@ -61,7 +61,7 @@ describe("sortVaultTable", () => {
       "d",
       "b",
     ]);
-    expect(ids(sortVaultTable(entries, { column: "type", direction: "desc" }))).toEqual([
+    expect(ids(sortVaultTable(entries, { column: "tags", direction: "desc" }))).toEqual([
       "a",
       "d",
       "b",

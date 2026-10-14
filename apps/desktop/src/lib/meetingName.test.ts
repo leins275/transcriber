@@ -1,49 +1,68 @@
 import { describe, expect, it } from "vitest";
 import {
   formatMeetingDate,
+  joinTags,
   meetingEditDefaults,
   parseEntryName,
   parseMeetingName,
+  splitTags,
 } from "./meetingName";
 
 describe("parseMeetingName", () => {
-  it("splits an untyped folder name into date and title", () => {
+  it("splits an untagged folder name into date and title", () => {
     expect(parseMeetingName("260812 - Security issue")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
   });
 
-  it("reads a third section as the meeting type", () => {
+  it("reads a third section as a tag", () => {
     expect(parseMeetingName("260812 - Security issue - Standup")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
-  it("reads the type from a name written without spaces around the separators", () => {
+  it("splits a comma-separated third section into several tags", () => {
+    expect(parseMeetingName("260812 - Security issue - Standup, Q3")).toEqual({
+      date: "260812",
+      title: "Security issue",
+      tags: ["Standup", "Q3"],
+    });
+    expect(parseMeetingName("260812-Security issue-Standup,Q3")).toEqual({
+      date: "260812",
+      title: "Security issue",
+      tags: ["Standup", "Q3"],
+    });
+  });
+
+  it("returns null when the tag section holds only commas", () => {
+    expect(parseMeetingName("260812 - Title - , ,")).toBeNull();
+  });
+
+  it("reads the tag from a name written without spaces around the separators", () => {
     expect(parseMeetingName("260812-Security issue-Standup")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
-  it("treats a hyphen inside what used to be the title as the type separator", () => {
+  it("treats a hyphen inside what used to be the title as the tag section's separator", () => {
     expect(parseMeetingName("260812 - Q3 - review")).toEqual({
       date: "260812",
       title: "Q3",
-      kind: "review",
+      tags: ["review"],
     });
   });
 
-  it("keeps non-ASCII text in both the title and the type", () => {
+  it("keeps non-ASCII text in both the title and a tag", () => {
     expect(parseMeetingName("260828 - Q&A Сессия с Дмитрием - поиск рабочего триггера")).toEqual({
       date: "260828",
       title: "Q&A Сессия с Дмитрием",
-      kind: "поиск рабочего триггера",
+      tags: ["поиск рабочего триггера"],
     });
   });
 
@@ -51,7 +70,7 @@ describe("parseMeetingName", () => {
     expect(parseMeetingName("260731 - Запись встречи 31.07.2026 11-04-56 - запись")).toBeNull();
   });
 
-  it("returns null when the type section is present but empty", () => {
+  it("returns null when the tag section is present but empty", () => {
     expect(parseMeetingName("260812 - Title -")).toBeNull();
   });
 
@@ -78,38 +97,38 @@ describe("parseMeetingName", () => {
     expect(parseMeetingName("260812-Security issue")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
     expect(parseMeetingName("260812 -Security issue")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
   });
 });
 
 describe("parseEntryName", () => {
-  it("reads a meeting filed under a project under the typed grammar", () => {
+  it("reads a meeting filed under a project under the tagged grammar", () => {
     expect(parseEntryName("260812 - Security issue - Standup", "ELS")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
-  it("never reads a type out of an unsorted folder's verbatim stem", () => {
+  it("never reads tags out of an unsorted folder's verbatim stem", () => {
     // `unsorted/` is where a *non-conforming* name is kept as it was, so the
     // stem's own hyphens are not separators: `ELS - 260812.mp4` ingested on
-    // 2026-09-10 must not display as title `ELS` with a `260812` type.
+    // 2026-09-10 must not display as title `ELS` with a `260812` tag.
     expect(parseEntryName("260910 - ELS - 260812", null)).toEqual({
       date: "260910",
       title: "ELS - 260812",
-      kind: null,
+      tags: [],
     });
     expect(parseEntryName("260910 - just one - separator", null)).toEqual({
       date: "260910",
       title: "just one - separator",
-      kind: null,
+      tags: [],
     });
   });
 
@@ -117,7 +136,7 @@ describe("parseEntryName", () => {
     expect(parseEntryName("260910 - Запись встречи 31.07.2026 11-04-56 - запись", null)).toEqual({
       date: "260910",
       title: "Запись встречи 31.07.2026 11-04-56 - запись",
-      kind: null,
+      tags: [],
     });
   });
 
@@ -125,12 +144,12 @@ describe("parseEntryName", () => {
     expect(parseEntryName("260910 - recording_final(1)", null)).toEqual({
       date: "260910",
       title: "recording_final(1)",
-      kind: null,
+      tags: [],
     });
     expect(parseEntryName("260910-recording_final(1)", null)).toEqual({
       date: "260910",
       title: "recording_final(1)",
-      kind: null,
+      tags: [],
     });
   });
 
@@ -143,19 +162,19 @@ describe("parseEntryName", () => {
 });
 
 describe("meetingEditDefaults", () => {
-  it("seeds the form from an untyped name", () => {
+  it("seeds the form from an untagged name", () => {
     expect(meetingEditDefaults("260812 - Security issue")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
   });
 
-  it("seeds the type from a typed name", () => {
+  it("seeds the tags from a tagged name", () => {
     expect(meetingEditDefaults("260812 - Security issue - Standup")).toEqual({
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
@@ -163,7 +182,7 @@ describe("meetingEditDefaults", () => {
     expect(meetingEditDefaults("recording final v2")).toEqual({
       date: "",
       title: "recording final v2",
-      kind: null,
+      tags: [],
     });
   });
 
@@ -171,8 +190,25 @@ describe("meetingEditDefaults", () => {
     expect(meetingEditDefaults("260731 - Запись встречи 31.07.2026 11-04-56 - запись")).toEqual({
       date: "",
       title: "260731 - Запись встречи 31.07.2026 11-04-56 - запись",
-      kind: null,
+      tags: [],
     });
+  });
+});
+
+describe("splitTags / joinTags", () => {
+  it("splits on commas, trims spaces and drops empty pieces", () => {
+    expect(splitTags(" Standup ,Q3,, Sprint review ,")).toEqual(["Standup", "Q3", "Sprint review"]);
+    expect(splitTags("")).toEqual([]);
+    expect(splitTags(" , ")).toEqual([]);
+  });
+
+  it("keeps a tab inside a tag rather than trimming it, like the Rust side", () => {
+    expect(splitTags("Standup,\tQ3")).toEqual(["Standup", "\tQ3"]);
+  });
+
+  it("joins with the folder name's canonical ', '", () => {
+    expect(joinTags(["Standup", "Q3"])).toBe("Standup, Q3");
+    expect(joinTags([])).toBe("");
   });
 });
 

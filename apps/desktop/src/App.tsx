@@ -31,6 +31,7 @@ import { activeJobView } from "./lib/activeJob";
 import type { ModelDownloadStatus } from "./lib/modelDownload";
 import { projectCodes } from "./lib/vaultGroups";
 import { DEFAULT_SPEAKER_SORT, type SpeakerSort } from "./lib/speakerSort";
+import { EMPTY_TAG_FILTER, type TagFilter } from "./lib/tagFilter";
 import { DEFAULT_VAULT_SORT, type VaultSort } from "./lib/vaultSort";
 import { useChat } from "./state/useChat";
 import { useJobs } from "./state/useJobs";
@@ -128,6 +129,7 @@ function App() {
   // the column they sorted by.
   const [vaultFilter, setVaultFilter] = useState<string>("");
   const [vaultSort, setVaultSort] = useState<VaultSort>(DEFAULT_VAULT_SORT);
+  const [vaultTagFilter, setVaultTagFilter] = useState<TagFilter>(EMPTY_TAG_FILTER);
   // The content-search query, lifted for the same unmount-survival reason.
   const [vaultSearch, setVaultSearch] = useState<string>("");
   const searchVault = useCallback((query: string) => api.searchVault(query, null), []);
@@ -908,6 +910,8 @@ function App() {
                     onFilterChange={setVaultFilter}
                     sort={vaultSort}
                     onSortChange={setVaultSort}
+                    tagFilter={vaultTagFilter}
+                    onTagFilterChange={setVaultTagFilter}
                     search={vaultSearch}
                     onSearchChange={setVaultSearch}
                     onSearch={searchVault}

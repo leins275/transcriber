@@ -1,10 +1,10 @@
 //! NFR-5: every rejection reason is a distinct, specifically-worded
 //! enumerated variant. This file is the traceability test for that
-//! requirement, exercised against `vault::error` and the type validator
-//! in `vault::title` that produces three of its new variants (FR-2).
+//! requirement, exercised against `vault::error` and the tag validator
+//! in `vault::tags` that produces three of its new variants (FR-2).
 
 use vault::error::{Rejection, VaultError};
-use vault::title;
+use vault::tags;
 
 fn assert_debug_clone_partial_eq<T: std::fmt::Debug + Clone + PartialEq>() {}
 fn assert_error<T: std::error::Error>() {}
@@ -30,8 +30,8 @@ fn rejection_all_covers_every_variant() {
     // 9 variants declared in the plan's error vocabulary (the tenth,
     // `TitleEscapesVault`, was removed as dead code — no code path could
     // ever construct it, see `Rejection`'s doc comment), plus the four
-    // added for the meeting type: `TooManySeparators`, `EmptyType`,
-    // `IllegalTypeCharacter` and `ReservedSeparator` (FR-2). This length
+    // added for the meeting tags: `TooManySeparators`, `EmptyTag`,
+    // `IllegalTagCharacter` and `ReservedSeparator` (FR-2). This length
     // check is a coarse signal; `error::exhaustiveness` (a `#[cfg(test)]`
     // compiler-enforced match in `src/error.rs`) is what actually fails
     // the build if a variant is ever added without updating `all()`.
@@ -117,7 +117,7 @@ fn vault_error_path_too_long_message_names_len_and_limit() {
 }
 
 // FR-2: the four variants added for the optional fourth filename section
-// (the meeting type), and the type validator that produces three of them.
+// (the meeting tags), and the tag validator that produces three of them.
 
 #[test]
 fn too_many_separators_message_names_the_separator_and_the_section_rule() {
@@ -127,25 +127,25 @@ fn too_many_separators_message_names_the_separator_and_the_section_rule() {
 }
 
 #[test]
-fn empty_type_message_names_the_type_and_says_it_is_empty() {
-    let message = Rejection::EmptyType.to_string().to_lowercase();
-    assert!(message.contains("type"), "message was {message:?}");
+fn empty_tag_message_names_the_tag_and_says_it_is_empty() {
+    let message = Rejection::EmptyTag.to_string().to_lowercase();
+    assert!(message.contains("tag"), "message was {message:?}");
     assert!(message.contains("empty"), "message was {message:?}");
 }
 
 #[test]
-fn illegal_type_character_message_names_the_type_and_the_offending_char() {
-    let message = Rejection::IllegalTypeCharacter(':')
+fn illegal_tag_character_message_names_the_tag_and_the_offending_char() {
+    let message = Rejection::IllegalTagCharacter(':')
         .to_string()
         .to_lowercase();
-    assert!(message.contains("type"), "message was {message:?}");
+    assert!(message.contains("tag"), "message was {message:?}");
     assert!(message.contains(':'), "message was {message:?}");
 }
 
 #[test]
-fn an_illegal_character_in_the_type_reads_differently_from_one_in_the_title() {
+fn an_illegal_character_in_a_tag_reads_differently_from_one_in_the_title() {
     assert_ne!(
-        Rejection::IllegalTypeCharacter(':').to_string(),
+        Rejection::IllegalTagCharacter(':').to_string(),
         Rejection::IllegalTitleCharacter(':').to_string()
     );
 }
@@ -158,48 +158,49 @@ fn reserved_separator_message_says_the_hyphen_is_reserved() {
 }
 
 #[test]
-fn a_plain_type_is_accepted_verbatim() {
-    assert_eq!(&*title::validate_kind("Standup").unwrap(), "Standup");
+fn a_plain_tag_is_accepted_verbatim() {
+    assert_eq!(tags::validate("Standup").unwrap(), ["Standup"]);
 }
 
 #[test]
-fn surrounding_spaces_are_trimmed_from_a_type() {
-    assert_eq!(&*title::validate_kind(" Retro ").unwrap(), "Retro");
-}
-
-#[test]
-fn an_empty_type_is_rejected_as_an_empty_type_not_an_empty_title() {
-    assert_eq!(title::validate_kind(""), Err(Rejection::EmptyType));
-}
-
-#[test]
-fn a_whitespace_only_type_is_rejected_as_an_empty_type() {
-    assert_eq!(title::validate_kind("   "), Err(Rejection::EmptyType));
-}
-
-#[test]
-fn an_illegal_character_in_a_type_is_reported_against_the_type() {
+fn a_comma_separated_section_is_several_tags_each_trimmed() {
     assert_eq!(
-        title::validate_kind("Q:A"),
-        Err(Rejection::IllegalTypeCharacter(':'))
+        tags::validate(" Retro , Q3,Planning").unwrap(),
+        ["Retro", "Q3", "Planning"]
     );
 }
 
 #[test]
-fn a_type_matching_a_reserved_device_name_is_rejected() {
+fn an_empty_section_is_rejected_as_an_empty_tag_not_an_empty_title() {
+    assert_eq!(tags::validate(""), Err(Rejection::EmptyTag));
+}
+
+#[test]
+fn a_whitespace_or_commas_only_section_is_rejected_as_an_empty_tag() {
+    assert_eq!(tags::validate("   "), Err(Rejection::EmptyTag));
+    assert_eq!(tags::validate(" , ,"), Err(Rejection::EmptyTag));
+}
+
+#[test]
+fn an_illegal_character_in_a_tag_is_reported_against_the_tag() {
     assert_eq!(
-        title::validate_kind("CON"),
+        tags::validate("Retro, Q:A"),
+        Err(Rejection::IllegalTagCharacter(':'))
+    );
+}
+
+#[test]
+fn a_tag_matching_a_reserved_device_name_is_rejected() {
+    assert_eq!(
+        tags::validate("Retro, CON"),
         Err(Rejection::ReservedDeviceName)
     );
 }
 
 #[test]
-fn a_hyphen_inside_a_type_is_not_this_validators_concern() {
+fn a_hyphen_inside_a_tag_is_not_this_validators_concern() {
     // The parser can never hand a section containing `-` to this
     // validator, and an operator-supplied one is refused earlier in
     // `manage::rename_meeting` with `ReservedSeparator` (FR-2, FR-6).
-    assert_eq!(
-        &*title::validate_kind("Q3 - review").unwrap(),
-        "Q3 - review"
-    );
+    assert_eq!(tags::validate("Q3 - review").unwrap(), ["Q3 - review"]);
 }

@@ -1192,9 +1192,9 @@ pub async fn update_vault_entry(
     project: Option<String>,
     date: String,
     title: String,
-    kind: Option<String>,
+    tags: Vec<String>,
 ) -> Result<VaultMeetingView, AppError> {
-    meetings::update_vault_entry_handler(&state, &entry_id, project, &date, &title, kind).await
+    meetings::update_vault_entry_handler(&state, &entry_id, project, &date, &title, tags).await
 }
 
 #[tauri::command]
@@ -3070,7 +3070,7 @@ mod tests {
                 Some("els".to_string()),
                 "260814",
                 "Weekly sync",
-                None,
+                Vec::new(),
             )
             .await
             .expect("re-filing a listed meeting must succeed");
@@ -3118,7 +3118,7 @@ mod tests {
                 Some("ELS".to_string()),
                 "260230",
                 "Weekly sync",
-                None,
+                Vec::new(),
             )
             .await
             .expect_err("a date that is not a calendar date must be refused");

@@ -1,10 +1,10 @@
 //! Tests for `vault::parse::classify_filename` — the pure classification
 //! entry point.
 //!
-//! The grammar is `<PRJ> - <DATE> - <NAME>[ - <TYPE>].<ext>` with `-`
+//! The grammar is `<PRJ> - <DATE> - <NAME>[ - <tag>, <tag>].<ext>` with `-`
 //! reserved as the separator everywhere: the stem is split on *every*
 //! hyphen, each section is trimmed of ASCII spaces only, three sections
-//! are an untyped meeting, four carry a type and five or more route to
+//! are an untagged meeting, four carry tags and five or more route to
 //! `unsorted` (FR-1, NFR-1).
 
 use std::time::{Duration, Instant};
@@ -12,21 +12,14 @@ use std::time::{Duration, Instant};
 use vault::error::{Rejection, VaultError};
 use vault::parse::{classify_filename, Classified};
 
-fn assert_sorted(
-    name: &str,
-    project: &str,
-    date: &str,
-    title: &str,
-    kind: Option<&str>,
-    ext: &str,
-) {
+fn assert_sorted(name: &str, project: &str, date: &str, title: &str, tags: &[&str], ext: &str) {
     match classify_filename(name).unwrap_or_else(|e| panic!("expected Ok for {name:?}, got {e:?}"))
     {
         Classified::Sorted(parsed) => {
             assert_eq!(parsed.project, project, "project mismatch for {name:?}");
             assert_eq!(parsed.date, date, "date mismatch for {name:?}");
             assert_eq!(parsed.title, title, "title mismatch for {name:?}");
-            assert_eq!(parsed.kind.as_deref(), kind, "kind mismatch for {name:?}");
+            assert_eq!(parsed.tags, tags, "tags mismatch for {name:?}");
             assert_eq!(parsed.ext, ext, "ext mismatch for {name:?}");
         }
         other => panic!("expected Sorted for {name:?}, got {other:?}"),
@@ -50,7 +43,7 @@ fn parses_a_well_formed_name() {
         "ELS",
         "260812",
         "Security issue",
-        None,
+        &[],
         "mp4",
     );
 }
@@ -62,37 +55,37 @@ fn parses_another_well_formed_name() {
         "GIS",
         "260724",
         "Client demo",
-        None,
+        &[],
         "mp4",
     );
 }
 
 #[test]
-fn a_fourth_section_is_the_meeting_type() {
+fn a_fourth_section_is_a_tag() {
     assert_sorted(
         "ELS - 260812 - Security issue - Standup.mp4",
         "ELS",
         "260812",
         "Security issue",
-        Some("Standup"),
+        &["Standup"],
         "mp4",
     );
 }
 
 #[test]
-fn spaces_inside_a_title_and_a_type_survive_the_split() {
+fn spaces_inside_a_title_and_a_tag_survive_the_split() {
     assert_sorted(
         "GIS - 260724 - Weekly sync - Sprint review.mp4",
         "GIS",
         "260724",
         "Weekly sync",
-        Some("Sprint review"),
+        &["Sprint review"],
         "mp4",
     );
 }
 
 #[test]
-fn whitespace_around_the_type_separator_is_optional() {
+fn whitespace_around_the_tag_section_separator_is_optional() {
     // The spaces around `-` are decoration, not structure: the compact
     // form and every mixed form parse identically to the canonical one.
     assert_sorted(
@@ -100,7 +93,7 @@ fn whitespace_around_the_type_separator_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        Some("Standup"),
+        &["Standup"],
         "mp4",
     );
     assert_sorted(
@@ -108,7 +101,7 @@ fn whitespace_around_the_type_separator_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        Some("Standup"),
+        &["Standup"],
         "mp4",
     );
     assert_sorted(
@@ -116,7 +109,7 @@ fn whitespace_around_the_type_separator_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        Some("Standup"),
+        &["Standup"],
         "mp4",
     );
 }
@@ -128,7 +121,7 @@ fn whitespace_around_separators_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        None,
+        &[],
         "mp4",
     );
     assert_sorted(
@@ -136,7 +129,7 @@ fn whitespace_around_separators_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        None,
+        &[],
         "mp4",
     );
     assert_sorted(
@@ -144,7 +137,7 @@ fn whitespace_around_separators_is_optional() {
         "ELS",
         "260812",
         "Security issue",
-        None,
+        &[],
         "mp4",
     );
 }
@@ -200,21 +193,71 @@ fn exactly_one_separator_is_unsorted() {
 }
 
 #[test]
-fn a_present_but_empty_type_is_unsorted() {
-    assert_unsorted("ELS - 260812 - Title - .mp4", Rejection::EmptyType);
-    assert_unsorted("ELS - 260812 - Title -.mp4", Rejection::EmptyType);
-}
-
-#[test]
-fn an_illegal_character_in_the_type_is_reported_against_the_type() {
-    assert_unsorted(
-        "ELS - 260812 - Title - Q:A.mp4",
-        Rejection::IllegalTypeCharacter(':'),
+fn a_fourth_section_with_commas_is_several_tags() {
+    assert_sorted(
+        "ELS - 260812 - Security issue - Standup, Q3, Sprint review.mp4",
+        "ELS",
+        "260812",
+        "Security issue",
+        &["Standup", "Q3", "Sprint review"],
+        "mp4",
+    );
+    // Spaces around the commas are decoration, like those around `-`.
+    assert_sorted(
+        "ELS-260812-Security issue-Standup,Q3.mp4",
+        "ELS",
+        "260812",
+        "Security issue",
+        &["Standup", "Q3"],
+        "mp4",
     );
 }
 
 #[test]
-fn a_reserved_device_name_as_the_type_is_unsorted() {
+fn empty_tags_are_skipped_and_duplicates_fold_case_insensitively() {
+    assert_sorted(
+        "ELS - 260812 - Title - Standup,, standup, Q3,.mp4",
+        "ELS",
+        "260812",
+        "Title",
+        &["Standup", "Q3"],
+        "mp4",
+    );
+}
+
+#[test]
+fn a_comma_in_the_title_is_not_a_tag_separator() {
+    assert_sorted(
+        "ELS - 260812 - Budget, hiring - Standup.mp4",
+        "ELS",
+        "260812",
+        "Budget, hiring",
+        &["Standup"],
+        "mp4",
+    );
+}
+
+#[test]
+fn a_present_but_empty_tag_section_is_unsorted() {
+    assert_unsorted("ELS - 260812 - Title - .mp4", Rejection::EmptyTag);
+    assert_unsorted("ELS - 260812 - Title -.mp4", Rejection::EmptyTag);
+    assert_unsorted("ELS - 260812 - Title - , ,.mp4", Rejection::EmptyTag);
+}
+
+#[test]
+fn an_illegal_character_in_a_tag_is_reported_against_the_tag() {
+    assert_unsorted(
+        "ELS - 260812 - Title - Q:A.mp4",
+        Rejection::IllegalTagCharacter(':'),
+    );
+    assert_unsorted(
+        "ELS - 260812 - Title - Standup, Q:A.mp4",
+        Rejection::IllegalTagCharacter(':'),
+    );
+}
+
+#[test]
+fn a_reserved_device_name_as_a_tag_is_unsorted() {
     assert_unsorted(
         "ELS - 260812 - Title - CON.mp4",
         Rejection::ReservedDeviceName,
@@ -222,12 +265,12 @@ fn a_reserved_device_name_as_the_type_is_unsorted() {
 }
 
 #[test]
-fn a_tab_beside_the_type_separator_reaches_the_validator_rather_than_being_trimmed() {
+fn a_tab_beside_the_tag_section_separator_reaches_the_validator_rather_than_being_trimmed() {
     // Only ASCII spaces are decoration. A control character hiding next to
     // a separator must still be reported, never silently trimmed away.
     assert_unsorted(
         "ELS - 260812 - Title -\tK.mp4",
-        Rejection::IllegalTypeCharacter('\t'),
+        Rejection::IllegalTagCharacter('\t'),
     );
 }
 
@@ -245,12 +288,12 @@ fn the_section_count_is_judged_before_the_project_code() {
 }
 
 #[test]
-fn the_project_code_is_judged_before_the_type() {
+fn the_project_code_is_judged_before_the_tags() {
     assert_unsorted("1ELS - 260812 - T - K.mp4", Rejection::InvalidProjectCode);
 }
 
 #[test]
-fn the_title_is_judged_before_the_type() {
+fn the_title_is_judged_before_the_tags() {
     assert_unsorted(
         "ELS - 260812 - Q:A - K.mp4",
         Rejection::IllegalTitleCharacter(':'),
@@ -266,7 +309,7 @@ fn parser_needs_no_fixture_on_disk() {
         "NOPE",
         "260812",
         "does not exist anywhere",
-        None,
+        &[],
         "mp4",
     );
 }
@@ -293,7 +336,7 @@ fn the_extension_gate_runs_before_the_section_count() {
 
 #[test]
 fn lowercase_project_code_is_sorted_and_capitalized() {
-    assert_sorted("els - 260812 - x.mp4", "ELS", "260812", "x", None, "mp4");
+    assert_sorted("els - 260812 - x.mp4", "ELS", "260812", "x", &[], "mp4");
 }
 
 #[test]

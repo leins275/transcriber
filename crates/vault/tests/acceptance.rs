@@ -20,7 +20,7 @@
 //!
 //! The `specs/260910-meeting-type-in-filename` block at the bottom of this
 //! file extends the same traceability to the optional fourth section of a
-//! dropped file name — the meeting **type** — covering its ingest,
+//! dropped file name — the meeting **tags** — covering their ingest,
 //! collision, path-length and rename behaviour end to end (FR-3 … FR-6 of
 //! that blueprint). The per-rule matrices stay in `tests/parse_filename.rs`,
 //! `tests/paths.rs` and `tests/error_vocabulary.rs`.
@@ -124,11 +124,11 @@ fn fr02_fr03_pure_parser_splits_on_every_separator_with_no_filesystem() {
         other => panic!("expected Sorted, got {other:?}"),
     }
 
-    // A fourth section is the meeting type, not part of the title.
-    match vault::classify_filename("ELS - 260812 - Security issue - Standup.mp4").unwrap() {
+    // A fourth section is the comma-separated tag list, not part of the title.
+    match vault::classify_filename("ELS - 260812 - Security issue - Standup, Q3.mp4").unwrap() {
         Classified::Sorted(parsed) => {
             assert_eq!(parsed.title, "Security issue");
-            assert_eq!(parsed.kind.as_deref(), Some("Standup"));
+            assert_eq!(parsed.tags, ["Standup", "Q3"]);
         }
         other => panic!("expected Sorted, got {other:?}"),
     }
@@ -696,7 +696,8 @@ fn full_session_sorted_then_unsorted_then_duplicate_redrop_produces_exact_tree()
 }
 
 // =====================================================================
-// specs/260910-meeting-type-in-filename — the optional fourth section
+// specs/260910-meeting-type-in-filename — the optional fourth section,
+// now read as a comma-separated tag list (specs/261014-meeting-tags)
 // =====================================================================
 
 /// Drops `dropped_name` into `staging` and ingests it on the fixed
@@ -708,51 +709,53 @@ fn ingest_dropped(vault: &Vault, staging: &Path, dropped_name: &str, bytes: &[u8
 }
 
 /// A complete rename request, spelled out the way `rename_meeting` takes it.
-fn update(project: Option<&str>, date: &str, title: &str, kind: Option<&str>) -> MeetingUpdate {
+fn update(project: Option<&str>, date: &str, title: &str, tags: &[&str]) -> MeetingUpdate {
     MeetingUpdate {
         project: project.map(str::to_string),
         date: date.to_string(),
         title: title.to_string(),
-        kind: kind.map(str::to_string),
+        tags: tags.iter().map(|tag| tag.to_string()).collect(),
     }
 }
 
-/// A meeting type just long enough to make
-/// `<root>\ELS\260812 - Security issue - <type>\source.mp4` 261 characters —
-/// one character over the 260-character cap, with the type as the only
+/// A tag just long enough to make
+/// `<root>\ELS\260812 - Security issue - <tag>\source.mp4` 261 characters —
+/// one character over the 260-character cap, with the tag as the only
 /// reason it overruns.
-fn type_overrunning_the_cap(root: &Path) -> String {
-    let everything_but_the_type = root.as_os_str().to_string_lossy().chars().count()
+fn tag_overrunning_the_cap(root: &Path) -> String {
+    let everything_but_the_tag = root.as_os_str().to_string_lossy().chars().count()
         + "\\ELS\\260812 - Security issue - ".chars().count()
         + "\\source.mp4".chars().count();
-    "S".repeat(261 - everything_but_the_type)
+    "S".repeat(261 - everything_but_the_tag)
 }
 
-/// FR-3: the folder name is the type's storage, and the crate root exposes
-/// the parser that reads it back — the seam the app's UI mirrors.
+/// FR-3: the folder name is the tags' storage, and the crate root exposes
+/// the parser that reads them back — the seam the app's UI mirrors.
 #[test]
-fn fr03_the_typed_folder_ingest_created_reads_back_through_the_crate_root_api() {
+fn fr03_the_tagged_folder_ingest_created_reads_back_through_the_crate_root_api() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
     let ingested = ingest_dropped(
         &vault,
         staging_dir.path(),
-        "ELS - 260812 - Security issue - Standup.mp4",
+        "ELS - 260812 - Security issue - Standup,Q3.mp4",
         b"video",
     );
     let folder_name = ingested.meeting_dir.file_name().unwrap().to_str().unwrap();
 
-    let read_back = vault::parse_meeting_folder_name(folder_name).expect("a typed folder name");
+    let read_back = vault::parse_meeting_folder_name(folder_name).expect("a tagged folder name");
 
     assert_eq!(read_back.date, "260812");
     assert_eq!(read_back.title, "Security issue");
-    assert_eq!(read_back.kind.as_deref(), Some("Standup"));
+    assert_eq!(read_back.tags, ["Standup", "Q3"]);
 }
 
-/// FR-4: a typed recording lands in a typed folder and creates nothing else.
+/// FR-4: a tagged recording lands in a tagged folder and creates nothing
+/// else; the tags are written in their canonical `, `-separated form,
+/// however the dropped name spelled them.
 #[test]
-fn fr04_a_typed_recording_lands_in_a_typed_meeting_folder_and_nothing_else() {
+fn fr04_a_tagged_recording_lands_in_a_tagged_meeting_folder_and_nothing_else() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -763,10 +766,19 @@ fn fr04_a_typed_recording_lands_in_a_typed_meeting_folder_and_nothing_else() {
         "ELS - 260812 - Security issue - Standup.mp4",
         b"video",
     );
+    ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260813 - Budget -  q3 ,Planning, Q3.mp4",
+        b"video",
+    );
 
     assert_eq!(
         list_files(vault.root()),
-        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
+        BTreeSet::from([
+            "ELS/260812 - Security issue - Standup/source.mp4".to_string(),
+            "ELS/260813 - Budget - q3, Planning/source.mp4".to_string(),
+        ])
     );
 }
 
@@ -801,10 +813,10 @@ fn fr04_a_five_section_name_lands_under_unsorted_with_its_verbatim_stem() {
     );
 }
 
-/// FR-4: the type is part of the folder's identity, so a typed and an
-/// untyped recording of the same date and title are two meetings.
+/// FR-4: the tags are part of the folder's identity, so a tagged and an
+/// untagged recording of the same date and title are two meetings.
 #[test]
-fn fr04_a_typed_and_an_untyped_recording_of_one_date_are_separate_folders() {
+fn fr04_a_tagged_and_an_untagged_recording_of_one_date_are_separate_folders() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -812,17 +824,17 @@ fn fr04_a_typed_and_an_untyped_recording_of_one_date_are_separate_folders() {
         &vault,
         staging_dir.path(),
         "ELS - 260812 - Security issue.mp4",
-        b"the untyped recording",
+        b"the untagged recording",
     );
 
-    let typed = ingest_dropped(
+    let tagged = ingest_dropped(
         &vault,
         staging_dir.path(),
         "ELS - 260812 - Security issue - Standup.mp4",
-        b"the typed recording",
+        b"the tagged recording",
     );
 
-    assert_eq!(typed.collision, CollisionOutcome::Fresh);
+    assert_eq!(tagged.collision, CollisionOutcome::Fresh);
     assert_eq!(
         list_files(vault.root()),
         BTreeSet::from([
@@ -832,9 +844,9 @@ fn fr04_a_typed_and_an_untyped_recording_of_one_date_are_separate_folders() {
     );
 }
 
-/// FR-4: collision suffixing measures the whole typed name.
+/// FR-4: collision suffixing measures the whole tagged name.
 #[test]
-fn fr04_a_second_distinct_typed_recording_gets_a_suffixed_folder() {
+fn fr04_a_second_distinct_tagged_recording_gets_a_suffixed_folder() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -862,17 +874,17 @@ fn fr04_a_second_distinct_typed_recording_gets_a_suffixed_folder() {
     );
 }
 
-/// FR-5: the type counts towards the 260-character cap, and overrunning it
+/// FR-5: the tags count towards the 260-character cap, and overrunning it
 /// is a typed error — not an unsorted route, and not a partial ingest.
 #[test]
-fn fr05_a_type_that_overruns_the_path_cap_fails_the_ingest_and_creates_nothing() {
+fn fr05_a_tag_that_overruns_the_path_cap_fails_the_ingest_and_creates_nothing() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
-    let kind = type_overrunning_the_cap(vault.root());
+    let tag = tag_overrunning_the_cap(vault.root());
     let source = staging_dir
         .path()
-        .join(format!("ELS - 260812 - Security issue - {kind}.mp4"));
+        .join(format!("ELS - 260812 - Security issue - {tag}.mp4"));
     write_file(&source, b"video");
 
     let result = vault.ingest_on(&source, today());
@@ -890,7 +902,7 @@ fn fr05_a_type_that_overruns_the_path_cap_fails_the_ingest_and_creates_nothing()
 
 /// FR-5: the same cap applies to a rename, before anything moves.
 #[test]
-fn fr05_a_rename_whose_typed_target_overruns_the_path_cap_moves_nothing() {
+fn fr05_a_rename_whose_tagged_target_overruns_the_path_cap_moves_nothing() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -900,12 +912,12 @@ fn fr05_a_rename_whose_typed_target_overruns_the_path_cap_moves_nothing() {
         "ELS - 260812 - Security issue.mp4",
         b"video",
     );
-    let kind = type_overrunning_the_cap(vault.root());
+    let tag = tag_overrunning_the_cap(vault.root());
 
     let result = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some(&kind)),
+        &update(Some("ELS"), "260812", "Security issue", &[&tag]),
     );
 
     assert_eq!(
@@ -921,9 +933,9 @@ fn fr05_a_rename_whose_typed_target_overruns_the_path_cap_moves_nothing() {
     );
 }
 
-/// FR-6: the rename form is how an operator gives a meeting its type.
+/// FR-6: the rename form is how an operator gives a meeting its tags.
 #[test]
-fn fr06_rename_gives_an_untyped_meeting_a_type() {
+fn fr06_rename_gives_an_untagged_meeting_its_tags() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -937,7 +949,7 @@ fn fr06_rename_gives_an_untyped_meeting_a_type() {
     let renamed = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+        &update(Some("ELS"), "260812", "Security issue", &["Standup", "Q3"]),
     )
     .expect("rename");
 
@@ -946,31 +958,66 @@ fn fr06_rename_gives_an_untyped_meeting_a_type() {
         vault
             .root()
             .join("ELS")
-            .join("260812 - Security issue - Standup")
+            .join("260812 - Security issue - Standup, Q3")
     );
     assert_eq!(
         list_files(vault.root()),
-        BTreeSet::from(["ELS/260812 - Security issue - Standup/source.mp4".to_string()])
+        BTreeSet::from(["ELS/260812 - Security issue - Standup, Q3/source.mp4".to_string()])
     );
 }
 
-/// FR-6: a rename carrying no type removes the one the folder has.
+/// FR-6: the form's one text box arrives as a single comma-separated entry,
+/// which reads exactly like one tag per entry.
 #[test]
-fn fr06_rename_without_a_type_strips_an_existing_one() {
+fn fr06_a_comma_separated_entry_is_several_tags() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
     let meeting = ingest_dropped(
         &vault,
         staging_dir.path(),
-        "ELS - 260812 - Security issue - Standup.mp4",
+        "ELS - 260812 - Security issue.mp4",
         b"video",
     );
 
     let renamed = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", None),
+        &update(
+            Some("ELS"),
+            "260812",
+            "Security issue",
+            &["Standup,Q3, standup"],
+        ),
+    )
+    .expect("rename");
+
+    assert_eq!(
+        renamed,
+        vault
+            .root()
+            .join("ELS")
+            .join("260812 - Security issue - Standup, Q3")
+    );
+}
+
+/// FR-6: a rename carrying no tags removes the ones the folder has.
+#[test]
+fn fr06_rename_without_tags_strips_existing_ones() {
+    let vault_dir = tempdir().expect("vault tempdir");
+    let staging_dir = tempdir().expect("staging tempdir");
+    let vault = Vault::open(vault_dir.path()).expect("open vault");
+    let meeting = ingest_dropped(
+        &vault,
+        staging_dir.path(),
+        "ELS - 260812 - Security issue - Standup, Q3.mp4",
+        b"video",
+    );
+
+    let renamed = vault::rename_meeting(
+        vault.root(),
+        &meeting.meeting_dir,
+        &update(Some("ELS"), "260812", "Security issue", &[]),
     )
     .expect("rename");
 
@@ -984,10 +1031,10 @@ fn fr06_rename_without_a_type_strips_an_existing_one() {
     );
 }
 
-/// FR-6: an emptied Type field arrives as whitespace, and means the same
-/// thing as no type at all.
+/// FR-6: an emptied Tags field arrives as whitespace, and means the same
+/// thing as no tags at all.
 #[test]
-fn fr06_a_whitespace_only_type_is_read_as_no_type() {
+fn fr06_a_whitespace_only_tag_list_is_read_as_no_tags() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1001,7 +1048,7 @@ fn fr06_a_whitespace_only_type_is_read_as_no_type() {
     let renamed = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some("   ")),
+        &update(Some("ELS"), "260812", "Security issue", &["   ", " , "]),
     )
     .expect("rename");
 
@@ -1011,9 +1058,9 @@ fn fr06_a_whitespace_only_type_is_read_as_no_type() {
     );
 }
 
-/// FR-6: spaces the operator typed around the type never reach the disk.
+/// FR-6: spaces the operator typed around a tag never reach the disk.
 #[test]
-fn fr06_spaces_around_a_type_are_trimmed() {
+fn fr06_spaces_around_a_tag_are_trimmed() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1027,7 +1074,7 @@ fn fr06_spaces_around_a_type_are_trimmed() {
     let renamed = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some(" Retro ")),
+        &update(Some("ELS"), "260812", "Security issue", &[" Retro "]),
     )
     .expect("rename");
 
@@ -1057,7 +1104,7 @@ fn fr06_a_hyphen_in_the_title_is_refused_as_the_reserved_separator() {
     let result = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Sync - part 2", None),
+        &update(Some("ELS"), "260812", "Sync - part 2", &[]),
     );
 
     assert_eq!(
@@ -1072,9 +1119,9 @@ fn fr06_a_hyphen_in_the_title_is_refused_as_the_reserved_separator() {
     );
 }
 
-/// FR-6: the same rule guards the type.
+/// FR-6: the same rule guards every tag.
 #[test]
-fn fr06_a_hyphen_in_the_type_is_refused_as_the_reserved_separator() {
+fn fr06_a_hyphen_in_a_tag_is_refused_as_the_reserved_separator() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1088,7 +1135,12 @@ fn fr06_a_hyphen_in_the_type_is_refused_as_the_reserved_separator() {
     let result = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some("Re-tro")),
+        &update(
+            Some("ELS"),
+            "260812",
+            "Security issue",
+            &["Standup", "Re-tro"],
+        ),
     );
 
     assert_eq!(
@@ -1103,10 +1155,10 @@ fn fr06_a_hyphen_in_the_type_is_refused_as_the_reserved_separator() {
     );
 }
 
-/// FR-6: the type is held to the title's character rules, reported in its
+/// FR-6: every tag is held to the title's character rules, reported in its
 /// own vocabulary.
 #[test]
-fn fr06_an_illegal_or_reserved_type_is_refused_and_nothing_moves() {
+fn fr06_an_illegal_or_reserved_tag_is_refused_and_nothing_moves() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1117,20 +1169,20 @@ fn fr06_an_illegal_or_reserved_type_is_refused_and_nothing_moves() {
         b"video",
     );
 
-    for (kind, expected) in [
-        ("Q:A", Rejection::IllegalTypeCharacter(':')),
+    for (tag, expected) in [
+        ("Q:A", Rejection::IllegalTagCharacter(':')),
         ("CON", Rejection::ReservedDeviceName),
     ] {
         let result = vault::rename_meeting(
             vault.root(),
             &meeting.meeting_dir,
-            &update(Some("ELS"), "260812", "Security issue", Some(kind)),
+            &update(Some("ELS"), "260812", "Security issue", &["Standup", tag]),
         );
 
         assert_eq!(
             result,
             Err(VaultError::InvalidMeetingName { reason: expected }),
-            "for type {kind:?}"
+            "for tag {tag:?}"
         );
     }
     assert_eq!(
@@ -1141,7 +1193,7 @@ fn fr06_an_illegal_or_reserved_type_is_refused_and_nothing_moves() {
 
 /// FR-6: re-saving the rename form unchanged is not a collision.
 #[test]
-fn fr06_renaming_a_typed_meeting_to_its_own_name_is_a_no_op() {
+fn fr06_renaming_a_tagged_meeting_to_its_own_name_is_a_no_op() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1155,7 +1207,7 @@ fn fr06_renaming_a_typed_meeting_to_its_own_name_is_a_no_op() {
     let renamed = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+        &update(Some("ELS"), "260812", "Security issue", &["Standup"]),
     )
     .expect("rename");
 
@@ -1167,9 +1219,9 @@ fn fr06_renaming_a_typed_meeting_to_its_own_name_is_a_no_op() {
 }
 
 /// FR-6: two genuinely different meetings may honestly share a date, title
-/// and type — the second one is suffixed rather than refused.
+/// and tags — the second one is suffixed rather than refused.
 #[test]
-fn fr06_a_taken_typed_destination_is_suffixed() {
+fn fr06_a_taken_tagged_destination_is_suffixed() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1189,7 +1241,7 @@ fn fr06_a_taken_typed_destination_is_suffixed() {
     let renamed = vault::rename_meeting(
         vault.root(),
         &other.meeting_dir,
-        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+        &update(Some("ELS"), "260812", "Security issue", &["Standup"]),
     )
     .expect("rename");
 
@@ -1202,11 +1254,11 @@ fn fr06_a_taken_typed_destination_is_suffixed() {
     );
 }
 
-/// FR-6: the type travels with the meeting when it is re-filed, so an
-/// operator can park a typed meeting in `unsorted/` and put it back
+/// FR-6: the tags travel with the meeting when it is re-filed, so an
+/// operator can park a tagged meeting in `unsorted/` and put it back
 /// untouched.
 #[test]
-fn fr06_refiling_a_typed_meeting_through_unsorted_carries_its_type() {
+fn fr06_refiling_a_tagged_meeting_through_unsorted_carries_its_tags() {
     let vault_dir = tempdir().expect("vault tempdir");
     let staging_dir = tempdir().expect("staging tempdir");
     let vault = Vault::open(vault_dir.path()).expect("open vault");
@@ -1220,13 +1272,13 @@ fn fr06_refiling_a_typed_meeting_through_unsorted_carries_its_type() {
     let parked: PathBuf = vault::rename_meeting(
         vault.root(),
         &meeting.meeting_dir,
-        &update(None, "260812", "Security issue", Some("Standup")),
+        &update(None, "260812", "Security issue", &["Standup"]),
     )
     .expect("re-file to unsorted");
     let back = vault::rename_meeting(
         vault.root(),
         &parked,
-        &update(Some("ELS"), "260812", "Security issue", Some("Standup")),
+        &update(Some("ELS"), "260812", "Security issue", &["Standup"]),
     )
     .expect("re-file back to the project");
 

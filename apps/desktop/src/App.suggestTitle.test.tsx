@@ -164,13 +164,13 @@ describe("App: suggest title from summary", () => {
 
     await waitFor(() => expect(callsTo(calls, "update_vault_entry")).toHaveLength(1));
     // The existing rename command, with only the title changed: the
-    // project, the date and the (absent) type are the meeting's own.
+    // project, the date and the (absent) tags are the meeting's own.
     expect(callsTo(calls, "update_vault_entry")[0].payload).toEqual({
       entryId: "v-1",
       project: "ELS",
       date: "260812",
       title: "Budget review",
-      kind: null,
+      tags: [],
     });
     await settle();
   });

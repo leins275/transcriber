@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VaultPanel } from "./VaultPanel";
+import { EMPTY_TAG_FILTER } from "../lib/tagFilter";
 import { DEFAULT_VAULT_SORT } from "../lib/vaultSort";
 import type { JobSnapshot, LedgerJobView, VaultMeetingView } from "../types";
 
@@ -43,6 +44,7 @@ function buildJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
 function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>) {
   const [filter, setFilter] = useState(props.filter ?? "");
   const [sort, setSort] = useState(props.sort ?? DEFAULT_VAULT_SORT);
+  const [tagFilter, setTagFilter] = useState(props.tagFilter ?? EMPTY_TAG_FILTER);
   const [search, setSearch] = useState(props.search ?? "");
   const defaults = {
     entries: [buildEntry()],
@@ -62,6 +64,8 @@ function ControlledPanel(props: Partial<React.ComponentProps<typeof VaultPanel>>
       onFilterChange={setFilter}
       sort={sort}
       onSortChange={setSort}
+      tagFilter={tagFilter}
+      onTagFilterChange={setTagFilter}
       search={search}
       onSearchChange={setSearch}
     />
@@ -188,6 +192,83 @@ describe("VaultPanel", () => {
 
     expect(screen.getByText("loose file")).toBeInTheDocument();
     expect(screen.queryByText("Els meeting")).not.toBeInTheDocument();
+  });
+
+  it("narrows to recordings carrying a chosen tag, any of them by default", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", meeting_name: "260812 - Weekly - Standup, Planning" }),
+        buildEntry({ id: "b", meeting_name: "260811 - Budget - Planning" }),
+        buildEntry({ id: "c", meeting_name: "260810 - Audit" }),
+        buildEntry({ id: "d", meeting_name: "260809 - Retro - Standup" }),
+      ],
+    });
+    const chips = within(screen.getByRole("group", { name: /tags/i }));
+    // Nothing chosen yet: no any/all switch, every row on screen.
+    expect(screen.queryByRole("radiogroup", { name: /match/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Audit")).toBeInTheDocument();
+
+    await user.click(chips.getByRole("button", { name: "Standup" }));
+    await user.click(chips.getByRole("button", { name: "Planning" }));
+
+    expect(chips.getByRole("button", { name: "Standup" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.getByText("Budget")).toBeInTheDocument();
+    expect(screen.getByText("Retro")).toBeInTheDocument();
+    expect(screen.queryByText("Audit")).not.toBeInTheDocument();
+  });
+
+  it("requires every chosen tag once the match switch is set to All", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", meeting_name: "260812 - Weekly - Standup, Planning" }),
+        buildEntry({ id: "b", meeting_name: "260811 - Budget - Planning" }),
+        buildEntry({ id: "d", meeting_name: "260809 - Retro - Standup" }),
+      ],
+    });
+    const chips = within(screen.getByRole("group", { name: /tags/i }));
+    await user.click(chips.getByRole("button", { name: "Standup" }));
+    await user.click(chips.getByRole("button", { name: "Planning" }));
+
+    const match = within(screen.getByRole("radiogroup", { name: /match/i }));
+    expect(match.getByRole("radio", { name: "Any" })).toHaveAttribute("aria-checked", "true");
+    await user.click(match.getByRole("radio", { name: "All" }));
+
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.queryByText("Budget")).not.toBeInTheDocument();
+    expect(screen.queryByText("Retro")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^clear$/i }));
+
+    expect(screen.getByText("Budget")).toBeInTheDocument();
+    expect(screen.getByText("Retro")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /match/i })).not.toBeInTheDocument();
+  });
+
+  it("offers only the tags of the project in view, and lets a stale choice lapse", async () => {
+    const user = userEvent.setup();
+    renderPanel({
+      entries: [
+        buildEntry({ id: "a", project: "ELS", meeting_name: "260812 - Weekly - Standup" }),
+        buildEntry({ id: "b", project: "GIS", meeting_name: "260811 - Budget - Planning" }),
+      ],
+    });
+    const chips = () => within(screen.getByRole("group", { name: /tags/i }));
+    await user.click(chips().getByRole("button", { name: "Standup" }));
+    expect(screen.queryByText("Budget")).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /project/i }), "GIS");
+
+    // Standup is not on offer under GIS, so the choice no longer narrows.
+    expect(chips().queryByRole("button", { name: "Standup" })).not.toBeInTheDocument();
+    expect(screen.getByText("Budget")).toBeInTheDocument();
+  });
+
+  it("offers no tag row when no recording in view carries a tag", () => {
+    renderPanel();
+    expect(screen.queryByRole("group", { name: /tags/i })).not.toBeInTheDocument();
   });
 
   it("offers no filter row for a single project — there is nothing to choose", () => {

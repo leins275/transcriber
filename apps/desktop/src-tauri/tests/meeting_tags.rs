@@ -1,4 +1,4 @@
-//! T5: the app carries the optional meeting **type** from the UI down to
+//! T5: the app carries the optional meeting **tags** from the UI down to
 //! the vault (blueprint 260910-meeting-type-in-filename, FR-7).
 //!
 //! Driven through the crate's public surface exactly the way
@@ -86,10 +86,10 @@ fn els_meeting(root: &Path, meeting_name: &str) -> PathBuf {
     root.join("ELS").join(meeting_name)
 }
 
-// -- FR-7 c1: a typed drop is filed under a typed folder --------------------
+// -- FR-7 c1: a tagged drop is filed under a tagged folder --------------------
 
 #[test]
-fn a_drop_whose_name_carries_a_type_is_filed_in_a_typed_meeting_folder() {
+fn a_drop_whose_name_carries_tags_is_filed_in_a_tagged_meeting_folder() {
     run(async {
         let root = new_tempdir();
         let downloads = new_tempdir();
@@ -98,7 +98,7 @@ fn a_drop_whose_name_carries_a_type_is_filed_in_a_typed_meeting_folder() {
         let done = drop_and_wait(
             &state,
             downloads.path(),
-            "ELS - 260812 - Security issue - Standup.mp4",
+            "ELS - 260812 - Security issue - Standup,Q3.mp4",
         )
         .await;
 
@@ -106,7 +106,7 @@ fn a_drop_whose_name_carries_a_type_is_filed_in_a_typed_meeting_folder() {
         assert_eq!(done.classification.as_deref(), Some("sorted"));
         let entry = only_entry(&state).await;
         assert_eq!(entry.project.as_deref(), Some("ELS"));
-        assert_eq!(entry.meeting_name, "260812 - Security issue - Standup");
+        assert_eq!(entry.meeting_name, "260812 - Security issue - Standup, Q3");
     });
 }
 
@@ -152,10 +152,10 @@ fn an_unsorted_drop_reports_why_its_name_did_not_conform() {
     });
 }
 
-// -- FR-7 c3: the rename form gives, changes and strips the type ------------
+// -- FR-7 c3: the rename form gives, changes and strips the tags ------------
 
 #[test]
-fn giving_an_untyped_meeting_a_type_renames_its_folder() {
+fn giving_an_untagged_meeting_tags_renames_its_folder() {
     run(async {
         let root = new_tempdir();
         let downloads = new_tempdir();
@@ -174,7 +174,7 @@ fn giving_an_untyped_meeting_a_type_renames_its_folder() {
             Some("ELS".to_string()),
             "260812",
             "Security issue",
-            Some("Retro".to_string()),
+            vec!["Retro".to_string()],
         )
         .await
         .expect("the rename must succeed");
@@ -184,17 +184,17 @@ fn giving_an_untyped_meeting_a_type_renames_its_folder() {
             els_meeting(root.path(), "260812 - Security issue - Retro")
                 .join("source.mp4")
                 .is_file(),
-            "the recording must travel to the typed folder"
+            "the recording must travel to the tagged folder"
         );
         assert!(
             !els_meeting(root.path(), "260812 - Security issue").exists(),
-            "the untyped folder must be gone"
+            "the untagged folder must be gone"
         );
     });
 }
 
 #[test]
-fn omitting_the_type_strips_it_from_the_folder_name() {
+fn omitting_the_tags_strips_them_from_the_folder_name() {
     run(async {
         let root = new_tempdir();
         let downloads = new_tempdir();
@@ -202,7 +202,7 @@ fn omitting_the_type_strips_it_from_the_folder_name() {
         drop_and_wait(
             &state,
             downloads.path(),
-            "ELS - 260812 - Security issue - Standup.mp4",
+            "ELS - 260812 - Security issue - Standup,Q3.mp4",
         )
         .await;
         let entry = only_entry(&state).await;
@@ -213,7 +213,7 @@ fn omitting_the_type_strips_it_from_the_folder_name() {
             Some("ELS".to_string()),
             "260812",
             "Security issue",
-            None,
+            Vec::new(),
         )
         .await
         .expect("the rename must succeed");
@@ -223,17 +223,17 @@ fn omitting_the_type_strips_it_from_the_folder_name() {
             els_meeting(root.path(), "260812 - Security issue")
                 .join("source.mp4")
                 .is_file(),
-            "the recording must travel to the untyped folder"
+            "the recording must travel to the untagged folder"
         );
         assert!(
-            !els_meeting(root.path(), "260812 - Security issue - Standup").exists(),
-            "the typed folder must be gone"
+            !els_meeting(root.path(), "260812 - Security issue - Standup, Q3").exists(),
+            "the tagged folder must be gone"
         );
     });
 }
 
 #[test]
-fn a_hyphen_in_the_type_is_refused_and_the_folder_stays_where_it_was() {
+fn a_hyphen_in_a_tag_is_refused_and_the_folder_stays_where_it_was() {
     run(async {
         let root = new_tempdir();
         let downloads = new_tempdir();
@@ -252,10 +252,10 @@ fn a_hyphen_in_the_type_is_refused_and_the_folder_stays_where_it_was() {
             Some("ELS".to_string()),
             "260812",
             "Security issue",
-            Some("Re-tro".to_string()),
+            vec!["Standup".to_string(), "Re-tro".to_string()],
         )
         .await
-        .expect_err("a hyphen in the type must be refused");
+        .expect_err("a hyphen in a tag must be refused");
 
         assert!(
             err.message().contains("reserved"),
@@ -266,7 +266,7 @@ fn a_hyphen_in_the_type_is_refused_and_the_folder_stays_where_it_was() {
             els_meeting(root.path(), "260812 - Security issue")
                 .join("source.mp4")
                 .is_file(),
-            "nothing may move when the type is refused"
+            "nothing may move when a tag is refused"
         );
     });
 }
@@ -291,7 +291,7 @@ fn a_hyphen_in_the_title_is_refused_and_the_folder_stays_where_it_was() {
             Some("ELS".to_string()),
             "260812",
             "Sync - part 2",
-            None,
+            Vec::new(),
         )
         .await
         .expect_err("a hyphen in the title must be refused");
@@ -311,7 +311,7 @@ fn a_hyphen_in_the_title_is_refused_and_the_folder_stays_where_it_was() {
 }
 
 #[test]
-fn renaming_a_typed_meeting_by_its_entry_id_keeps_the_type() {
+fn renaming_a_tagged_meeting_by_its_entry_id_keeps_the_tags() {
     run(async {
         let root = new_tempdir();
         let downloads = new_tempdir();
@@ -330,7 +330,7 @@ fn renaming_a_typed_meeting_by_its_entry_id_keeps_the_type() {
             Some("ELS".to_string()),
             "260812",
             "Weekly sync",
-            Some("Retro".to_string()),
+            vec!["Retro".to_string()],
         )
         .await
         .expect("renaming only the title must succeed");
@@ -341,7 +341,7 @@ fn renaming_a_typed_meeting_by_its_entry_id_keeps_the_type() {
             els_meeting(root.path(), "260812 - Weekly sync - Retro")
                 .join("source.mp4")
                 .is_file(),
-            "the recording must travel to the renamed typed folder"
+            "the recording must travel to the renamed tagged folder"
         );
     });
 }

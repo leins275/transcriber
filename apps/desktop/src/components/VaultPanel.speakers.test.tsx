@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VaultPanel, type VaultTab } from "./VaultPanel";
+import { EMPTY_TAG_FILTER } from "../lib/tagFilter";
 import { DEFAULT_VAULT_SORT } from "../lib/vaultSort";
 import type { VaultMeetingView } from "../types";
 
@@ -24,6 +25,8 @@ function Panel(props: Partial<React.ComponentProps<typeof VaultPanel>>) {
       onFilterChange={() => {}}
       sort={DEFAULT_VAULT_SORT}
       onSortChange={() => {}}
+      tagFilter={EMPTY_TAG_FILTER}
+      onTagFilterChange={() => {}}
       search=""
       onSearchChange={() => {}}
       onSearch={() => Promise.resolve([])}

@@ -425,7 +425,11 @@ export function RecordingPage({
         <div className={styles.titleBlock}>
           <div className={styles.titleLine}>
             <h2 className={styles.title}>{parsed ? parsed.title : entry.meeting_name}</h2>
-            {parsed?.kind && <span className="pill">{parsed.kind}</span>}
+            {parsed?.tags.map((tag) => (
+              <span key={tag} className="pill">
+                {tag}
+              </span>
+            ))}
             <button
               type="button"
               className={`btn btn-ghost ${styles.pencil}`}

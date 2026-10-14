@@ -240,10 +240,11 @@ describe("RecordingPage: a finished title suggestion", () => {
       project: "RDDM",
       date: "260731",
       title: "Обзор бюджета на квартал",
+      tags: [],
     });
   });
 
-  it("leaves the meeting's date and type as they are", async () => {
+  it("leaves the meeting's date and tags as they are", async () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPage({
@@ -254,14 +255,14 @@ describe("RecordingPage: a finished title suggestion", () => {
 
     await screen.findByRole("form", { name: /rename meeting/i });
     expect(screen.getByLabelText(/date/i)).toHaveValue("260731");
-    expect(screen.getByLabelText(/type/i)).toHaveValue("Standup");
+    expect(screen.getByLabelText(/tags/i)).toHaveValue("Standup");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(onUpdate).toHaveBeenCalledWith("v-9", {
       project: "RDDM",
       date: "260731",
       title: "Обзор бюджета на квартал",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
@@ -279,6 +280,7 @@ describe("RecordingPage: a finished title suggestion", () => {
       project: "RDDM",
       date: "260731",
       title: "Бюджет Q3",
+      tags: [],
     });
   });
 
@@ -348,12 +350,12 @@ describe("MeetingEditor: a suggested title", () => {
     );
   }
 
-  it("seeds only the title field, keeping the date and the type", () => {
+  it("seeds only the title field, keeping the date and the tags", () => {
     renderEditor({ suggestedTitle: "Budget review" });
 
     expect(screen.getByLabelText(/title/i)).toHaveValue("Budget review");
     expect(screen.getByLabelText(/date/i)).toHaveValue("260731");
-    expect(screen.getByLabelText(/type/i)).toHaveValue("Standup");
+    expect(screen.getByLabelText(/tags/i)).toHaveValue("Standup");
     expect(screen.getByText(/RDDM\\260731 - Budget review - Standup/)).toBeInTheDocument();
   });
 

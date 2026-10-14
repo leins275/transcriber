@@ -39,7 +39,7 @@ function transcriptState(entry: VaultMeetingView): string {
 
 /**
  * One filed recording in the library table: a `<tr>` whose cells follow the
- * naming convention's own order — project, date, name, type — and end with
+ * naming convention's own order — project, date, name, tags — and end with
  * the transcript state.
  *
  * Deliberately thin: the row's job is to be scanned and chosen between, so
@@ -78,7 +78,17 @@ export function VaultRow({ entry, onOpen }: VaultRowProps) {
           {parsed ? parsed.title : entry.meeting_name}
         </button>
       </td>
-      <td>{parsed?.kind && <span className="pill">{parsed.kind}</span>}</td>
+      <td>
+        {parsed && parsed.tags.length > 0 && (
+          <span className={styles.tags}>
+            {parsed.tags.map((tag) => (
+              <span key={tag} className="pill">
+                {tag}
+              </span>
+            ))}
+          </span>
+        )}
+      </td>
       <td>
         <span className={styles.state}>
           <span className={styles.icon} aria-hidden="true">

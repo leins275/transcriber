@@ -3,17 +3,17 @@
 //! Owned by T8. `classify_filename` runs the extension gate, then splits
 //! the stem on *every* `-` (whitespace around them optional) and validates
 //! project code, date, title and — when a fourth section is present — the
-//! meeting type, in that order, mapping the first failure into an unsorted
-//! classification. Zero filesystem access in this module.
+//! comma-separated tag list, in that order, mapping the first failure into
+//! an unsorted classification. Zero filesystem access in this module.
 //!
 //! `-` is reserved as the separator everywhere, so the number of sections
-//! is itself part of the grammar: three sections are an untyped meeting,
-//! four carry a type, fewer than three are a missing separator and five or
+//! is itself part of the grammar: three sections are an untagged meeting,
+//! four carry tags, fewer than three are a missing separator and five or
 //! more mean a section contained a `-` — routed to `unsorted` with
 //! [`Rejection::TooManySeparators`], never rejected outright (FR-1).
 
 use crate::error::{Rejection, VaultError};
-use crate::{code, date, media, title};
+use crate::{code, date, media, tags, title};
 
 /// A filename that matched the full naming convention (FR-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,9 +24,10 @@ pub struct ParsedName {
     pub date: String,
     /// The validated, trimmed title.
     pub title: String,
-    /// The validated, trimmed meeting type — the optional fourth section
-    /// of the name; `None` when the name had only three sections (FR-1).
-    pub kind: Option<String>,
+    /// The validated, normalized tags — the optional fourth section of the
+    /// name, split on `,`; empty when the name had only three sections
+    /// (FR-1).
+    pub tags: Vec<String>,
     /// The normalized (lowercase) media extension, without a leading dot.
     pub ext: String,
     /// The original filename stem (everything before the extension),
@@ -59,19 +60,19 @@ pub enum Classified {
 }
 
 /// Classifies a filename against the naming convention `<Project code> -
-/// <date> - <Title>[ - <Type>].<ext>` (FR-1, FR-2, FR-3).
+/// <date> - <Title>[ - <tag>, <tag>, …].<ext>` (FR-1, FR-2, FR-3).
 ///
 /// The extension is checked first: an unsupported extension aborts with
 /// `Err(VaultError::UnsupportedMediaType)` before anything else about the
 /// name is considered — the section count included (FR-7) — and that is
 /// not a rejection, it means the file is never ingested at all. Everything
 /// else — too few or too many separators, a bad project code, a bad date,
-/// a bad title, a bad type — maps to `Ok(Classified::Unsorted { .. })`,
+/// a bad title, a bad tag — maps to `Ok(Classified::Unsorted { .. })`,
 /// because every accepted media file must land somewhere (FR-10). This
 /// function performs no filesystem access and never panics (NFR-1, NFR-3).
 ///
 /// Order of judgement after the extension gate: section count → project
-/// code → date → title → type; the first failure wins.
+/// code → date → title → tags; the first failure wins.
 pub fn classify_filename(file_name: &str) -> Result<Classified, VaultError> {
     let media_ext = media::from_file_name(file_name)?;
     let ext = media_ext.as_str().to_string();
@@ -88,10 +89,10 @@ pub fn classify_filename(file_name: &str) -> Result<Classified, VaultError> {
     // `title::validate` applies to trailing whitespace).
     let parts: Vec<&str> = stem.split('-').map(|part| part.trim_matches(' ')).collect();
 
-    let (code_part, date_part, title_part, kind_part) = match parts.as_slice() {
+    let (code_part, date_part, title_part, tags_part) = match parts.as_slice() {
         [code_part, date_part, title_part] => (*code_part, *date_part, *title_part, None),
-        [code_part, date_part, title_part, kind_part] => {
-            (*code_part, *date_part, *title_part, Some(*kind_part))
+        [code_part, date_part, title_part, tags_part] => {
+            (*code_part, *date_part, *title_part, Some(*tags_part))
         }
         // Fewer than three sections: the name never matched the
         // convention at all. Five or more: a section contained the
@@ -121,8 +122,8 @@ pub fn classify_filename(file_name: &str) -> Result<Classified, VaultError> {
         Err(reason) => return Ok(Classified::Unsorted { reason, stem, ext }),
     };
 
-    let valid_kind = match kind_part.map(title::validate_kind).transpose() {
-        Ok(valid_kind) => valid_kind,
+    let valid_tags = match tags_part.map(tags::validate).transpose() {
+        Ok(valid_tags) => valid_tags.unwrap_or_default(),
         Err(reason) => return Ok(Classified::Unsorted { reason, stem, ext }),
     };
 
@@ -130,7 +131,7 @@ pub fn classify_filename(file_name: &str) -> Result<Classified, VaultError> {
         project: project.as_str().to_string(),
         date: valid_date.as_str().to_string(),
         title: valid_title.to_string(),
-        kind: valid_kind.map(|kind| kind.to_string()),
+        tags: valid_tags,
         ext,
         stem,
     }))

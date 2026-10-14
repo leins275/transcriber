@@ -55,7 +55,7 @@ describe("VaultList", () => {
       expect.stringContaining("Project"),
       expect.stringContaining("Date"),
       expect.stringContaining("Name"),
-      expect.stringContaining("Type"),
+      expect.stringContaining("Tags"),
       expect.stringContaining("Transcript"),
     ]);
   });
@@ -84,8 +84,8 @@ describe("VaultList", () => {
     const user = userEvent.setup();
     render(<VaultList entries={[]} {...actions} onSortChange={onSortChange} />);
 
-    await user.click(screen.getByRole("button", { name: /^type/i }));
+    await user.click(screen.getByRole("button", { name: /^tags/i }));
 
-    expect(onSortChange).toHaveBeenCalledWith({ column: "type", direction: "asc" });
+    expect(onSortChange).toHaveBeenCalledWith({ column: "tags", direction: "asc" });
   });
 });

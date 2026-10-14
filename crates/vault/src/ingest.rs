@@ -298,14 +298,10 @@ fn compute_destination(classification: Classified, today: NaiveDate) -> Destinat
     match classification {
         Classified::Sorted(parsed) => Destination {
             parent_component: parsed.project.clone(),
-            // The optional meeting type is persisted in the folder name
-            // and nowhere else, so it travels from the parsed filename
+            // The optional tags are persisted in the folder name and
+            // nowhere else, so they travel from the parsed filename
             // straight into `base_name` (FR-3, FR-4).
-            base_name: paths::meeting_folder_name(
-                &parsed.date,
-                &parsed.title,
-                parsed.kind.as_deref(),
-            ),
+            base_name: paths::meeting_folder_name(&parsed.date, &parsed.title, &parsed.tags),
             ext: parsed.ext,
             classification_out: Classification::Sorted {
                 project: parsed.project.clone(),

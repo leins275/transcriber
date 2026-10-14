@@ -2,16 +2,16 @@
  * Pure column sorting for the library's recordings table.
  *
  * The table's columns follow the naming convention's own order — project,
- * date, name, type — plus the transcript state. The vault listing already
+ * date, name, tags — plus the transcript state. The vault listing already
  * arrives newest first (`vault::list_meetings`), so that is the table's
  * resting order and the default sort returns the entries untouched; every
  * other sort is a stable re-ordering of that same list, which keeps
  * "newest first" as the tie-break inside any column.
  */
-import { parseEntryName } from "./meetingName";
+import { joinTags, parseEntryName } from "./meetingName";
 import type { VaultMeetingView } from "../types";
 
-export type VaultSortColumn = "project" | "date" | "name" | "type" | "transcript";
+export type VaultSortColumn = "project" | "date" | "name" | "tags" | "transcript";
 
 export type VaultSort = {
   column: VaultSortColumn;
@@ -45,7 +45,7 @@ export function nextVaultSort(current: VaultSort, column: VaultSortColumn): Vaul
 }
 
 /** The value a row sorts by in one column, or `null` when it has none (an
- * unsorted recording has no project, an untyped meeting no type, a
+ * unsorted recording has no project, an untagged meeting no tags, a
  * hand-named folder no date). */
 function sortKey(entry: VaultMeetingView, column: VaultSortColumn): string | null {
   const parsed = parseEntryName(entry.meeting_name, entry.project);
@@ -56,8 +56,8 @@ function sortKey(entry: VaultMeetingView, column: VaultSortColumn): string | nul
       return parsed ? parsed.date : null;
     case "name":
       return parsed ? parsed.title : entry.meeting_name;
-    case "type":
-      return parsed ? parsed.kind : null;
+    case "tags":
+      return parsed && parsed.tags.length > 0 ? joinTags(parsed.tags) : null;
     case "transcript":
       return entry.has_transcript ? "0" : entry.has_source ? "1" : "2";
   }

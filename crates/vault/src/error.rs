@@ -257,11 +257,11 @@ pub enum Rejection {
     ///
     /// Distinct from [`Rejection::EmptyTitle`] so an operator can tell
     /// which of the two sections was blank.
-    EmptyType,
-    /// The type component contains a Windows-illegal or control character
-    /// (FR-1) — the title's rules applied to the fourth section.
-    IllegalTypeCharacter(char),
-    /// An operator-supplied title or type contains the reserved separator
+    EmptyTag,
+    /// A tag contains a Windows-illegal or control character (FR-1) — the
+    /// title's rules applied to each entry of the fourth section.
+    IllegalTagCharacter(char),
+    /// An operator-supplied title or tag contains the reserved separator
     /// `-` (FR-6).
     ///
     /// Only [`crate::manage`] produces this: the parser splits on every
@@ -289,8 +289,8 @@ impl Rejection {
             Rejection::IllegalTitleCharacter(':'),
             Rejection::ReservedDeviceName,
             Rejection::TooManySeparators,
-            Rejection::EmptyType,
-            Rejection::IllegalTypeCharacter(':'),
+            Rejection::EmptyTag,
+            Rejection::IllegalTagCharacter(':'),
             Rejection::ReservedSeparator,
         ]
     }
@@ -327,13 +327,13 @@ impl std::fmt::Display for Rejection {
                 f,
                 "filename has more than three \"-\" separators; \"-\" cannot appear inside a section"
             ),
-            Rejection::EmptyType => write!(f, "type is empty after trimming"),
-            Rejection::IllegalTypeCharacter(c) => {
-                write!(f, "type contains the illegal character '{c}'")
+            Rejection::EmptyTag => write!(f, "tag list is empty after trimming"),
+            Rejection::IllegalTagCharacter(c) => {
+                write!(f, "tag contains the illegal character '{c}'")
             }
             Rejection::ReservedSeparator => write!(
                 f,
-                "\"-\" is reserved as the separator and cannot appear inside the title or type"
+                "\"-\" is reserved as the separator and cannot appear inside the title or a tag"
             ),
         }
     }
@@ -368,8 +368,8 @@ mod exhaustiveness {
             | Rejection::IllegalTitleCharacter(_)
             | Rejection::ReservedDeviceName
             | Rejection::TooManySeparators
-            | Rejection::EmptyType
-            | Rejection::IllegalTypeCharacter(_)
+            | Rejection::EmptyTag
+            | Rejection::IllegalTagCharacter(_)
             | Rejection::ReservedSeparator => {}
         }
     }

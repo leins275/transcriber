@@ -350,11 +350,11 @@ export type MeetingUpdate = {
   /** Six digits, `YYMMDD`. */
   date: string;
   title: string;
-  /** The optional meeting type — the folder name's third section. Absent
-   * means "no type", which also strips one the meeting already carries;
-   * `api.updateVaultEntry` spells that out as `null` for the Rust
-   * `Option<String>`. Never contains the reserved `-`. */
-  kind?: string;
+  /** The meeting's tags — the folder name's comma-separated third section.
+   * An empty list means "no tags", which also strips the ones the meeting
+   * already carries. The Rust side trims, drops blanks and folds duplicates;
+   * no tag may contain the reserved `-`. */
+  tags: string[];
 };
 
 // LLM-feature extension to the IPC contract (additive): the GGUF download.

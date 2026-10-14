@@ -73,3 +73,10 @@
   border-radius: 50%;
   display: inline-block;
 }
+
+/* A meeting's tags, side by side; they wrap rather than widen the table. */
+.tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}

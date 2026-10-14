@@ -247,6 +247,7 @@ describe("RecordingPage", () => {
       project: "RDDM",
       date: "260709",
       title: "Tech support",
+      tags: [],
     });
   });
 

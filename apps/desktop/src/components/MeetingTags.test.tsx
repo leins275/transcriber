@@ -10,8 +10,8 @@ function buildEntry(overrides: Partial<VaultMeetingView> = {}): VaultMeetingView
   return {
     id: "v-1",
     project: "ELS",
-    meeting_name: "260812 - Security issue - Standup",
-    meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue - Standup",
+    meeting_name: "260812 - Security issue - Standup, Q3",
+    meeting_dir: "D:\\Meetings\\ELS\\260812 - Security issue - Standup, Q3",
     has_source: true,
     has_transcript: true,
     ...overrides,
@@ -31,7 +31,7 @@ function renderEditor(props: Partial<React.ComponentProps<typeof MeetingEditor>>
 function buildTranscript(overrides: Partial<TranscriptView> = {}): TranscriptView {
   return {
     entry_id: "v-1",
-    meeting_name: "260812 - Security issue - Standup",
+    meeting_name: "260812 - Security issue - Standup, Q3",
     language: "ru",
     created_at: "2026-08-12T10:00:00Z",
     duration_sec: 491,
@@ -40,7 +40,7 @@ function buildTranscript(overrides: Partial<TranscriptView> = {}): TranscriptVie
     text: "может еще запись включим",
     segments: [{ id: 0, start: 0, end: 4, text: " может еще запись включим" }],
     speakers: { "0": "Maxim" },
-    transcript_path: "D:\\Meetings\\ELS\\260812 - Security issue - Standup\\transcript.json",
+    transcript_path: "D:\\Meetings\\ELS\\260812 - Security issue - Standup, Q3\\transcript.json",
     ...overrides,
   };
 }
@@ -92,22 +92,22 @@ function renderRow(props: Partial<React.ComponentProps<typeof VaultRow>> = {}) {
   );
 }
 
-describe("the meeting type in the rename form", () => {
-  it("seeds the type from a meeting filed with one", () => {
+describe("the meeting tags in the rename form", () => {
+  it("seeds the tags, comma-separated, from a meeting filed with them", () => {
     renderEditor();
 
     expect(screen.getByLabelText(/date/i)).toHaveValue("260812");
     expect(screen.getByLabelText(/title/i)).toHaveValue("Security issue");
-    expect(screen.getByLabelText(/type/i)).toHaveValue("Standup");
+    expect(screen.getByLabelText(/tags/i)).toHaveValue("Standup, Q3");
   });
 
-  it("leaves the type empty for a meeting filed without one", () => {
+  it("leaves the tags empty for a meeting filed without any", () => {
     renderEditor({ entry: buildEntry({ meeting_name: "260822 - source" }) });
 
-    expect(screen.getByLabelText(/type/i)).toHaveValue("");
+    expect(screen.getByLabelText(/tags/i)).toHaveValue("");
   });
 
-  it("saves a meeting with no type without mentioning one", async () => {
+  it("saves a meeting with no tags as an empty list", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderEditor({ entry: buildEntry({ meeting_name: "260822 - source" }), onSave });
@@ -120,67 +120,69 @@ describe("the meeting type in the rename form", () => {
       project: "ELS",
       date: "260822",
       title: "source",
+      tags: [],
     });
   });
 
-  it("saves the type the operator typed", async () => {
+  it("saves the tags the operator typed, split on commas", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderEditor({ entry: buildEntry({ meeting_name: "260812 - Security issue" }), onSave });
 
-    await user.type(screen.getByLabelText(/type/i), "Retro");
+    await user.type(screen.getByLabelText(/tags/i), "Retro, Q3,Planning");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(onSave).toHaveBeenCalledWith({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: "Retro",
+      tags: ["Retro", "Q3", "Planning"],
     });
   });
 
-  it("trims the spaces around a typed type", async () => {
+  it("trims the spaces around a typed tag", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderEditor({ entry: buildEntry({ meeting_name: "260812 - Security issue" }), onSave });
 
-    await user.type(screen.getByLabelText(/type/i), "  Retro  ");
+    await user.type(screen.getByLabelText(/tags/i), "  Retro  ");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(onSave).toHaveBeenCalledWith({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: "Retro",
+      tags: ["Retro"],
     });
   });
 
-  it("strips an existing type when its field is cleared", async () => {
+  it("strips the existing tags when their field is cleared", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderEditor({ onSave });
 
-    await user.clear(screen.getByLabelText(/type/i));
+    await user.clear(screen.getByLabelText(/tags/i));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(onSave.mock.calls[0][0]).toStrictEqual({
       project: "ELS",
       date: "260812",
       title: "Security issue",
+      tags: [],
     });
   });
 
-  it("previews the typed folder the save would produce", () => {
+  it("previews the tagged folder the save would produce", () => {
     renderEditor();
 
-    expect(screen.getByText("ELS\\260812 - Security issue - Standup")).toBeInTheDocument();
+    expect(screen.getByText("ELS\\260812 - Security issue - Standup, Q3")).toBeInTheDocument();
   });
 
-  it("drops the type from the preview once its field is cleared", async () => {
+  it("drops the tags from the preview once their field is cleared", async () => {
     const user = userEvent.setup();
     renderEditor();
 
-    await user.clear(screen.getByLabelText(/type/i));
+    await user.clear(screen.getByLabelText(/tags/i));
 
     expect(screen.getByText("ELS\\260812 - Security issue")).toBeInTheDocument();
   });
@@ -198,15 +200,15 @@ describe("the meeting type in the rename form", () => {
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
   });
 
-  it("refuses a type carrying the reserved separator", async () => {
+  it("refuses a tag carrying the reserved separator", async () => {
     const user = userEvent.setup();
     renderEditor();
 
-    const type = screen.getByLabelText(/type/i);
-    await user.clear(type);
-    await user.type(type, "Re-tro");
+    const tagsField = screen.getByLabelText(/tags/i);
+    await user.clear(tagsField);
+    await user.type(tagsField, "Re-tro");
 
-    expect(type).toHaveAttribute("aria-invalid", "true");
+    expect(tagsField).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByText(/separator/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
   });
@@ -214,27 +216,28 @@ describe("the meeting type in the rename form", () => {
   it("allows the save again once the separator is taken back out", async () => {
     const user = userEvent.setup();
     renderEditor();
-    const type = screen.getByLabelText(/type/i);
-    await user.clear(type);
-    await user.type(type, "Re-tro");
+    const tagsField = screen.getByLabelText(/tags/i);
+    await user.clear(tagsField);
+    await user.type(tagsField, "Re-tro");
 
-    await user.clear(type);
-    await user.type(type, "Retro");
+    await user.clear(tagsField);
+    await user.type(tagsField, "Retro");
 
     expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
   });
 });
 
-describe("the meeting type on the recording page", () => {
-  it("shows the type beside the meeting's title", async () => {
+describe("the meeting tags on the recording page", () => {
+  it("shows every tag beside the meeting's title", async () => {
     renderPage();
     await screen.findByText(/может еще/);
 
     expect(screen.getByRole("heading", { name: "Security issue" })).toBeInTheDocument();
     expect(screen.getByText("Standup")).toBeInTheDocument();
+    expect(screen.getByText("Q3")).toBeInTheDocument();
   });
 
-  it("shows nothing beside the title for a meeting filed without a type", async () => {
+  it("shows nothing beside the title for a meeting filed without tags", async () => {
     renderPage({ entry: buildEntry({ meeting_name: "260812 - Security issue" }) });
     await screen.findByText(/может еще/);
 
@@ -256,11 +259,11 @@ describe("the meeting type on the recording page", () => {
     expect(screen.getByText(/^Russian · 8m 11s/)).toBeInTheDocument();
   });
 
-  it("reads no type out of an unsorted folder's verbatim stem", async () => {
+  it("reads no tags out of an unsorted folder's verbatim stem", async () => {
     // `unsorted/260910 - ELS - 260812` is a `MissingSeparator` drop of
     // `ELS - 260812.mp4`: the stem is kept verbatim precisely because the
     // name did not conform, so its hyphen is not a separator and there is
-    // no type to show.
+    // tags to show.
     renderPage({
       entry: buildEntry({ project: null, meeting_name: "260910 - ELS - 260812" }),
     });
@@ -274,22 +277,23 @@ describe("the meeting type on the recording page", () => {
   });
 });
 
-describe("the meeting type in the library row", () => {
-  it("tags the row with the meeting's type", () => {
+describe("the meeting tags in the library row", () => {
+  it("tags the row with each of the meeting's tags", () => {
     renderRow();
 
     expect(screen.getByText("Security issue")).toBeInTheDocument();
     expect(screen.getByText("Standup")).toBeInTheDocument();
+    expect(screen.getByText("Q3")).toBeInTheDocument();
   });
 
-  it("carries no type tag for a meeting filed without one", () => {
+  it("carries no tag for a meeting filed without any", () => {
     renderRow({ entry: buildEntry({ meeting_name: "260812 - Security issue" }) });
 
     expect(screen.getByText("Security issue")).toBeInTheDocument();
     expect(screen.queryByText("Standup")).not.toBeInTheDocument();
   });
 
-  it("carries no type tag for an unsorted row, whose stem keeps its hyphens", () => {
+  it("carries no tag for an unsorted row, whose stem keeps its hyphens", () => {
     renderRow({ entry: buildEntry({ project: null, meeting_name: "260910 - ELS - 260812" }) });
 
     expect(screen.getByText("ELS - 260812")).toBeInTheDocument();

@@ -18,12 +18,12 @@ export type VaultListProps = {
 };
 
 /** The columns, in the naming convention's own order —
- * `<Project> - <Date> - <Name> - <Type>` — then the transcript state. */
+ * `<Project> - <Date> - <Name> - <Tags>` — then the transcript state. */
 const COLUMNS: { column: VaultSortColumn; label: string }[] = [
   { column: "project", label: "Project" },
   { column: "date", label: "Date" },
   { column: "name", label: "Name" },
-  { column: "type", label: "Type" },
+  { column: "tags", label: "Tags" },
   { column: "transcript", label: "Transcript" },
 ];
 

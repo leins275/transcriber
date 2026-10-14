@@ -53,7 +53,12 @@ describe("MeetingEditor", () => {
     await user.selectOptions(screen.getByLabelText(/project/i), "ELS");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
-    expect(onSave).toHaveBeenCalledWith({ project: "ELS", date: "260822", title: "source" });
+    expect(onSave).toHaveBeenCalledWith({
+      project: "ELS",
+      date: "260822",
+      title: "source",
+      tags: [],
+    });
   });
 
   it("moves a filed recording back to unsorted", async () => {
@@ -71,6 +76,7 @@ describe("MeetingEditor", () => {
       project: null,
       date: "260812",
       title: "Security issue",
+      tags: [],
     });
   });
 
@@ -83,7 +89,12 @@ describe("MeetingEditor", () => {
     await user.type(screen.getByLabelText(/new code/i), "GIS");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
-    expect(onSave).toHaveBeenCalledWith({ project: "GIS", date: "260822", title: "source" });
+    expect(onSave).toHaveBeenCalledWith({
+      project: "GIS",
+      date: "260822",
+      title: "source",
+      tags: [],
+    });
   });
 
   it("changes the date", async () => {
@@ -96,7 +107,12 @@ describe("MeetingEditor", () => {
     await user.type(date, "260814");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
-    expect(onSave).toHaveBeenCalledWith({ project: null, date: "260814", title: "source" });
+    expect(onSave).toHaveBeenCalledWith({
+      project: null,
+      date: "260814",
+      title: "source",
+      tags: [],
+    });
   });
 
   it("blocks Save on an empty title or a malformed date", async () => {

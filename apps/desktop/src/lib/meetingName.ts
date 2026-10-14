@@ -1,7 +1,8 @@
 /**
  * Pure helpers over a *meeting folder's* own name —
- * `<YYMMDD> - <Title>[ - <Type>]` — as opposed to `fileName.ts`, which parses
- * a dropped *file's* name (`<Project> - <YYMMDD> - <Title>[ - <Type>].<ext>`).
+ * `<YYMMDD> - <Title>[ - <tag>, <tag>]` — as opposed to `fileName.ts`, which
+ * parses a dropped *file's* name (`<Project> - <YYMMDD> - <Title>[ - <tag>,
+ * <tag>].<ext>`).
  * The two conventions differ by exactly the project component, because a
  * filed meeting already carries its project in the folder it sits under.
  *
@@ -21,10 +22,33 @@ export type ParsedMeetingName = {
   /** Six digits, `YYMMDD`. */
   date: string;
   title: string;
-  /** The optional meeting type — the third section — or `null` when the
-   * folder name carries only a date and a title. */
-  kind: string | null;
+  /** The meeting's tags — the optional third section split on `,` — empty
+   * when the folder name carries only a date and a title. */
+  tags: string[];
 };
+
+/** The character separating tags inside the tag section, mirroring
+ * `vault::TAG_SEPARATOR`. `-` separates sections, `,` separates tags. */
+export const TAG_SEPARATOR = ",";
+
+/**
+ * Reads a tag section into its tags — the display-side mirror of
+ * `vault::tags::split`: split on every comma, ASCII spaces trimmed, empty
+ * pieces dropped, nothing validated and nothing de-duplicated (the Rust side
+ * normalizes when it writes the folder name).
+ */
+export function splitTags(section: string): string[] {
+  return section
+    .split(TAG_SEPARATOR)
+    .map(trimSpaces)
+    .filter((tag) => tag !== "");
+}
+
+/** The canonical spelling of a tag list in a folder name: one `, ` between
+ * tags, mirroring `vault::tags::join`. */
+export function joinTags(tags: string[]): string {
+  return tags.join(", ");
+}
 
 /** Six digits, no calendar validation — `formatMeetingDate` is what decides
  * whether they denote a real day. Mirrors the Rust folder-name parser. */
@@ -38,18 +62,20 @@ function trimSpaces(section: string): string {
 }
 
 /**
- * Splits a meeting folder name into its date, title and optional type, or
+ * Splits a meeting folder name into its date, title and optional tags, or
  * returns `null` when the folder does not follow the convention (a
- * hand-renamed folder, one from before the convention existed, or one whose
- * own text contains the reserved `-`).
+ * hand-renamed folder, one from before the convention existed, one whose
+ * own text contains the reserved `-`, or a tag section with no tag in it).
  */
 export function parseMeetingName(meetingName: string): ParsedMeetingName | null {
   const sections = meetingName.split("-").map(trimSpaces);
   if (sections.length < 2 || sections.length > 3) return null;
   if (sections.some((section) => section === "")) return null;
-  const [date, title, kind] = sections;
+  const [date, title, tagSection] = sections;
   if (!DATE.test(date)) return null;
-  return { date, title, kind: kind ?? null };
+  const tags = tagSection === undefined ? [] : splitTags(tagSection);
+  if (tagSection !== undefined && tags.length === 0) return null;
+  return { date, title, tags };
 }
 
 /**
@@ -68,7 +94,7 @@ function parseUnsortedName(meetingName: string): ParsedMeetingName | null {
   const date = trimSpaces(meetingName.slice(0, separator));
   const stem = trimSpaces(meetingName.slice(separator + 1));
   if (!DATE.test(date) || stem === "") return null;
-  return { date, title: stem, kind: null };
+  return { date, title: stem, tags: [] };
 }
 
 /**
@@ -76,14 +102,14 @@ function parseUnsortedName(meetingName: string): ParsedMeetingName | null {
  * the project it is filed under (`null` = it sits in `unsorted/`).
  *
  * A meeting under a project carries a name this app itself built to the
- * convention, so it reads under the full grammar — title plus an optional
- * type. A meeting under `unsorted/` does not: only its date prefix is the
+ * convention, so it reads under the full grammar — title plus optional
+ * tags. A meeting under `unsorted/` does not: only its date prefix is the
  * app's, the rest is the dropped file's stem kept verbatim *because* the
- * name did not conform. Reading that under the typed grammar would invent a
- * type out of the operator's own text — a drop of `ELS - 260812.mp4` would
+ * name did not conform. Reading that under the tagged grammar would invent
+ * tags out of the operator's own text — a drop of `ELS - 260812.mp4` would
  * show as title `ELS` with a `260812` tag — so an unsorted folder never
- * carries a type here, and keeps its whole stem as the title (what the app
- * showed before the type existed).
+ * carries tags here, and keeps its whole stem as the title (what the app
+ * showed before the tags existed).
  *
  * The edit form deliberately does *not* use this: `meetingEditDefaults`
  * keeps seeding an unsorted name through the full grammar, so re-filing one
@@ -103,12 +129,12 @@ export function parseEntryName(
  * A folder whose name does not parse still has to be editable — that is
  * precisely the folder most in need of a rename — so the whole name becomes
  * the title and the date falls back to empty, leaving the operator to supply
- * one rather than the app inventing a date it cannot know. The type stays
+ * one rather than the app inventing a date it cannot know. The tags stay
  * empty for the same reason: it is not this helper's job to guess which of
  * the sections the operator meant as one.
  */
 export function meetingEditDefaults(meetingName: string): ParsedMeetingName {
-  return parseMeetingName(meetingName) ?? { date: "", title: meetingName, kind: null };
+  return parseMeetingName(meetingName) ?? { date: "", title: meetingName, tags: [] };
 }
 
 /**

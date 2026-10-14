@@ -2,39 +2,39 @@ import { describe, expect, it } from "vitest";
 import { parseFileName } from "./fileName";
 
 describe("parseFileName", () => {
-  it("parses the Project - YYMMDD - Title convention as an untyped meeting", () => {
+  it("parses the Project - YYMMDD - Title convention as an untagged meeting", () => {
     expect(parseFileName("ELS - 260812 - Security issue.mp4")).toEqual({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
   });
 
-  it("reads a fourth section as the meeting type", () => {
+  it("reads a fourth section as a tag", () => {
     expect(parseFileName("ELS - 260812 - Security issue - Standup.mp4")).toEqual({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 
-  it("keeps spaces inside a section, so a multi-word type stays one type", () => {
+  it("keeps spaces inside a section, so a multi-word tag stays one tag", () => {
     expect(parseFileName("GIS - 260724 - Weekly sync - Sprint review.mp4")).toEqual({
       project: "GIS",
       date: "260724",
       title: "Weekly sync",
-      kind: "Sprint review",
+      tags: ["Sprint review"],
     });
   });
 
-  it("gives a trailing ' - ' segment to the type instead of the title", () => {
+  it("gives a trailing ' - ' segment to the tags instead of the title", () => {
     expect(parseFileName("ACME - 260731 - Weekly sync - part 2.m4a")).toEqual({
       project: "ACME",
       date: "260731",
       title: "Weekly sync",
-      kind: "part 2",
+      tags: ["part 2"],
     });
   });
 
@@ -43,7 +43,25 @@ describe("parseFileName", () => {
       project: "ELS",
       date: "260812",
       title: "follow",
-      kind: "up call",
+      tags: ["up call"],
+    });
+  });
+
+  it("splits a comma-separated fourth section into several tags", () => {
+    expect(parseFileName("ELS - 260812 - Security issue - Standup, Q3,Sprint review.mp4")).toEqual({
+      project: "ELS",
+      date: "260812",
+      title: "Security issue",
+      tags: ["Standup", "Q3", "Sprint review"],
+    });
+  });
+
+  it("keeps a comma inside the title, which is never split", () => {
+    expect(parseFileName("ELS - 260812 - Budget, hiring - Standup.mp4")).toEqual({
+      project: "ELS",
+      date: "260812",
+      title: "Budget, hiring",
+      tags: ["Standup"],
     });
   });
 
@@ -54,6 +72,7 @@ describe("parseFileName", () => {
   it("returns null when the fourth section is present but empty", () => {
     expect(parseFileName("ELS - 260812 - Title - .mp4")).toBeNull();
     expect(parseFileName("ELS - 260812 - Title -.mp4")).toBeNull();
+    expect(parseFileName("ELS - 260812 - Title - , ,.mp4")).toBeNull();
   });
 
   it("returns null for names that do not follow the convention", () => {
@@ -66,13 +85,13 @@ describe("parseFileName", () => {
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
     expect(parseFileName("ELS -260812- Security issue.mp4")).toEqual({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: null,
+      tags: [],
     });
   });
 
@@ -84,12 +103,12 @@ describe("parseFileName", () => {
     expect(parseFileName("ELS -\t260812 - T.mp4")).toBeNull();
   });
 
-  it("trims the spaces around a separator that precedes a type", () => {
+  it("trims the spaces around a separator that precedes a tag", () => {
     expect(parseFileName("ELS - 260812 - Security issue -Standup.mp4")).toEqual({
       project: "ELS",
       date: "260812",
       title: "Security issue",
-      kind: "Standup",
+      tags: ["Standup"],
     });
   });
 });

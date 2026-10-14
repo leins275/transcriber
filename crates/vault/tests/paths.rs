@@ -1,7 +1,7 @@
 //! FR-14 (containment), NFR-4/FR-5 (260-char cap), FR-8/FR-10/FR-11 (vault
-//! name shaping), FR-3 (the typed meeting folder name and its parser) and
+//! name shaping), FR-3 (the tagged meeting folder name and its parser) and
 //! FR-15 (reserved names). Exercised against `vault::paths` only. Owned by
-//! T5, extended by T3 for the meeting type.
+//! T5, extended by T3 for the meeting tags.
 
 use std::fs;
 
@@ -12,6 +12,10 @@ use vault::paths::{
     check_len, contained_child, meeting_folder_name, parse_meeting_folder_name, suffixed,
     unsorted_folder_name, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };
+
+fn tags(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
 
 fn date(y: i32, m: u32, d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, d).unwrap()
@@ -130,12 +134,12 @@ fn check_len_accepts_a_259_character_destination() {
 }
 
 #[test]
-fn check_len_accepts_a_typed_destination_of_exactly_260_characters() {
+fn check_len_accepts_a_tagged_destination_of_exactly_260_characters() {
     // 13 characters of root, `260812 - `, 217 title characters,
     // ` - Standup` and 11 characters of `\source.mp4` make exactly 260 —
     // the last length still allowed.
     let title = "a".repeat(217);
-    let folder = meeting_folder_name("260812", &title, Some("Standup"));
+    let folder = meeting_folder_name("260812", &title, &tags(&["Standup"]));
     let destination = std::path::PathBuf::from(format!("C:\\vault\\ELS\\{folder}\\source.mp4"));
     assert_eq!(
         destination.as_os_str().to_string_lossy().chars().count(),
@@ -147,14 +151,14 @@ fn check_len_accepts_a_typed_destination_of_exactly_260_characters() {
 }
 
 #[test]
-fn a_type_that_pushes_a_fitting_destination_past_the_cap_is_an_error() {
-    // The same meeting without a type measures 259 characters and is
+fn a_tag_that_pushes_a_fitting_destination_past_the_cap_is_an_error() {
+    // The same meeting without a tag measures 259 characters and is
     // accepted (see `check_len_accepts_a_259_character_destination`);
     // ` - Standup` adds ten more. An over-long destination is refused with
     // an error — it is never repaired, truncated or re-routed to
     // `unsorted` (FR-5).
     let title = "a".repeat(226);
-    let folder = meeting_folder_name("260812", &title, Some("Standup"));
+    let folder = meeting_folder_name("260812", &title, &tags(&["Standup"]));
     let destination = std::path::PathBuf::from(format!("C:\\vault\\ELS\\{folder}\\source.mp4"));
 
     let result = check_len(&destination);
@@ -171,84 +175,103 @@ fn a_type_that_pushes_a_fitting_destination_past_the_cap_is_an_error() {
 #[test]
 fn meeting_folder_name_joins_date_and_title() {
     assert_eq!(
-        meeting_folder_name("260812", "Security issue", None),
+        meeting_folder_name("260812", "Security issue", &[]),
         "260812 - Security issue"
     );
 }
 
 #[test]
-fn meeting_folder_name_appends_the_type_as_a_third_section() {
+fn meeting_folder_name_appends_the_tags_as_a_comma_separated_third_section() {
     assert_eq!(
-        meeting_folder_name("260812", "Security issue", Some("Standup")),
+        meeting_folder_name("260812", "Security issue", &tags(&["Standup"])),
         "260812 - Security issue - Standup"
+    );
+    assert_eq!(
+        meeting_folder_name("260812", "Security issue", &tags(&["Standup", "Q3"])),
+        "260812 - Security issue - Standup, Q3"
     );
 }
 
 #[test]
-fn an_untyped_folder_name_parses_back_into_its_date_and_title() {
+fn an_untagged_folder_name_parses_back_into_its_date_and_title() {
     let parsed = parse_meeting_folder_name("260812 - Security issue")
-        .expect("a two-section folder name is a valid untyped meeting");
+        .expect("a two-section folder name is a valid untagged meeting");
 
     assert_eq!(parsed.date, "260812");
     assert_eq!(parsed.title, "Security issue");
-    assert_eq!(parsed.kind, None);
+    assert!(parsed.tags.is_empty());
 }
 
 #[test]
-fn a_typed_folder_name_parses_back_into_its_date_title_and_type() {
+fn a_tagged_folder_name_parses_back_into_its_date_title_and_tags() {
     let parsed = parse_meeting_folder_name("260812 - Security issue - Standup")
-        .expect("a three-section folder name is a valid typed meeting");
+        .expect("a three-section folder name is a valid tagged meeting");
 
     assert_eq!(parsed.date, "260812");
     assert_eq!(parsed.title, "Security issue");
-    assert_eq!(parsed.kind.as_deref(), Some("Standup"));
+    assert_eq!(parsed.tags, tags(&["Standup"]));
+
+    let parsed = parse_meeting_folder_name("260812 - Security issue - Standup, Q3")
+        .expect("a comma-separated third section is several tags");
+    assert_eq!(parsed.tags, tags(&["Standup", "Q3"]));
 }
 
 #[test]
 fn spaces_around_the_separators_are_optional_when_parsing_a_folder_name() {
-    let parsed = parse_meeting_folder_name("260812-Security issue-Standup")
+    let parsed = parse_meeting_folder_name("260812-Security issue-Standup,Q3")
         .expect("compact separators name the same meeting");
 
     assert_eq!(parsed.date, "260812");
     assert_eq!(parsed.title, "Security issue");
-    assert_eq!(parsed.kind.as_deref(), Some("Standup"));
+    assert_eq!(parsed.tags, tags(&["Standup", "Q3"]));
+}
+
+#[test]
+fn a_tag_section_with_no_tag_in_it_does_not_parse() {
+    assert!(parse_meeting_folder_name("260812 - Security issue - , ,").is_none());
 }
 
 #[test]
 fn every_shape_of_valid_name_survives_a_build_and_parse_round_trip() {
-    let cases: Vec<(&str, &str, Option<&str>, &str)> = vec![
-        ("260812", "Security issue", None, "260812 - Security issue"),
+    let cases: Vec<(&str, &str, &[&str], &str)> = vec![
+        ("260812", "Security issue", &[], "260812 - Security issue"),
         (
             "260812",
             "Security issue",
-            Some("Standup"),
+            &["Standup"],
             "260812 - Security issue - Standup",
+        ),
+        (
+            "260812",
+            "Security issue",
+            &["Standup", "Q3", "Sprint review"],
+            "260812 - Security issue - Standup, Q3, Sprint review",
         ),
         (
             "260828",
             "Q&A Сессия с Дмитрием",
-            Some("поиск рабочего триггера"),
+            &["поиск рабочего триггера"],
             "260828 - Q&A Сессия с Дмитрием - поиск рабочего триггера",
         ),
-        ("260903", "v2.1 review", None, "260903 - v2.1 review"),
-        ("260101", "a", Some("b"), "260101 - a - b"),
+        ("260903", "v2.1 review", &[], "260903 - v2.1 review"),
+        ("260101", "a", &["b"], "260101 - a - b"),
         (
             "260724",
             "Weekly sync",
-            Some("Sprint review"),
+            &["Sprint review"],
             "260724 - Weekly sync - Sprint review",
         ),
     ];
 
-    for (meeting_date, title, kind, expected_name) in cases {
-        let built = meeting_folder_name(meeting_date, title, kind);
+    for (meeting_date, title, tag_list, expected_name) in cases {
+        let built = meeting_folder_name(meeting_date, title, &tags(tag_list));
         assert_eq!(built, expected_name, "built name for {title:?}");
 
         let parsed = parse_meeting_folder_name(expected_name)
             .unwrap_or_else(|| panic!("{expected_name:?} must parse back"));
         assert_eq!(parsed.date, meeting_date, "date of {expected_name:?}");
         assert_eq!(parsed.title, title, "title of {expected_name:?}");
-        assert_eq!(parsed.kind.as_deref(), kind, "kind of {expected_name:?}");
+        assert_eq!(parsed.tags, tags(tag_list), "tags of {expected_name:?}");
     }
 }
 

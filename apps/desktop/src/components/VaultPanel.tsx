@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import styles from "./VaultPanel.module.css";
 import { JobList } from "./JobList";
 import { LedgerPanel } from "./LedgerPanel";
+import { TagFilterBar } from "./TagFilter";
 import { VaultList } from "./VaultList";
 import { VaultSearch } from "./VaultSearch";
+import { filterByTags, pruneTagFilter, vaultTags, type TagFilter } from "../lib/tagFilter";
 import { entriesForProject, projectCodes, unsortedEntries } from "../lib/vaultGroups";
 import type { VaultSort } from "../lib/vaultSort";
 import type { JobSnapshot, LedgerJobView, SearchResultView, VaultMeetingView } from "../types";
@@ -49,6 +51,11 @@ export type VaultPanelProps = {
   /** The table's column sort, lifted for the same reason. */
   sort: VaultSort;
   onSortChange: (sort: VaultSort) => void;
+  /** The chosen tags and how they combine, lifted for the same reason. It
+   * narrows the project-filtered list further; tags not carried by any row
+   * in view are ignored rather than emptying the table. */
+  tagFilter: TagFilter;
+  onTagFilterChange: (filter: TagFilter) => void;
   /** The content-search query, lifted like `filter`. While it is active the
    * results replace the list; the project filter narrows the list, search
    * finds what was said -- two different jobs, both available. */
@@ -88,7 +95,8 @@ export type VaultPanelProps = {
  * naming convention — project, date, name, type — plus the transcript
  * state, each sortable from its header. Sorting by project is what grouping
  * used to be. One picker, on the search input's row, narrows to a project
- * (or to Unsorted).
+ * (or to Unsorted); a row of tag chips under it narrows further by tag,
+ * combined as any-of or all-of.
  *
  * Presentational only: no invoke, no listen, no fetch — App.tsx owns
  * fetching and passes every action down.
@@ -100,6 +108,8 @@ export function VaultPanel({
   onFilterChange,
   sort,
   onSortChange,
+  tagFilter,
+  onTagFilterChange,
   search,
   onSearchChange,
   onSearch,
@@ -140,11 +150,25 @@ export function VaultPanel({
         ? filter
         : "";
 
-  const shown = useMemo(() => {
+  const inProject = useMemo(() => {
     if (validFilter === "") return entries;
     if (validFilter === UNSORTED_FILTER) return unsorted;
     return entriesForProject(entries, validFilter);
   }, [entries, unsorted, validFilter]);
+
+  // The tag chips are the tags of the rows in view, so narrowing to a
+  // project also narrows the chips; a chosen tag that drops out of view
+  // stops applying (never an empty table with no explanation), the same
+  // fallback the project pick gets above.
+  const availableTags = useMemo(() => vaultTags(inProject), [inProject]);
+  const activeTagFilter = useMemo(
+    () => pruneTagFilter(tagFilter, availableTags),
+    [tagFilter, availableTags],
+  );
+  const shown = useMemo(
+    () => filterByTags(inProject, activeTagFilter),
+    [inProject, activeTagFilter],
+  );
 
   // The project picker earns its place (beside the search input, on the
   // same row) only when there is something to choose -- a vault of one
@@ -261,11 +285,24 @@ export function VaultPanel({
               />
               {searchActive ? null : (
                 <>
+                  {availableTags.length > 0 && (
+                    <TagFilterBar
+                      available={availableTags}
+                      filter={activeTagFilter}
+                      onChange={onTagFilterChange}
+                    />
+                  )}
                   {validFilter === UNSORTED_FILTER && (
                     <p className={styles.hint}>
                       These did not follow the{" "}
                       <span className="mono">Project - YYMMDD - Title</span> naming convention. Open
                       one and rename it to file it under a project.
+                    </p>
+                  )}
+                  {shown.length === 0 && activeTagFilter.tags.length > 0 && (
+                    <p className={styles.hint}>
+                      No recording in view carries{" "}
+                      {activeTagFilter.match === "all" ? "all of" : "any of"} the chosen tags.
                     </p>
                   )}
                   <VaultList
