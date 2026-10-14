@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.33.0 — 2026-10-14
+
+### Features
+
+- Tag a recording instead of typing it, and filter the library by tag
+
 ## 0.32.0 — 2026-10-12
 
 ### Features
