@@ -3,6 +3,12 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.34.0 — 2026-10-16
+
+### Features
+
+- Pick the best engine for each machine at first run
+
 ## 0.33.0 — 2026-10-14
 
 ### Features
