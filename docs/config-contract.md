@@ -125,8 +125,12 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   `Settings` schema knowing they exist (`diarize` and `hf_token` themselves
   graduated to typed fields above once the app grew a UI for them). The
   LLM feature's `llm_*` keys (`llm_model`, `llm_model_path`,
-  `llm_ctx`, `llm_gpu_layers`, ... — same README) travel the same way; a
-  future hardware "preset" is just a named bundle of these flat keys.
+  `llm_ctx`, `llm_gpu_layers`, ... — same README) travel the same way, as
+  do the whisper-engine keys (`whisper_backend`, `whisper_openvino_device`,
+  `whisper_openvino_repo`/`_revision`, `whisper_mlx_repo`/`_revision`,
+  `cpu_threads`, `whisper_keep_loaded` — same README, "Whisper engines
+  per machine"); the engine itself is chosen from the hardware, so there
+  is no app-side preset to write.
   (`llm_model` used to be written by the app's `select_llm_model` command;
   the model switcher is gone — the catalog is a single model,
   `services/transcription/src/transcription/llm_catalog.py` — and a stale

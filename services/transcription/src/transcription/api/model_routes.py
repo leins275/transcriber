@@ -21,13 +21,14 @@ from __future__ import annotations
 import shutil
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, Request
 
-from transcription import llm_catalog
+from transcription import engines, hardware, llm_catalog
 from transcription.config import Config
 from transcription.cuda_runtime import CudaRuntimeDownload
 from transcription.errors import ErrorKind, ServiceError
@@ -91,31 +92,71 @@ def _nvidia_gpu_present() -> bool:
     return shutil.which("nvidia-smi") is not None
 
 
-def build_setup_download(config: Config) -> ModelDownload | SetupDownload:
-    """The real, production first-run download: the model alone on a
-    platform/device/machine that never needs the CUDA runtime, or the
-    combined :class:`SetupDownload` (CUDA runtime, then model) otherwise
-    (Defect 1, E4).
+# Phase names on the wire (`ModelDownloadStep.tsx` labels them).
+CUDA_PHASE = "cuda_runtime"
+MODEL_PHASE = "model"
+OPENVINO_RUNTIME_PHASE = "openvino_runtime"
+OPENVINO_WEIGHTS_PHASE = "openvino_weights"
+MLX_WEIGHTS_PHASE = "mlx_weights"
 
-    Only wired as the *default* factory `ModelDownloadManager` builds when
-    nothing else is supplied (`app.py`'s real server startup) -- every test
-    that exercises `/v1/model/download` supplies its own
-    `model_download_factory` and never reaches this function, so none of
-    them make a real network call for the CUDA runtime.
+
+def build_mlx_weights_download(
+    config: Config, *, transport: Transport | None = None
+) -> ModelDownload:
+    """The MLX whisper weights (`config.whisper_mlx_repo`), snapshotted like
+    the faster-whisper model into their own directory."""
+    return ModelDownload(
+        models_dir=engines.mlx_weights_dir(config),
+        allowed_roots=default_allowed_roots(config),
+        repo_id=config.whisper_mlx_repo,
+        revision=config.whisper_mlx_revision,
+        transport=transport,
+    )
+
+
+def build_setup_download(config: Config) -> ModelDownload | SetupDownload:
+    """The real, production first-run download, composed by machine
+    (`engines.py`): the model alone where nothing else helps, else a
+    :class:`SetupDownload` chain --
+
+    - an NVIDIA machine: the CUDA runtime (optional), then the model;
+    - an Intel NPU/GPU machine without an NVIDIA GPU: the model, then the
+      OpenVINO runtime and the exported weights (both optional);
+    - Apple Silicon: the model, then the MLX weights (optional).
+
+    The faster-whisper model is always fetched: it is the engine the
+    accelerated ones fall back to, and the one the wizard's "model
+    present" gate reads. Only wired as the *default* factory
+    `ModelDownloadManager` builds when nothing else is supplied (`app.py`);
+    every test supplies its own factory and never reaches this function.
     """
     model = build_download(config)
-    if sys.platform != "win32" or getattr(config, "device", "auto") == "cpu":
-        # Out of scope for the MVP (Windows-only, CPU is best-effort) --
-        # never fetch a runtime nothing on this configuration would use.
-        return model
-    if not _nvidia_gpu_present():
+    accel = hardware.detect(nvidia=_nvidia_gpu_present())
+    backend = getattr(config, "whisper_backend", "auto") or "auto"
+    phases: list[Phase] = []
+    if sys.platform == "win32" and accel.nvidia and getattr(config, "device", "auto") != "cpu":
         # E4: no NVIDIA GPU at all -- never fetch ~1.4 GB of CUDA wheels a
         # machine with no GPU could never use, and never let that fetch's
-        # failure (on a flaky connection) block the model download the
-        # operator actually needs.
+        # failure block the model download the operator actually needs.
+        phases.append(Phase(CUDA_PHASE, build_cuda_runtime_download(config), optional=True))
+    phases.append(Phase(MODEL_PHASE, model, optional=False))
+    if engines.openvino_offered(accel) and backend in ("auto", "openvino"):
+        from transcription.openvino_runtime import (  # noqa: PLC0415 - keeps the import light
+            build_openvino_runtime_download,
+            build_openvino_weights_download,
+        )
+
+        phases.append(
+            Phase(OPENVINO_RUNTIME_PHASE, build_openvino_runtime_download(config), optional=True)
+        )
+        phases.append(
+            Phase(OPENVINO_WEIGHTS_PHASE, build_openvino_weights_download(config), optional=True)
+        )
+    elif engines.mlx_offered(accel) and backend in ("auto", "mlx"):
+        phases.append(Phase(MLX_WEIGHTS_PHASE, build_mlx_weights_download(config), optional=True))
+    if len(phases) == 1:
         return model
-    cuda_runtime = build_cuda_runtime_download(config)
-    return SetupDownload(cuda_runtime=cuda_runtime, model=model)
+    return SetupDownload(phases=phases)
 
 
 class LlmGgufDownload(ModelDownload):
@@ -258,67 +299,105 @@ def is_model_present(config: Config) -> bool:
     return (Path(config.model_path) / ".ready").exists()
 
 
+@dataclass(frozen=True)
+class Phase:
+    """One step of a first-run setup: a named download, and whether the
+    setup carries on when it fails (`optional`: the step's error becomes a
+    warning the app can offer a retry for) or stops there."""
+
+    name: str
+    download: Any
+    optional: bool = False
+
+
 class SetupDownload:
-    """Combined first-run acquisition: the CUDA runtime, then the model
+    """A first-run acquisition as a chain of named phases under one
+    progress bar: the CUDA runtime then the model on an NVIDIA machine
     (Defect 1 fix, `docs/verification-installer.md` "Blocker 1" -- NSIS's
-    32-bit compiler cannot compile the ~2.3 GiB `--extra cuda` payload, so
-    it is fetched here instead, at first run, rather than baked in).
+    32-bit compiler cannot compile the CUDA payload, so it is fetched at
+    first run), the model then the accelerated engine's runtime and
+    weights on an Intel or Apple Silicon one (`engines.py`).
 
     Exposes exactly the attribute surface :class:`ModelDownloadManager`
-    already reads off a bare :class:`ModelDownload` (``state``,
+    reads off a bare :class:`ModelDownload` (``state``,
     ``downloaded_bytes``, ``total_bytes``, ``error``, ``start()``,
-    ``cancel()``), so the existing ``/v1/model/download`` HTTP route and
-    the app's ``ModelDownloadStep`` need no changes at all: progress simply
-    counts through two phases (CUDA runtime, then model weights) under one
-    combined byte total instead of one.
+    ``cancel()``) plus the phase being run (``phase``) and the optional
+    phases that failed (``warnings``), so the one ``/v1/model/download``
+    resource the app polls covers every profile. ``cuda_warning`` is the
+    CUDA phase's entry in ``warnings`` under its historical name.
+
+    The two-slot form (``cuda_runtime=``, ``model=``) builds the NVIDIA
+    chain: the CUDA phase optional, the model phase not.
     """
 
-    def __init__(self, *, cuda_runtime: CudaRuntimeDownload, model: ModelDownload) -> None:
-        self._cuda_runtime = cuda_runtime
-        self._model = model
-        self._runtime_done_bytes = 0
-        self._active: CudaRuntimeDownload | ModelDownload = cuda_runtime
-        # E4: set when the CUDA-runtime phase ends in `error` (not
-        # `cancelled` -- see `start()`) and the model phase is attempted
-        # anyway; `.error` itself reports the *overall* outcome (`None`
-        # once the model phase succeeds), so this is the one place a caller
-        # can still learn the CUDA phase failed and a retry is available
-        # for it specifically.
-        self.cuda_warning: ServiceError | None = None
+    def __init__(
+        self,
+        *,
+        phases: Sequence[Phase] | None = None,
+        cuda_runtime: CudaRuntimeDownload | None = None,
+        model: ModelDownload | None = None,
+    ) -> None:
+        if phases is None:
+            if cuda_runtime is None or model is None:
+                raise ValueError("SetupDownload needs phases, or cuda_runtime and model")
+            phases = (
+                Phase(CUDA_PHASE, cuda_runtime, optional=True),
+                Phase(MODEL_PHASE, model, optional=False),
+            )
+        if not phases:
+            raise ValueError("SetupDownload needs at least one phase")
+        self._phases: tuple[Phase, ...] = tuple(phases)
+        self._active: Phase = self._phases[0]
+        self._done_bytes = 0
+        # The optional phases that ended in `error` while the setup carried
+        # on, by phase name; `.error` itself reports the *overall* outcome.
+        self.warnings: dict[str, ServiceError] = {}
+
+    @property
+    def cuda_warning(self) -> ServiceError | None:
+        return self.warnings.get(CUDA_PHASE)
+
+    @property
+    def phase(self) -> str:
+        return self._active.name
 
     @property
     def state(self) -> DownloadState:
-        return self._active.state
+        return self._active.download.state  # type: ignore[no-any-return]
 
     @property
     def downloaded_bytes(self) -> int:
-        if self._active is self._model:
-            return self._runtime_done_bytes + self._active.downloaded_bytes
-        return self._active.downloaded_bytes
+        return self._done_bytes + int(self._active.download.downloaded_bytes)
 
     @property
     def total_bytes(self) -> int:
-        # The model's own total is unknown (its hub `list_files()` has not
-        # run yet) until its own `start()` begins, so this under-reports
-        # during the CUDA-runtime phase -- the progress bar's percentage
-        # catches up, rather than staying wrong, the moment phase two begins.
-        return self._cuda_runtime.total_bytes + self._model.total_bytes
+        # A hub snapshot's total is unknown (its `list_files()` has not run)
+        # until its own `start()` begins, so this under-reports until then
+        # -- the bar's percentage catches up the moment the phase begins.
+        return sum(int(phase.download.total_bytes) for phase in self._phases)
 
     @property
     def error(self) -> ServiceError | None:
-        return self._active.error
+        return self._active.download.error  # type: ignore[no-any-return]
+
+    @property
+    def _model(self) -> Any:
+        for phase in self._phases:
+            if phase.name == MODEL_PHASE:
+                return phase.download
+        return self._phases[-1].download
 
     @property
     def repo_id(self) -> str:
-        return self._model.repo_id
+        return str(self._model.repo_id)
 
     @property
     def revision(self) -> str:
-        return self._model.revision
+        return str(self._model.revision)
 
     def cancel(self) -> None:
-        self._cuda_runtime.cancel()
-        self._model.cancel()
+        for phase in self._phases:
+            phase.download.cancel()
 
     def start(
         self,
@@ -329,57 +408,56 @@ class SetupDownload:
         def _relay(_event: dict[str, object]) -> None:
             on_progress(self._event())
 
-        self._active = self._cuda_runtime
-        self._cuda_runtime.start(on_progress=_relay, progress_interval_sec=progress_interval_sec)
-        self._runtime_done_bytes = self._cuda_runtime.downloaded_bytes
-
-        if self._cuda_runtime.state is DownloadState.CANCELLED:
-            # A deliberate cancel (`cancel()` below signals both phases at
-            # once) must stop the whole setup, not silently pivot into a
-            # multi-gigabyte model transfer the operator never asked to
-            # start -- `ModelDownload.start()` itself would clear this
-            # phase's own cancel flag the instant it were called, discarding
-            # the operator's cancel with no way to tell.
-            return
-
-        if self._cuda_runtime.state is DownloadState.ERROR:
-            # E4: a failed CUDA-runtime fetch (a network drop, a digest
-            # mismatch, a flaky connection) must not block the model the
-            # operator actually needs -- surface it as a non-fatal warning
-            # (`cuda_warning`) and continue to the model phase instead. A
-            # retry of the CUDA runtime alone remains available afterwards
-            # (`is_cuda_runtime_present`/a fresh `CudaRuntimeDownload`).
-            self.cuda_warning = self._cuda_runtime.error
-
-        self._active = self._model
-        if self._model.already_present():
-            # E13: the "Retry GPU setup" path re-POSTs `/v1/model/download`
-            # after a CUDA-phase failure, which builds a *fresh*
-            # `SetupDownload` (a fresh `ModelDownload` included) -- if the
-            # model already landed in an earlier run, calling `start()`
-            # unconditionally would re-fetch every one of its ~3 GB of files
-            # from byte zero for no reason (`ModelDownload.start()` has no
-            # already-present short-circuit of its own). Report the whole
-            # setup as complete without touching the model phase at all.
-            self._model.state = DownloadState.COMPLETE
-            on_progress(self._event())
-            return
-
-        self._model.start(on_progress=_relay, progress_interval_sec=progress_interval_sec)
+        for index, phase in enumerate(self._phases):
+            if index > 0:
+                self._done_bytes += int(self._phases[index - 1].download.downloaded_bytes)
+            self._active = phase
+            download = phase.download
+            already_present = getattr(download, "already_present", None)
+            if already_present is not None and already_present():
+                # E13: a retry re-POSTs the slot, which builds a *fresh*
+                # chain -- a phase that already landed in an earlier run
+                # must not be fetched again from byte zero (`ModelDownload
+                # .start()` has no short-circuit of its own).
+                download.state = DownloadState.COMPLETE
+                on_progress(self._event())
+                continue
+            download.start(on_progress=_relay, progress_interval_sec=progress_interval_sec)
+            if download.state is DownloadState.CANCELLED:
+                # A deliberate cancel (`cancel()` signals every phase) stops
+                # the whole setup rather than pivoting into the next
+                # multi-gigabyte transfer, whose own `start()` would clear
+                # its cancel flag the instant it were called.
+                return
+            if download.state is DownloadState.ERROR:
+                if not phase.optional:
+                    return
+                # E4: an optional phase (a network drop, a digest mismatch)
+                # must not block what the operator actually needs: record
+                # it and carry on; a retry of that phase alone remains
+                # available afterwards.
+                self.warnings[phase.name] = download.error
+        on_progress(self._event())
 
     def _event(self) -> dict[str, object]:
         percent = (self.downloaded_bytes / self.total_bytes) * 100.0 if self.total_bytes else 0.0
-        current_file = getattr(self._active, "current_file", "")
+        current_file = getattr(self._active.download, "current_file", "")
         event: dict[str, object] = {
             "downloaded_bytes": self.downloaded_bytes,
             "total_bytes": self.total_bytes,
             "percent": percent,
             "file": current_file,
             "state": self.state.value,
+            "phase": self.phase,
         }
+        if self.warnings:
+            event["warnings"] = {name: err.message for name, err in self.warnings.items()}
         if self.cuda_warning is not None:
             event["cuda_warning"] = self.cuda_warning.message
         return event
+
+
+ChainedDownload = SetupDownload
 
 
 class DownloadLike(Protocol):
@@ -494,6 +572,14 @@ class ModelDownloadManager:
         cuda_warning = getattr(download, "cuda_warning", None)
         if cuda_warning is not None:
             status["cuda_warning"] = cuda_warning.message
+        # The chain's phase and its failed optional phases, likewise
+        # additive: a bare download has neither.
+        phase = getattr(download, "phase", None)
+        if phase is not None:
+            status["phase"] = phase
+        warnings = getattr(download, "warnings", None)
+        if warnings:
+            status["warnings"] = {name: err.message for name, err in warnings.items()}
         return status
 
 

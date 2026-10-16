@@ -64,6 +64,12 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 | `model_path` | `TRANSCRIBER_MODEL_PATH` | `<app_dir>/models` |
 | `device` | `TRANSCRIBER_DEVICE` | `auto` (`cuda` if a device is probed, else `cpu`) |
 | `compute_type` | `TRANSCRIBER_COMPUTE_TYPE` | `float16` on cuda / `int8` on cpu |
+| `whisper_backend` | `TRANSCRIBER_WHISPER_BACKEND` | `auto` -- the accelerated engine this machine is offered once its payload is on disk (`mlx` on Apple Silicon, `openvino` on an Intel NPU/GPU machine without an NVIDIA GPU), else `ctranslate2` (faster-whisper); `ctranslate2` / `mlx` / `openvino` pin one. See "Whisper engines per machine" |
+| `whisper_openvino_device` | `TRANSCRIBER_WHISPER_OPENVINO_DEVICE` | `auto` -- `NPU`, then `GPU`, then `CPU`, as the machine has them; a name pins one |
+| `whisper_openvino_repo` / `whisper_openvino_revision` | `TRANSCRIBER_WHISPER_OPENVINO_REPO` / `..._REVISION` | `OpenVINO/whisper-large-v3-turbo-int8-ov` at a pinned commit -- the pre-exported IR the first run fetches into `<app_dir>/models/whisper-openvino/<repo basename>/`; `OpenVINO/whisper-large-v3-int8-ov` is the full-size alternative |
+| `whisper_mlx_repo` / `whisper_mlx_revision` | `TRANSCRIBER_WHISPER_MLX_REPO` / `..._REVISION` | `mlx-community/whisper-large-v3-mlx` (fp16) at a pinned commit, fetched into `<app_dir>/models/whisper-mlx/<repo basename>/` |
+| `cpu_threads` | `TRANSCRIBER_CPU_THREADS` | `0` = every core, for a whisper engine running on the CPU (faster-whisper's own default of 4 left a 10-core M4 mostly idle) |
+| `whisper_keep_loaded` | `TRANSCRIBER_WHISPER_KEEP_LOADED` | unset = by machine: released after each job on Apple Silicon (the GPU shares the unified memory with the LLM that runs next), kept elsewhere |
 | `provider` | `TRANSCRIBER_PROVIDER` | `local` (the only registered provider) |
 | `db_path` | `TRANSCRIBER_DB_PATH` | `<app_dir>/data/jobs.sqlite3` |
 | `allowed_roots` | `TRANSCRIBER_ALLOWED_ROOTS` (`os.pathsep`-separated) | empty (fail closed) |
@@ -97,6 +103,45 @@ ignores the rest, except `vault_root`, which it folds into `allowed_roots`.
 `Config.public()` (what `/health` and log lines may show) never includes
 `token` or `hf_token`.
 
+## Whisper engines per machine
+
+`hardware.py` asks the machine four questions once per process -- an
+NVIDIA GPU (`nvidia-smi` on `PATH`), Apple Silicon, an Intel NPU and an
+Intel GPU (both read from the registry's PnP enumeration on Windows; no
+subprocess) -- and `engines.py` turns the answers plus what is on disk
+into one row per stage, which `/health` reports as `engines` (and
+`accelerators`) and the service logs at startup:
+
+| Machine | Transcription | Summaries (LLM) | Speakers | Video |
+|---|---|---|---|---|
+| NVIDIA (Windows) | faster-whisper, CUDA fp16 | llama.cpp CUDA build (first-run fetch) | pyannote, CUDA torch (first-run fetch) | `hevc_nvenc` |
+| Apple Silicon | **mlx-whisper on the GPU** (`whisper-mlx` extra, baked into the macOS build; weights fetched at first run) | llama.cpp with Metal (baked; every layer offloaded when the GGUF fits the unified memory with 4 GiB to spare) | pyannote on MPS (`diarization` extra, baked) | `hevc_videotoolbox` |
+| Intel Core Ultra (Windows, no NVIDIA GPU) | **OpenVINO GenAI WhisperPipeline on the NPU**, then GPU, then CPU (`whisper-openvino` extra fetched at first run into `runtime/whisper-openvino/`, weights beside the models) | llama.cpp on the CPU | pyannote, CPU torch (first-run fetch) | `hevc_qsv` |
+| anything else | faster-whisper, CPU int8, every core | CPU | CPU torch | `libx265` |
+
+The job API, the ledger and `config.provider` keep saying `local`:
+`providers.get_provider("local")` resolves the engine through the plan
+and falls back to faster-whisper -- with a logged warning -- when the
+accelerated library does not import, so an engine is never a failed job.
+The faster-whisper snapshot is therefore always fetched, on every machine.
+
+The two accelerated providers share `providers/whisper_common.py`: the
+ru/en/tr language rule, faster-whisper's own Silero VAD cutting the
+recording's *speech* into batches (ten minutes for MLX, one static
+30-second window for the NPU), progress and cancellation between batches,
+timestamps mapped back through `SpeechTimestampsMap`, then the same
+hallucination filters and utterance re-segmentation. mlx-whisper decodes
+greedily with temperature fallback (no beam search); OpenVINO's NPU
+pipeline compiles the model on first load (minutes on a Panther Lake,
+cached by the driver afterwards -- the job sits in `loading` meanwhile)
+and does not report the detected language, so an auto run asks the
+faster-whisper model on the CPU for one window's distribution first.
+
+The OpenVINO runtime manifest (`openvino_runtime_packages.py`) is
+generated from `uv.lock` by `scripts/gen_openvino_runtime.py`; `make
+lint` fails when it drifts. Nothing imports MLX or OpenVINO until a job
+runs on that engine.
+
 ## Derived (LLM) jobs
 
 Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
@@ -108,7 +153,7 @@ Beyond `transcribe`, `POST /v1/jobs` accepts a `job_type` with an
 | `summarize` | `<meeting>/transcript.json` (+ `speakers.json`) | `<meeting>/summary.md` (with the action items as a section) |
 | `export` | one meeting's existing materials (no LLM call) | `<meeting>/export.md` + `<meeting>/<project> - <date> - <title>.pdf` (share-ready name; see `artifacts.export_pdf_filename`), overwritten in place on re-export |
 | `diarize` | `<meeting>/source.<ext>` + `<meeting>/transcript.json` (no LLM call; the pyannote engine) | `<meeting>/transcript.json` rewritten in place with speaker labels and the `diarization` block, ids untouched -- see "Speaker diarization" below |
-| `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: HEVC (`hevc_nvenc` preset p6, constant-quality VBR at CQ 28, when NVENC opens; else `libx265` CRF 26, preset medium; `hvc1`-tagged so QuickTime/Safari play it), the shorter side capped at 1080p (a 4K recording becomes 1080p, area-resampled; smaller sources keep their size), same frame rate; the audio track is levelled across voices (FFmpeg's `dynaudnorm`, `compress.DYNAUDNORM_OPTIONS` -- a 2.1 s window aimed at -14 dBFS RMS, lift capped at 26 dB; measured on the operator's vault, voices 12-17 dB apart came out 3.4-5.4 dB apart) and re-encoded to AAC 160k, unless the request says `normalize_audio: false`, when it is copied when an mp4 can hold it else AAC 160k; a damaged audio packet is skipped with a log line rather than failing the encode. Skipped with a warning for an audio-only or already-small (<= 700 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio`, `normalized` and the byte counts, and the service logs one line per job with the sizes before and after. (Measured on the operator's 4K screen recordings: x265 at 1080p was a third of x264's size; NVENC HEVC at CQ 28 with no bitrate target is about 10 % larger than x265 at nearly twice the speed. Only the encode runs on the GPU -- GPU decoding was slower than the CPU's) |
+| `compress` | `<meeting>/source.<ext>` (no LLM call; FFmpeg in-process through PyAV, never an external binary) | `<meeting>/source.mp4` **replacing** the original: HEVC (`compress.encoders_for_platform`: on Windows `hevc_nvenc` preset p6, constant-quality VBR at CQ 28, then Intel Quick Sync `hevc_qsv` in ICQ mode at 26 (NV12 frames), whichever opens; on macOS `hevc_videotoolbox` at constant quality 60 of 100 (`allow_sw=0`); `libx265` CRF 26, preset medium, everywhere last; `hvc1`-tagged so QuickTime/Safari play it), the shorter side capped at 1080p (a 4K recording becomes 1080p, area-resampled; smaller sources keep their size), same frame rate; the audio track is levelled across voices (FFmpeg's `dynaudnorm`, `compress.DYNAUDNORM_OPTIONS` -- a 2.1 s window aimed at -14 dBFS RMS, lift capped at 26 dB; measured on the operator's vault, voices 12-17 dB apart came out 3.4-5.4 dB apart) and re-encoded to AAC 160k, unless the request says `normalize_audio: false`, when it is copied when an mp4 can hold it else AAC 160k; a damaged audio packet is skipped with a log line rather than failing the encode. Skipped with a warning for an audio-only or already-small (<= 700 kbps) recording; kept as-is with a warning when the result is under 15 % smaller or fails verification. The manifest records `replaced`, `encoder`, `audio`, `normalized` and the byte counts, and the service logs one line per job with the sizes before and after. (Measured on the operator's 4K screen recordings: x265 at 1080p was a third of x264's size; NVENC HEVC at CQ 28 with no bitrate target is about 10 % larger than x265 at nearly twice the speed. Only the encode runs on the GPU -- GPU decoding was slower than the CPU's) |
 | `suggest_title` | `<meeting>/summary.md` (no transcript needed; only what fits the context window is read) | **nothing** -- the job's result manifest (`GET /v1/jobs/{id}/result`) is `{"title": "..."}`, a short meeting name proposed by the LLM. The caller decides what to do with it; the service never renames a folder |
 
 A `suggest_title` submission is refused with `invalid_request` when the
@@ -176,7 +221,12 @@ startup). The desktop app's dev sidecar passes `--extra llm-cuda`
 automatically when `nvidia-smi` is on PATH, `--extra llm-cpu` otherwise.
 With the default `llm_gpu_layers: -1`, each model load measures free VRAM
 via NVML, reads the layer count from the GGUF header and offloads as many
-whole layers as fit (the decision is logged); the rest run on CPU.
+whole layers as fit (the decision is logged); the rest run on CPU. On
+Apple Silicon there is no NVML and the GPU's memory is the machine's: the
+macOS bake compiles llama.cpp with Metal (built from the sdist, see
+`scripts/build_pyenv.py`), and `-1` offloads every layer when the GGUF
+plus a quarter for its cache fits the unified memory with 4 GiB left for
+everything else, none otherwise; `/health` then reports `device: metal`.
 
 One uv gotcha when switching variants by hand: both wheels share a name
 and version, so `uv sync --extra llm-cuda` over an already-installed CPU
@@ -334,7 +384,12 @@ Two prerequisites, both optional by design:
   manifest (`diarization_runtime_packages.py`) is generated from `uv.lock`
   by `scripts/gen_diarization_runtime.py`; `make lint` fails when it
   drifts. Nothing imports any of it until the first diarized job runs.
-  The wheels are `win_amd64`, so off Windows no runtime is offered.
+  The wheels are `win_amd64`, so off Windows no runtime is *fetched*: the
+  macOS build bakes the `diarization` extra instead (`build_pyenv.
+  PLATFORM_EXTRAS`), and `device: auto` resolves to Apple's `mps` torch
+  backend there (`PYTORCH_ENABLE_MPS_FALLBACK=1` is set before torch is
+  imported, so the few operators MPS lacks run on the CPU instead of
+  raising); the status row labels that variant `mps`.
 - **The models and a Hugging Face token**: `pyannote/speaker-diarization-3.1`
   and `pyannote/segmentation-3.0` are gated -- accept their terms on the
   hub once (signed in as the token's owner), then supply a read token
@@ -357,9 +412,9 @@ Two prerequisites, both optional by design:
 
 `GET /v1/diarization/status` reports which prerequisites are met
 (`runtime_present`, `model_present`, `token_present`, `gpu_present`), which
-runtime build a fetch would land (`runtime_variant`: `"cuda"`, `"cpu"`, or
-`null` off Windows, with its `runtime_total_bytes`) and whether `diarize`
-is on.
+runtime build a fetch would land (`runtime_variant`: `"cuda"`, `"cpu"`,
+`"mps"` for the baked Apple Silicon runtime, or `null` where none is
+offered, with its `runtime_total_bytes`) and whether `diarize` is on.
 
 ### Per-job speaker tuning
 

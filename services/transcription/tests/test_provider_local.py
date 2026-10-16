@@ -324,6 +324,25 @@ def test_constructor_kwargs_are_exactly_the_documented_set_on_cpu(
     assert kwargs["local_files_only"] is True
 
 
+def test_cpu_threads_default_to_every_core(monkeypatch: pytest.MonkeyPatch) -> None:
+    """faster-whisper's own default is 4 threads, which left a 10-core M4
+    and a 16-core Panther Lake mostly idle; `cpu_threads: 0` means all."""
+    monkeypatch.setattr(local_whisper.os, "cpu_count", lambda: 10)
+    assert local_whisper.resolve_cpu_threads(_config(device="cpu", cpu_threads=0)) == 10
+    assert local_whisper.resolve_cpu_threads(_config(device="cpu", cpu_threads=6)) == 6
+    monkeypatch.setattr(local_whisper.os, "cpu_count", lambda: None)
+    assert local_whisper.resolve_cpu_threads(_config(device="cpu", cpu_threads=0)) == 4
+
+    model_cls = make_fake_model_factory()
+    monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)
+    monkeypatch.setattr(local_whisper, "_cuda_device_count", lambda: 0)
+    provider = local_whisper.LocalWhisperProvider(_config(device="cpu", cpu_threads=6))
+    provider.transcribe(
+        Path("a.wav"), language=None, on_progress=lambda _: None, cancel=CancelToken()
+    )
+    assert model_cls.state["construct_kwargs"]["cpu_threads"] == 6
+
+
 def test_constructor_kwargs_omit_cpu_threads_on_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
     model_cls = make_fake_model_factory()
     monkeypatch.setattr(local_whisper, "WhisperModel", model_cls)

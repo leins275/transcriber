@@ -8,13 +8,33 @@
  * entirely rather than mentioning a runtime it could never use.
  */
 import type { ServiceStatusView } from "../types";
+import type { EngineRow } from "./modelDownload";
+
+/** The sidebar's word for the device the transcription engine runs on. */
+const DEVICE_SUFFIX: Record<string, string> = {
+  cuda: "GPU",
+  metal: "GPU",
+  NPU: "NPU",
+  GPU: "GPU",
+  cpu: "CPU",
+  CPU: "CPU",
+};
 
 export function serviceStatusLabel(
   state: ServiceStatusView["state"],
   cudaRuntimePresent: boolean | null | undefined,
+  engines: EngineRow[] | undefined = undefined,
 ): string {
   if (state === "starting") return "Starting…";
   if (state === "unavailable") return "Unavailable";
+  // The engine plan, when the service reports one, names the device the
+  // transcription actually runs on (an engine whose payload is still
+  // missing runs on the CPU fallback meanwhile).
+  const whisper = engines?.find((row) => row.stage === "whisper");
+  if (whisper) {
+    const suffix = whisper.present === false ? "CPU" : DEVICE_SUFFIX[whisper.device];
+    return suffix ? `Ready · ${suffix}` : "Ready";
+  }
   if (cudaRuntimePresent === true) return "Ready · GPU";
   if (cudaRuntimePresent === false) return "Ready · CPU";
   return "Ready";

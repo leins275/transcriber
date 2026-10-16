@@ -1,7 +1,7 @@
 import { useState } from "react";
 import styles from "./SettingsPage.module.css";
 import { serviceStatusLabel } from "../lib/serviceLabel";
-import type { ModelDownloadStatus } from "../lib/modelDownload";
+import { STAGE_LABELS, engineLabel, type ModelDownloadStatus } from "../lib/modelDownload";
 import type {
   DiarizationDownloadStatus,
   DiarizationStatusView,
@@ -348,6 +348,34 @@ export function SettingsPage({
       </div>
 
       <div className={styles.row}>
+        <div className={styles.kicker}>Engines</div>
+        <div className={styles.value}>
+          {modelStatus && modelStatus.engines.length > 0 ? (
+            <>
+              {modelStatus.engines.map((row) => (
+                <div key={row.stage} className={styles.line} data-stage={row.stage}>
+                  {row.present === true && CHECK_ICON}
+                  {STAGE_LABELS[row.stage] ?? row.stage}: {engineLabel(row)}
+                  {row.present === false && " — not set up"}
+                </div>
+              ))}
+              {modelStatus.engines.some((row) => row.present === false) && (
+                <p className={styles.hint}>
+                  An engine marked not set up still has its download ahead: start it from the notice
+                  on the Recordings page.
+                </p>
+              )}
+              <p className={styles.hint}>
+                Picked for this machine's hardware. Everything runs here; nothing leaves it.
+              </p>
+            </>
+          ) : (
+            <div className={styles.line}>Detected when the service starts</div>
+          )}
+        </div>
+      </div>
+
+      <div className={styles.row}>
         <div className={styles.kicker}>Model</div>
         <div className={styles.value}>
           {modelStatus ? (
@@ -528,7 +556,12 @@ export function SettingsPage({
               <div className={styles.line}>
                 {diarization.runtime_present && CHECK_ICON}
                 Speaker runtime (pyannote +{" "}
-                {diarization.runtime_variant === "cuda" ? "CUDA" : "CPU"} torch)
+                {diarization.runtime_variant === "cuda"
+                  ? "CUDA"
+                  : diarization.runtime_variant === "mps"
+                    ? "Apple GPU"
+                    : "CPU"}{" "}
+                torch{diarization.runtime_variant === "mps" && ", bundled"})
                 {isDownloading(diarizationRuntimeDownload) ? (
                   <>
                     {`Downloading · ${Math.round(diarizationRuntimeDownload?.percent ?? 0)}%`}
@@ -696,7 +729,11 @@ export function SettingsPage({
         <div className={styles.value}>
           <div className={styles.line}>
             <span className={styles.dot} data-state={serviceStatus.state} />
-            {serviceStatusLabel(serviceStatus.state, modelStatus?.cuda_runtime_present)}
+            {serviceStatusLabel(
+              serviceStatus.state,
+              modelStatus?.cuda_runtime_present,
+              modelStatus?.engines,
+            )}
           </div>
           {serviceStatus.base_url && (
             <div className={`${styles.detail} mono`}>{serviceStatus.base_url}</div>

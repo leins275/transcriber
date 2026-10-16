@@ -7,14 +7,16 @@ You can get windows and macos installers from the releases.
 My setup (where this software kinda works):
 - Win 11 + RTX 4070 12GB VRAM + 64 GB ddr5 RAM 6000mhz (Primary machine)
 - MacBook Air M4 16 GB RAM, 256 GB ssd (Installer available, but less tested)
+- Intel Core Ultra 7 366H laptop (NPU + Arc iGPU; the OpenVINO whisper engine targets it)
 
 # Models
 
 Everything runs locally; the app downloads the models on first use.
 
-- **Speech-to-text**: `faster-whisper large-v3` (~3 GB).
-- **Assistant LLM** (summaries, action items): **Qwen3.5 9B** Q5_K_M (~6.6 GB) — the one built-in model, no switching. Fits fully into a 12 GB GPU, so it's fast.
+- **Speech-to-text**: `faster-whisper large-v3` (~3 GB) everywhere, plus the engine the machine is best at, picked and fetched on first run: `mlx-whisper` on an Apple Silicon GPU (~3 GB), OpenVINO's whisper on an Intel Core Ultra NPU (~0.9 GB).
+- **Assistant LLM** (summaries, action items): **Qwen3.5 9B** Q5_K_M (~6.6 GB) — the one built-in model, no switching. Fits fully into a 12 GB GPU, so it's fast; on a Mac it runs on the GPU through Metal.
 - **GPU acceleration** (optional, NVIDIA): the CUDA build of the local llama.cpp runtime (~460 MB), offered in Settings.
+- Settings → **Engines** shows what runs where on this machine (`docs/setup.md`, "Engines per machine").
 
 # Main Idea
 

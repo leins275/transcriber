@@ -49,7 +49,7 @@ export type DiarizationStatusView = {
   gpu_present: boolean;
   /** Which runtime variant a fetch would land; `null` where no runtime is
    * offered (the wheels are Windows-only). */
-  runtime_variant: "cuda" | "cpu" | null;
+  runtime_variant: "cuda" | "cpu" | "mps" | null;
   /** What the runtime fetch would transfer, for the button's label. */
   runtime_total_bytes: number;
 };

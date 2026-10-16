@@ -29,6 +29,7 @@ format:
 #   uv run scripts/sync_version.py --check
 #   uv run scripts/verify_locks.py --check
 #   uv run scripts/gen_diarization_runtime.py --check
+#   uv run scripts/gen_openvino_runtime.py --check
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 	npm --prefix apps/desktop run lint
@@ -36,6 +37,7 @@ lint:
 	uv run scripts/sync_version.py --check
 	uv run scripts/verify_locks.py --check
 	uv run scripts/gen_diarization_runtime.py --check
+	uv run scripts/gen_openvino_runtime.py --check
 
 # Direct equivalents (run in order, from the repo root):
 #   cargo check --workspace

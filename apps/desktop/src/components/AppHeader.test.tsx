@@ -19,6 +19,9 @@ function modelStatus(overrides: Partial<ModelDownloadStatus> = {}): ModelDownloa
     model_present: true,
     cuda_warning: null,
     cuda_runtime_present: null,
+    phase: null,
+    warnings: {},
+    engines: [],
     ...overrides,
   };
 }

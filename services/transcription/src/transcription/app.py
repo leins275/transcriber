@@ -25,7 +25,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from transcription import __version__
+from transcription import __version__, engines, hardware
 from transcription.api import model_routes
 from transcription.api.model_routes import (
     DownloadLike,
@@ -252,6 +252,8 @@ def create_app(
         # provider's live, cached `describe()` -- the resolved device and
         # advancing `model_state` (FR-2, FR-3 acceptance).
         info = job_manager.provider_info()
+        accel = hardware.detect(nvidia=model_routes._nvidia_gpu_present())
+        rows = engines.plan_engines(config, accel, engines.presence(config))
         return {
             "status": "ok",
             "version": __version__,
@@ -285,6 +287,11 @@ def create_app(
             "llm_gpu_build_present": llm_gpu_build_present(config),
             # The search-embedding model's counterpart to llm_model_present.
             "embedding_model_present": model_routes.is_embedding_model_present(config),
+            # The machine's accelerators and the engine each stage runs on
+            # here (`engines.py`): what Settings' Engines block and the
+            # first-run wizard's setup notice render. Stat calls only.
+            "accelerators": accel.as_dict(),
+            "engines": [row.as_dict() for row in rows],
         }
 
     v1_deps = [Depends(require_token)]

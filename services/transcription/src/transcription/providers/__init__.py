@@ -10,6 +10,7 @@ hook adds test doubles without touching this module.
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 from transcription.errors import ErrorKind, ServiceError
@@ -17,8 +18,22 @@ from transcription.errors import ErrorKind, ServiceError
 if TYPE_CHECKING:
     from transcription.providers.base import TranscriptionProvider
 
+logger = logging.getLogger("transcription")
+
 _REGISTRY: dict[str, str | type] = {
     "local": "transcription.providers.local_whisper:LocalWhisperProvider",
+}
+
+# The provider name jobs are submitted under. `local` is the whisper
+# engine of this machine: `get_provider` resolves it through the engine
+# plan (`engines.py`) to one of the accelerated engines below when its
+# payload is on disk, and to faster-whisper otherwise -- the ledger, the
+# job API and `config.provider` keep saying `local` either way, so the
+# engines are not registry names a job can be submitted under.
+LOCAL_PROVIDER = "local"
+_ENGINE_PROVIDERS: dict[str, str] = {
+    "mlx": "transcription.providers.mlx_engine:MlxWhisperProvider",
+    "openvino": "transcription.providers.openvino_engine:OpenVinoWhisperProvider",
 }
 
 
@@ -62,13 +77,43 @@ def get_provider(name: str, config: Any) -> TranscriptionProvider:
     event loop (e.g. via ``asyncio.to_thread``) -- see ``jobs.py`` (E15).
     """
     validate_provider_name(name)
-    target = _REGISTRY[name]
+    if name == LOCAL_PROVIDER and isinstance(_REGISTRY[name], str):
+        return _local_provider(config)
+    return _instantiate(name, config)
 
+
+def _instantiate(name: str, config: Any) -> TranscriptionProvider:
+    target = _REGISTRY.get(name) or _ENGINE_PROVIDERS[name]
     if isinstance(target, str):
         module_name, _, class_name = target.partition(":")
         module = importlib.import_module(module_name)
         provider_cls = getattr(module, class_name)
     else:
         provider_cls = target
-
     return provider_cls(config)  # type: ignore[no-any-return]
+
+
+def _local_provider(config: Any) -> TranscriptionProvider:
+    """The whisper engine of this machine (see `LOCAL_PROVIDER`).
+
+    Degradation over failure: an accelerated provider whose library does
+    not import (a half-fetched runtime, a wheel the OS loader refuses)
+    logs why and hands over to faster-whisper instead of failing the job.
+    """
+    from transcription import engines, hardware  # noqa: PLC0415 - keeps import light
+
+    accel = hardware.detect()
+    backend = engines.resolve_whisper_backend(config, accel, engines.presence(config))
+    provider_name = engines.PROVIDER_FOR_BACKEND.get(backend, LOCAL_PROVIDER)
+    if provider_name == LOCAL_PROVIDER:
+        return _instantiate(LOCAL_PROVIDER, config)
+    try:
+        return _instantiate(provider_name, config)
+    except Exception as exc:  # noqa: BLE001 - the fallback engine must still run
+        logger.warning(
+            "whisper engine %s unavailable (%s); falling back to faster-whisper",
+            backend,
+            exc,
+            extra={"event": "whisper_engine_fallback", "backend": backend},
+        )
+        return _instantiate(LOCAL_PROVIDER, config)

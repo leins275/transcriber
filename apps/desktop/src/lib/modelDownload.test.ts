@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MODEL_DOWNLOAD_POLL_INTERVAL_MS,
+  engineLabel,
+  engineSetupNeeded,
   formatBytes,
   formatProgress,
   isInProgress,
@@ -19,6 +21,9 @@ function status(overrides: Partial<ModelDownloadStatus> = {}): ModelDownloadStat
     model_present: false,
     cuda_warning: null,
     cuda_runtime_present: null,
+    phase: null,
+    warnings: {},
+    engines: [],
     ...overrides,
   };
 }
@@ -131,5 +136,71 @@ describe("pollDownloadStatus", () => {
 
   it("exports a 1s cadence matching FR-12's 'updates at least once a second' (E8)", () => {
     expect(MODEL_DOWNLOAD_POLL_INTERVAL_MS).toBe(1000);
+  });
+});
+
+describe("engineSetupNeeded", () => {
+  const base = { warnings: {}, engines: [], cuda_warning: null, cuda_runtime_present: null };
+
+  it("is nothing on a machine with nothing to set up", () => {
+    expect(engineSetupNeeded(base)).toBeNull();
+    expect(
+      engineSetupNeeded({
+        ...base,
+        engines: [{ stage: "whisper", engine: "ctranslate2", device: "cpu", present: true }],
+      }),
+    ).toBeNull();
+  });
+
+  it("names a failed optional phase first, with the service's message", () => {
+    const setup = engineSetupNeeded({
+      ...base,
+      warnings: { openvino_weights: "digest mismatch" },
+      cuda_runtime_present: false,
+    });
+    expect(setup).toMatchObject({
+      phase: "openvino_weights",
+      label: "NPU speech model",
+      short: "NPU",
+      detail: "digest mismatch",
+    });
+  });
+
+  it("keeps the durable CUDA signal (E13)", () => {
+    expect(engineSetupNeeded({ ...base, cuda_runtime_present: false })).toMatchObject({
+      phase: "cuda_runtime",
+      label: "GPU acceleration",
+      payload: "GPU runtime",
+      short: "GPU",
+      detail: null,
+    });
+  });
+
+  it("offers the accelerated engine the plan names but has not got", () => {
+    const setup = engineSetupNeeded({
+      ...base,
+      engines: [{ stage: "whisper", engine: "mlx", device: "metal", present: false }],
+    });
+    expect(setup).toMatchObject({ phase: "mlx_weights", short: "Apple GPU" });
+    expect(
+      engineSetupNeeded({
+        ...base,
+        engines: [{ stage: "whisper", engine: "openvino", device: "NPU", present: false }],
+      }),
+    ).toMatchObject({ phase: "openvino_runtime", label: "Intel NPU engine" });
+  });
+});
+
+describe("engineLabel", () => {
+  it("puts an engine row into words", () => {
+    expect(engineLabel({ stage: "whisper", engine: "mlx", device: "metal", present: true })).toBe(
+      "MLX whisper on the Apple GPU",
+    );
+    expect(
+      engineLabel({ stage: "compress", engine: "hevc_qsv", device: "gpu", present: null }),
+    ).toBe("Quick Sync on the GPU");
+    expect(engineLabel({ stage: "llm", engine: "llama.cpp", device: "cpu", present: true })).toBe(
+      "llama.cpp on the CPU",
+    );
   });
 });

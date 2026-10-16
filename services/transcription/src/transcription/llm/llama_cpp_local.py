@@ -21,6 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from transcription import hardware
 from transcription.config import Config
 from transcription.errors import ErrorKind, ServiceError, redact
 from transcription.llm.base import LlmCompletion, LlmInfo, Message, ModelState
@@ -54,6 +55,13 @@ def _free_vram_bytes() -> int | None:
         return None
 
 
+# Apple Silicon offload: the GGUF plus its KV cache and scratch buffers
+# must fit the unified memory beside the OS, whisper and the app. 25 %
+# over the file size covers the cache at `llm_ctx`; 4 GiB is what the
+# rest of the machine keeps.
+_APPLE_MODEL_HEADROOM = 1.25
+_APPLE_RESERVED_BYTES = 4 * 1024**3
+
 # How often the streaming loop checks the cancel token, in decoded chunks.
 # llama.cpp yields one chunk per token, so this is "every token" -- cheap,
 # and it keeps cancellation latency at a single token's decode time.
@@ -71,6 +79,9 @@ class LlamaCppProvider:
         self._state: ModelState = "unloaded"
         # The offload actually applied by the last load; `None` until then.
         self._resolved_gpu_layers: int | None = None
+        # Which GPU the offloaded layers run on: `cuda` unless the Apple
+        # branch of `_resolve_gpu_layers` says `metal`.
+        self._gpu_kind: str = "cuda"
         # complete() runs on the JobManager's single worker thread, but
         # unload() can be called from elsewhere; keep the handle swap safe.
         self._lock = threading.Lock()
@@ -78,7 +89,7 @@ class LlamaCppProvider:
     def describe(self) -> LlmInfo:
         resolved = self._resolved_gpu_layers
         if resolved is not None:
-            device = "cuda" if resolved != 0 else "cpu"
+            device = self._gpu_kind if resolved != 0 else "cpu"
         elif self.config.llm_gpu_layers == 0:
             device = "cpu"
         else:
@@ -112,6 +123,14 @@ class LlamaCppProvider:
             return 0
 
         free_vram = _free_vram_bytes()
+        if free_vram is None and hardware.apple_silicon_present():
+            # Apple Silicon: the GPU is the unified memory, so "free VRAM"
+            # is "does the model fit beside everything else" -- all layers
+            # when it does, none when it does not (a half-offloaded model
+            # on unified memory buys nothing). Metal is compiled into the
+            # baked llama.cpp (`scripts/build_pyenv.py`); without this
+            # branch the NVML probe below kept it at 0 layers.
+            return self._apple_gpu_layers(model_file)
         if free_vram is None:
             logger.info("llm offload: no NVIDIA GPU visible via NVML; running on CPU")
             return 0
@@ -132,6 +151,26 @@ class LlamaCppProvider:
             model_file.stat().st_size / 1e9,
         )
         return layers
+
+    def _apple_gpu_layers(self, model_file: Path) -> int:
+        memory = hardware.physical_memory_bytes()
+        model_bytes = model_file.stat().st_size
+        needed = int(model_bytes * _APPLE_MODEL_HEADROOM) + _APPLE_RESERVED_BYTES
+        if memory is None or needed > memory:
+            logger.info(
+                "llm offload: %.1f GB model does not fit the %s GB of unified memory; "
+                "running on CPU",
+                model_bytes / 1e9,
+                "unknown" if memory is None else f"{memory / 1e9:.0f}",
+            )
+            return 0
+        self._gpu_kind = "metal"
+        logger.info(
+            "llm offload: all layers on the Apple GPU (%.1f GB model, %.0f GB unified memory)",
+            model_bytes / 1e9,
+            memory / 1e9,
+        )
+        return -1
 
     def model_file(self) -> Path:
         """The GGUF file this provider will load (may not exist yet)."""

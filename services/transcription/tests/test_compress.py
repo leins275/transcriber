@@ -22,6 +22,8 @@ from transcription.compress import (
     DEFAULT_ENCODERS,
     HEVC_MP4_TAG,
     NVENC_HEVC,
+    QSV_HEVC,
+    VIDEOTOOLBOX_HEVC,
     X265,
     CompressOutcome,
     EncoderSpec,
@@ -550,6 +552,44 @@ def test_an_encoder_that_will_not_open_falls_through_to_the_next(tmp_path: Path)
     assert outcome.encoder == "libx265"
     assert _source_files(source.parent) == ["source.mp4"]
     assert _leftovers(source.parent) == []
+
+
+def test_each_platform_tries_its_gpu_encoders_then_x265() -> None:
+    assert compress.encoders_for_platform("win32") == (NVENC_HEVC, QSV_HEVC, X265)
+    assert compress.encoders_for_platform("darwin") == (VIDEOTOOLBOX_HEVC, X265)
+    assert compress.encoders_for_platform("linux") == DEFAULT_ENCODERS
+    assert QSV_HEVC.name == "hevc_qsv"
+    assert QSV_HEVC.pix_fmt == "nv12"
+    assert QSV_HEVC.options["global_quality"] == "26"
+    assert "b" not in QSV_HEVC.options, "ICQ mode: no bitrate target"
+    assert VIDEOTOOLBOX_HEVC.name == "hevc_videotoolbox"
+    assert VIDEOTOOLBOX_HEVC.options["flags"] == "+qscale"
+    assert VIDEOTOOLBOX_HEVC.options["global_quality"] == str(60 * 118)
+    assert VIDEOTOOLBOX_HEVC.options["allow_sw"] == "0"
+    for spec in (QSV_HEVC, VIDEOTOOLBOX_HEVC):
+        assert spec.name in compress.HEVC_ENCODER_NAMES, "the mp4 needs the hvc1 tag"
+
+
+def test_an_encoder_gets_frames_in_its_own_pixel_format(tmp_path: Path) -> None:
+    """QSV wants NV12: the stream and the scaled frames follow the spec's
+    pixel format instead of a hard-wired yuv420p (x264 takes both, so the
+    encode goes through either way; the format is what is checked)."""
+    source = make_recording(tmp_path, ext="mkv")
+    nv12_x264 = EncoderSpec("libx264", {"crf": "26", "preset": "ultrafast"}, pix_fmt="nv12")
+    seen: list[str] = []
+    real_reformat = av.VideoFrame.reformat
+
+    def spy(frame: av.VideoFrame, *args: object, **kwargs: object) -> av.VideoFrame:
+        if len(args) >= 3:
+            seen.append(str(args[2]))
+        return real_reformat(frame, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(av.VideoFrame, "reformat", spy)
+        outcome = _run(source, encoders=(nv12_x264,))
+
+    assert outcome.replaced is True
+    assert seen and set(seen) == {"nv12"}
 
 
 def test_the_gpu_encoder_goes_first_and_x265_at_crf_26_is_the_fallback() -> None:

@@ -19,6 +19,7 @@ contains no model-load event").
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,16 @@ def _cuda_device_count() -> int:
         return int(ctranslate2.get_cuda_device_count())
     except Exception:  # pragma: no cover - defensive; ctranslate2 always exposes this
         return 0
+
+
+def resolve_cpu_threads(config: Any) -> int:
+    """The threads a CPU decode gets: `cpu_threads` when set, else every
+    core the machine has (faster-whisper's own default is 4, which left a
+    10-core M4 and a 16-core Panther Lake mostly idle)."""
+    configured = int(getattr(config, "cpu_threads", 0) or 0)
+    if configured > 0:
+        return configured
+    return os.cpu_count() or 4
 
 
 def _resolve_device_and_compute_type(config: Any) -> tuple[str, str, bool]:
@@ -243,6 +254,13 @@ class LocalWhisperProvider:
             model_state=self._model_state,  # type: ignore[arg-type]
         )
 
+    def unload(self) -> None:
+        """Release the weights (`whisper_keep_loaded: false`); the next job
+        loads them again."""
+        self._model = None
+        self._pipeline = None
+        self._model_state = "unloaded"
+
     def _ensure_model(self) -> Any:
         if self._model is not None:
             return self._model
@@ -279,7 +297,7 @@ class LocalWhisperProvider:
                 "local_files_only": True,
             }
             if device == "cpu":
-                kwargs["cpu_threads"] = getattr(self.config, "cpu_threads", 4)
+                kwargs["cpu_threads"] = resolve_cpu_threads(self.config)
             return kwargs
 
         try:

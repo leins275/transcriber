@@ -129,8 +129,24 @@ def select_runtime_variant() -> str | None:
 
 
 def runtime_total_bytes(variant: str | None) -> int:
-    """What a fetch of ``variant`` transfers; 0 when none is offered."""
-    return TOTAL_BYTES[variant] if variant is not None else 0
+    """What a fetch of ``variant`` transfers; 0 when none is offered (or
+    when the variant is baked rather than fetched, like ``mps``)."""
+    return TOTAL_BYTES.get(variant, 0) if variant is not None else 0
+
+
+def reported_runtime_variant() -> str | None:
+    """What the Settings row labels the runtime with: the fetchable variant
+    on Windows; ``mps`` on Apple Silicon, where the macOS build bakes the
+    runtime and the pass runs on the GPU through torch's MPS backend;
+    ``None`` where none is offered."""
+    variant = select_runtime_variant()
+    if variant is not None:
+        return variant
+    from transcription.hardware import apple_silicon_present  # noqa: PLC0415 - cycle-safe
+
+    if apple_silicon_present() and pyannote_importable():
+        return "mps"
+    return None
 
 
 def _manifest_versions(packages: tuple[CudaPackage, ...]) -> dict[str, str]:
@@ -633,7 +649,7 @@ def diarization_status(config: Config) -> dict[str, Any]:
     Speakers settings row -- which prerequisites are met, which runtime
     variant a fetch would land (``None`` where none is offered) and
     whether the feature is switched on."""
-    variant = select_runtime_variant()
+    variant = reported_runtime_variant()
     return {
         "runtime_present": runtime_available(config.app_dir),
         "model_present": is_diarization_model_present(config.app_dir),

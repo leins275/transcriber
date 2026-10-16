@@ -12,8 +12,10 @@
 
 use serde::Serialize;
 
+use std::collections::BTreeMap;
+
 use crate::error::AppError;
-use crate::service::{ModelDownloadState, ModelDownloadStatus, ServiceError};
+use crate::service::{EngineRow, ModelDownloadState, ModelDownloadStatus, ServiceError};
 
 use super::AppState;
 
@@ -65,13 +67,24 @@ pub struct ModelDownloadStatusView {
     /// E13: `None` when F2 itself judged this host GPU-less (never prompt
     /// about a runtime that machine could never use).
     pub cuda_runtime_present: Option<bool>,
+    /// The chained setup's current phase name; `None` for a bare model
+    /// download. Labelled by `ModelDownloadStep.tsx`.
+    pub phase: Option<String>,
+    /// The optional phases that failed while the setup carried on, by
+    /// phase name, with F2's own message verbatim.
+    pub warnings: BTreeMap<String, String>,
+    /// `/health`'s engine plan for this machine (`engines.py`): what the
+    /// Settings Engines block and the wizard's setup notice render.
+    pub engines: Vec<EngineRow>,
 }
 
 /// Health-derived fields the download status alone cannot answer (FR-17,
-/// E13): whether the model is present, and whether the CUDA runtime is.
+/// E13): whether the model is present, whether the CUDA runtime is, and
+/// the engine plan.
 struct HealthFields {
     model_present: bool,
     cuda_runtime_present: Option<bool>,
+    engines: Vec<EngineRow>,
 }
 
 fn build_view(status: ModelDownloadStatus, health: HealthFields) -> ModelDownloadStatusView {
@@ -85,6 +98,9 @@ fn build_view(status: ModelDownloadStatus, health: HealthFields) -> ModelDownloa
         model_present: health.model_present,
         cuda_warning: status.cuda_warning,
         cuda_runtime_present: health.cuda_runtime_present,
+        phase: status.phase,
+        warnings: status.warnings,
+        engines: health.engines,
     }
 }
 
@@ -115,10 +131,12 @@ async fn health_fields(state: &AppState) -> HealthFields {
         HealthFields {
             model_present: false,
             cuda_runtime_present: None,
+            engines: Vec::new(),
         },
         |health| HealthFields {
             model_present: health.model_present,
             cuda_runtime_present: health.cuda_runtime_present,
+            engines: health.engines,
         },
     )
 }

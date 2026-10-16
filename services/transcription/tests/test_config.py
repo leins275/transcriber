@@ -652,3 +652,51 @@ def test_llm_model_unknown_id_without_a_file_raises_naming_the_catalog(
         load_config(env=env)
     for model_id in llm_catalog.known_ids():
         assert model_id in str(excinfo.value)
+
+
+# -- whisper engine keys (engines.py) ------------------------------------------
+
+
+def test_whisper_engine_keys_default_to_auto(tmp_app_dir: Path) -> None:
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+    assert cfg.whisper_backend == "auto"
+    assert cfg.whisper_openvino_device == "auto"
+    assert cfg.whisper_openvino_repo == "OpenVINO/whisper-large-v3-turbo-int8-ov"
+    assert cfg.whisper_mlx_repo == "mlx-community/whisper-large-v3-mlx"
+    assert cfg.cpu_threads == 0
+    assert cfg.whisper_keep_loaded is None
+    assert cfg.public()["whisper_backend"] == "auto"
+
+
+def test_whisper_engine_keys_are_validated_and_case_folded(tmp_app_dir: Path) -> None:
+    _write_config(
+        tmp_app_dir,
+        {
+            "whisper_backend": "OpenVINO",
+            "whisper_openvino_device": "npu",
+            "cpu_threads": "8",
+            "whisper_keep_loaded": "false",
+        },
+    )
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+    assert cfg.whisper_backend == "openvino"
+    assert cfg.whisper_openvino_device == "NPU"
+    assert cfg.cpu_threads == 8
+    assert cfg.whisper_keep_loaded is False
+
+    _write_config(tmp_app_dir, {"whisper_backend": "coreml"})
+    with pytest.raises(ConfigError, match="whisper_backend"):
+        load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+    _write_config(tmp_app_dir, {"whisper_openvino_device": "TPU"})
+    with pytest.raises(ConfigError, match="whisper_openvino_device"):
+        load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+
+
+def test_an_empty_whisper_engine_key_means_its_default(tmp_app_dir: Path) -> None:
+    _write_config(tmp_app_dir, {"whisper_backend": "", "whisper_keep_loaded": ""})
+    cfg = load_config(env={"TRANSCRIBER_APP_DIR": str(tmp_app_dir)})
+    assert cfg.whisper_backend == "auto"
+    assert cfg.whisper_keep_loaded is None

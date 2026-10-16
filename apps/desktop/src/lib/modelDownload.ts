@@ -24,6 +24,122 @@ export type ModelDownloadStatus = {
   /** E13: `null` when the service itself judged this host GPU-less (never
    * prompt about a runtime that machine could never use). */
   cuda_runtime_present: boolean | null;
+  /** The chained setup's current phase (`model`, `cuda_runtime`,
+   * `openvino_runtime`, `openvino_weights`, `mlx_weights`); `null` for a
+   * bare model download. */
+  phase: string | null;
+  /** The optional phases that failed while the setup carried on, by phase
+   * name, with the service's own message verbatim. */
+  warnings: Record<string, string>;
+  /** `/health`'s engine plan for this machine: which engine each stage
+   * runs on and whether its payload is installed (`null` = nothing to
+   * install). Empty until the service answered. */
+  engines: EngineRow[];
+};
+
+/** One row of the service's engine plan (`engines.py`). */
+export type EngineRow = {
+  stage: "whisper" | "llm" | "diarization" | "compress" | string;
+  engine: string;
+  device: string;
+  present: boolean | null;
+};
+
+/** A phase in the operator's words: `label` names the feature ("GPU
+ * acceleration is not installed"), `payload` what is being transferred
+ * ("Downloading GPU runtime"), `short` the retry button's subject ("Retry
+ * GPU setup"). */
+export type PhaseWords = { label: string; payload: string; short: string };
+
+/** The phase names on the wire. */
+export const PHASE_WORDS: Record<string, PhaseWords> = {
+  model: { label: "Speech model", payload: "speech model", short: "model" },
+  cuda_runtime: { label: "GPU acceleration", payload: "GPU runtime", short: "GPU" },
+  openvino_runtime: { label: "Intel NPU engine", payload: "NPU engine", short: "NPU" },
+  openvino_weights: { label: "NPU speech model", payload: "NPU speech model", short: "NPU" },
+  mlx_weights: {
+    label: "Apple GPU speech model",
+    payload: "Apple GPU speech model",
+    short: "Apple GPU",
+  },
+};
+
+export function phaseWords(phase: string | null | undefined): PhaseWords | null {
+  if (!phase) return null;
+  return PHASE_WORDS[phase] ?? { label: phase, payload: phase, short: phase };
+}
+
+/** Which phase sets up a whisper engine the plan names but has not got. */
+const SETUP_PHASE_FOR_ENGINE: Record<string, string> = {
+  ctranslate2: "cuda_runtime",
+  mlx: "mlx_weights",
+  openvino: "openvino_runtime",
+};
+
+export type EngineSetup = PhaseWords & { phase: string; detail: string | null };
+
+/** The accelerated-engine setup this machine is offered but does not have
+ * yet: a failed optional phase first (with the service's own message),
+ * else the durable `/health` signals -- the CUDA runtime missing on an
+ * NVIDIA host, or the whisper row's payload missing. `null` when there is
+ * nothing to set up (or nothing known yet). */
+export function engineSetupNeeded(
+  status: Pick<
+    ModelDownloadStatus,
+    "warnings" | "engines" | "cuda_warning" | "cuda_runtime_present"
+  >,
+): EngineSetup | null {
+  const failed = Object.entries(status.warnings ?? {});
+  if (failed.length > 0) {
+    const [phase, message] = failed[0];
+    return { phase, ...phaseWords(phase)!, detail: message };
+  }
+  if (status.cuda_warning || status.cuda_runtime_present === false) {
+    return { phase: "cuda_runtime", ...PHASE_WORDS.cuda_runtime, detail: status.cuda_warning };
+  }
+  const whisper = (status.engines ?? []).find((row) => row.stage === "whisper");
+  if (whisper && whisper.present === false) {
+    const phase = SETUP_PHASE_FOR_ENGINE[whisper.engine] ?? "model";
+    return { phase, ...phaseWords(phase)!, detail: null };
+  }
+  return null;
+}
+
+const ENGINE_NAMES: Record<string, string> = {
+  ctranslate2: "faster-whisper",
+  mlx: "MLX whisper",
+  openvino: "OpenVINO whisper",
+  "llama.cpp": "llama.cpp",
+  pyannote: "pyannote",
+  hevc_nvenc: "NVENC",
+  hevc_qsv: "Quick Sync",
+  hevc_videotoolbox: "VideoToolbox",
+  libx265: "x265",
+};
+
+const DEVICE_NAMES: Record<string, string> = {
+  cuda: "NVIDIA GPU",
+  metal: "Apple GPU",
+  mps: "Apple GPU",
+  NPU: "Intel NPU",
+  GPU: "Intel GPU",
+  gpu: "GPU",
+  cpu: "CPU",
+  CPU: "CPU",
+};
+
+/** "MLX whisper on the Apple GPU" -- one engine row in words. */
+export function engineLabel(row: EngineRow): string {
+  const engine = ENGINE_NAMES[row.engine] ?? row.engine;
+  const device = DEVICE_NAMES[row.device] ?? row.device;
+  return `${engine} on the ${device}`;
+}
+
+export const STAGE_LABELS: Record<string, string> = {
+  whisper: "Transcription",
+  llm: "Summaries",
+  diarization: "Speakers",
+  compress: "Video compression",
 };
 
 /** E8/FR-12 acceptance ("updates at least once a second"): the service

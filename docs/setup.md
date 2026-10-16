@@ -230,6 +230,54 @@ uv run scripts/sync_version.py --check
 `--check` (what `make lint` runs) fails, naming the drifting manifest, if any
 one of them is edited by hand instead of through `--set`.
 
+## Engines per machine (first run)
+
+The app picks the engine for each stage from the machine's hardware and
+fetches what that engine needs, on top of the whisper `large-v3` snapshot
+every machine downloads (it is the fallback engine and what the first-run
+gate reads). Settings → **Engines** lists the four rows — transcription,
+summaries, speakers, video compression — with the engine and device each
+runs on, and the Recordings page's setup notice offers the download (or a
+retry) whenever an accelerated engine's payload is still missing; the
+sidebar's "Ready · GPU / NPU / CPU" follows the transcription row.
+
+| Machine | Transcription | Summaries | Speakers | Video |
+|---|---|---|---|---|
+| Windows + NVIDIA | faster-whisper on CUDA (CUDA runtime, ~1.4 GB, first run) | llama.cpp CUDA build (~460 MB, Settings) | pyannote + CUDA torch (~3 GB, Settings) | NVENC |
+| MacBook (Apple Silicon) | **mlx-whisper on the GPU** (weights ~3 GB, first run) | llama.cpp on Metal (built in) | pyannote on the Apple GPU (built in) | VideoToolbox |
+| Windows + Intel Core Ultra (NPU) | **OpenVINO whisper on the NPU** (runtime ~90 MB + turbo weights ~830 MB, first run), GPU then CPU as fallback | llama.cpp on the CPU | pyannote + CPU torch (~340 MB, Settings) | Quick Sync |
+| anything else | faster-whisper on the CPU, every core | CPU | CPU torch | x265 |
+
+Notes per machine:
+
+- **Apple Silicon.** The dmg carries the MLX and pyannote stacks outright
+  (about 400 MB more than before); only the model weights download. With
+  16 GB of unified memory the LLM offloads every layer, and whisper's
+  weights are released after each job so the summary that follows has
+  the memory (`whisper_keep_loaded`). The transcript is decoded greedily
+  (mlx-whisper has no beam search); measure agreement against a CUDA
+  transcript of the same recording before trusting it on a new kind of
+  audio.
+- **Intel Core Ultra.** Needs Windows 11 and Intel's NPU driver (the one
+  Windows Update installs; 32.0.100.5540 or newer pairs with the pinned
+  OpenVINO 2026.4). The first job on the NPU compiles the model — a few
+  minutes on a Panther Lake, the job shows "preparing" meanwhile — and
+  the driver caches the result. The default weights are
+  `whisper-large-v3-turbo` int8 (OpenVINO's validated NPU workload);
+  `whisper_openvino_repo: OpenVINO/whisper-large-v3-int8-ov` in
+  `config.json` switches to the full model, `whisper_openvino_device:
+  GPU` pins the iGPU. A machine with an NVIDIA GPU as well never gets the
+  OpenVINO engine: CUDA serves it better.
+- **Pinning an engine.** `whisper_backend` (`ctranslate2`, `mlx`,
+  `openvino`) in `config.json` overrides the choice; the service falls
+  back to faster-whisper, with a log line, when the pinned engine's
+  library or weights are missing.
+
+Not done yet, by design (see `specs/engine-per-machine/spec.md`): the LLM
+on the Intel iGPU or NPU (llama.cpp's OpenVINO backend is a preview that
+fails Qwen3.5 on the NPU; no prebuilt Vulkan wheel), CoreML/ANE whisper on
+the Mac (Swift-only), pyannote on Intel XPU.
+
 ## Video compression (on by default)
 
 A dropped **video** goes through one more stage after its transcript,
@@ -240,9 +288,11 @@ replaces `source.<ext>` with `source.mp4` (the job list shows it as
 "Compressing video" with the decoded fraction). The encode runs in-process
 through PyAV's bundled FFmpeg — nothing to install, no `ffmpeg.exe`
 anywhere: on an NVIDIA GPU it is NVENC's HEVC encoder (constant quality,
-CQ 28), and x265 at CRF 26 on the CPU when NVENC will not open (no NVIDIA
-GPU, an old driver). Decoding and downscaling stay on the CPU either way,
-so the CPU is busy during a GPU encode too. The audio track is **evened
+CQ 28); on an Intel machine Quick Sync's (`hevc_qsv`, ICQ 26); on a Mac
+Apple's VideoToolbox (`hevc_videotoolbox`, quality 60 of 100); and x265
+at CRF 26 on the CPU when none of them will open (no such GPU, an old
+driver). Decoding and downscaling stay on the CPU either way, so the CPU
+is busy during a GPU encode too. The audio track is **evened
 out** on the way: a quiet speaker is lifted towards the loud ones (FFmpeg's
 Dynamic Audio Normalizer, in-process like the rest) and the track is
 re-encoded to AAC — measured on this vault's worst meetings, voices 12–17 dB
@@ -309,8 +359,10 @@ through the rest, top to bottom; every step is skipped once done:
    service decides from whether `nvidia-smi` is on `PATH`, and a GPU that
    appears or disappears later re-offers the fetch in the other build
    (the old tree is replaced, never mixed). Resumable and cancellable
-   like the other downloads. Windows only — a macOS dev environment
-   installs the service's `diarization` extra instead.
+   like the other downloads. Windows only: the macOS build bakes the
+   runtime (the row says "pyannote + Apple GPU torch, bundled") and runs
+   the pass on the GPU through torch's MPS backend; a macOS dev
+   environment installs the service's `diarization` extra.
 2. **Identify speakers in new recordings.** The `diarize` switch: every
    new transcription runs the pass, cuts segments at changes of voice, and
    pre-names any voice you have already named in another meeting -- of any

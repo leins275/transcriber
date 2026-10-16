@@ -5,7 +5,9 @@
 //! so every other task's tests can drive the whole UI flow deterministically
 //! without a running F2 process.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+use crate::service::EngineRow;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -194,6 +196,8 @@ impl FakeModelDownload {
             error_kind,
             error_message,
             cuda_warning: self.cuda_warning.clone(),
+            phase: None,
+            warnings: BTreeMap::new(),
         }
     }
 }
@@ -559,6 +563,34 @@ impl TranscriptionService for FakeService {
             // fetched -- dev sessions exercise the happy path by default.
             llm_gpu_build_present: Some(true),
             embedding_model_present: Some(inner.embedding.present),
+            // The fake plays an NVIDIA machine: CUDA whisper whose runtime
+            // follows the simulated CUDA phase, the rest ready.
+            engines: vec![
+                EngineRow {
+                    stage: "whisper".to_string(),
+                    engine: "ctranslate2".to_string(),
+                    device: "cuda".to_string(),
+                    present: Some(inner.model.cuda_runtime_present),
+                },
+                EngineRow {
+                    stage: "llm".to_string(),
+                    engine: "llama.cpp".to_string(),
+                    device: "cuda".to_string(),
+                    present: Some(true),
+                },
+                EngineRow {
+                    stage: "diarization".to_string(),
+                    engine: "pyannote".to_string(),
+                    device: "cuda".to_string(),
+                    present: Some(true),
+                },
+                EngineRow {
+                    stage: "compress".to_string(),
+                    engine: "hevc_nvenc".to_string(),
+                    device: "gpu".to_string(),
+                    present: None,
+                },
+            ],
         })
     }
 

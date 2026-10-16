@@ -31,9 +31,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::{
-    ChatEvent, ChatRequest, DiarizationStatus, IndexMeeting, IndexStatus, JobStatus,
+    ChatEvent, ChatRequest, DiarizationStatus, EngineRow, IndexMeeting, IndexStatus, JobStatus,
     LedgerCompression, LedgerJob, LlmCatalogModel, LlmModelsStatus, LlmSubmitRequest,
     ModelDownloadState, ModelDownloadStatus, SearchHit, SearchQuery, ServiceError, ServiceHealth,
     SubmitRequest, TranscriptionService,
@@ -454,6 +455,10 @@ struct HealthResponse {
     /// search), same convention as above.
     #[serde(default)]
     embedding_model_present: Option<bool>,
+    /// Empty when the field is absent (a build of F2 older than the
+    /// engine plan).
+    #[serde(default)]
+    engines: Vec<EngineRow>,
 }
 
 /// `GET`/`POST`/`DELETE /v1/model/download` response body (T13, FR-12).
@@ -472,6 +477,12 @@ struct ModelDownloadResponse {
     /// otherwise, hence `#[serde(default)]`.
     #[serde(default)]
     cuda_warning: Option<String>,
+    /// Present on a chained setup (`SetupDownload`), absent on a bare
+    /// model download or an older F2.
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    warnings: BTreeMap<String, String>,
 }
 
 /// `GET /v1/diarization/status` body (`schema.py::DiarizationStatus`).
@@ -505,6 +516,8 @@ impl ModelDownloadResponse {
             error_kind: self.error_kind,
             error_message: self.error_message,
             cuda_warning: self.cuda_warning,
+            phase: self.phase,
+            warnings: self.warnings,
         })
     }
 }
@@ -751,6 +764,7 @@ impl TranscriptionService for HttpTranscriptionService {
             llm_model_present: parsed.llm_model_present,
             llm_gpu_build_present: parsed.llm_gpu_build_present,
             embedding_model_present: parsed.embedding_model_present,
+            engines: parsed.engines,
         })
     }
 

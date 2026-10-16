@@ -86,7 +86,12 @@ the same progress/resume/verify UI as the model download
 pyenv: the vendored, 32-bit `makensis.exe` cannot compile the ~2.3 GiB
 payload that produced. A machine with no NVIDIA GPU (or a failed/declined
 CUDA download) transcribes on CPU instead — best-effort, not a broken
-install.
+install. The same first-run download is a chain of named phases composed
+per machine (`engines.py`): on Apple Silicon it fetches the MLX whisper
+weights after the model, on an Intel Core Ultra machine the OpenVINO
+runtime and the exported weights, each optional — a failed phase becomes
+a warning with a retry, never a blocked model (`docs/setup.md`, "Engines
+per machine").
 
 ## QA
 

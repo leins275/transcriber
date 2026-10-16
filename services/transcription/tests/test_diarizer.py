@@ -108,6 +108,26 @@ def _config(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
+def test_auto_device_prefers_cuda_then_mps_then_cpu() -> None:
+    from transcription.diarizer import _auto_torch_device
+
+    class _Backend:
+        def __init__(self, available: bool) -> None:
+            self._available = available
+
+        def is_available(self) -> bool:
+            return self._available
+
+    def torch(cuda: bool, mps: bool | None) -> SimpleNamespace:
+        backends = SimpleNamespace() if mps is None else SimpleNamespace(mps=_Backend(mps))
+        return SimpleNamespace(cuda=_Backend(cuda), backends=backends)
+
+    assert _auto_torch_device(torch(True, True)) == "cuda"
+    assert _auto_torch_device(torch(False, True)) == "mps"
+    assert _auto_torch_device(torch(False, False)) == "cpu"
+    assert _auto_torch_device(torch(False, None)) == "cpu", "a torch without the MPS backend"
+
+
 def _wire(
     monkeypatch: pytest.MonkeyPatch,
     diarizer: PyannoteDiarizer,

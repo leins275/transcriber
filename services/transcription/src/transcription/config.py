@@ -51,6 +51,10 @@ _MODEL_KEY = "model"
 # the decoder.
 _ALLOWED_LANGUAGES = ("ru", "en", "tr")
 
+# The whisper engine choices (`engines.py` owns the semantics).
+_WHISPER_BACKENDS = ("auto", "ctranslate2", "mlx", "openvino")
+_OPENVINO_DEVICES = ("auto", "NPU", "GPU", "CPU")
+
 _DEFAULT_LLM_ENTRY = llm_catalog.DEFAULT_ENTRY
 
 
@@ -69,6 +73,32 @@ class Config:
     device: str = "auto"
     compute_type: str | None = None
     provider: str = "local"
+    # --- Whisper engine (engines.py) ---
+    # `auto` runs the accelerated engine this machine is offered (mlx on
+    # Apple Silicon, OpenVINO on an Intel NPU/GPU machine without an NVIDIA
+    # GPU) once its payload is on disk, and faster-whisper otherwise;
+    # `ctranslate2` / `mlx` / `openvino` pin one.
+    whisper_backend: str = "auto"
+    # The OpenVINO device order: `auto` tries NPU, then GPU, then CPU, as
+    # the machine has them; a device name pins it.
+    whisper_openvino_device: str = "auto"
+    # The pre-exported OpenVINO IR the first-run download fetches into
+    # `<app_dir>/models/whisper-openvino/<repo basename>/`. Turbo int8 is
+    # OpenVINO's own validated NPU workload; `OpenVINO/whisper-large-v3-
+    # int8-ov` is the full-size alternative.
+    whisper_openvino_repo: str = "OpenVINO/whisper-large-v3-turbo-int8-ov"
+    whisper_openvino_revision: str = "b568445dd5dc8c695bde596f8acbb4694fd6ba64"
+    # The MLX weights (fp16 large-v3) fetched into
+    # `<app_dir>/models/whisper-mlx/<repo basename>/` on Apple Silicon.
+    whisper_mlx_repo: str = "mlx-community/whisper-large-v3-mlx"
+    whisper_mlx_revision: str = "49e6aa286ad60c14352c404340ded53710378a11"
+    # CPU threads for a whisper engine running on the CPU; 0 = every core.
+    cpu_threads: int = 0
+    # Keep the whisper model resident between jobs. `None` decides by
+    # machine: released after each job on Apple Silicon, where the GPU
+    # shares the 16-32 GB of unified memory with the LLM that runs next,
+    # kept everywhere else (reloading costs seconds).
+    whisper_keep_loaded: bool | None = None
     db_path: str = ""
     allowed_roots: tuple[str, ...] = field(default_factory=tuple)
     # Hard-pinned (FR-9): `load_config` excludes this key from the config
@@ -189,6 +219,8 @@ class Config:
             "model": self.model,
             "device": self.device,
             "compute_type": self.compute_type,
+            "whisper_backend": self.whisper_backend,
+            "whisper_openvino_device": self.whisper_openvino_device,
             "language": self.language,
             "filter_hallucinations": self.filter_hallucinations,
             "word_timestamps": self.word_timestamps,
@@ -253,6 +285,23 @@ def _normalize_language(value: object) -> str | None:
 
 def _env_value(env: Mapping[str, str], key: str) -> str | None:
     return env.get(f"TRANSCRIBER_{key.upper()}")
+
+
+def _validate_choice(values: dict[str, Any], key: str, allowed: tuple[str, ...]) -> None:
+    """Normalize an enumerated string key; empty means its default."""
+    if key not in values:
+        return
+    raw = values[key]
+    if raw in (None, ""):
+        del values[key]
+        return
+    normalized = str(raw).strip()
+    # Device names are upper-case (`NPU`), backends lower-case.
+    match = next((choice for choice in allowed if choice.lower() == normalized.lower()), None)
+    if match is None:
+        choices = ", ".join(repr(choice) for choice in allowed)
+        raise ConfigError(f"invalid {key} {str(raw)!r}: allowed values are {choices}")
+    values[key] = match
 
 
 def _resolve_llm_model(values: dict[str, Any]) -> None:
@@ -435,6 +484,14 @@ def load_config(
 
     if "compute_type" in values and values["compute_type"] in (None, ""):
         values["compute_type"] = None
+    _validate_choice(values, "whisper_backend", _WHISPER_BACKENDS)
+    _validate_choice(values, "whisper_openvino_device", _OPENVINO_DEVICES)
+    if "cpu_threads" in values:
+        values["cpu_threads"] = int(values["cpu_threads"] or 0)
+    if "whisper_keep_loaded" in values and values["whisper_keep_loaded"] not in (None, ""):
+        values["whisper_keep_loaded"] = _parse_bool(values["whisper_keep_loaded"])
+    elif "whisper_keep_loaded" in values:
+        values["whisper_keep_loaded"] = None
 
     # Validated after every layer has merged, so a valid override can replace
     # an invalid config-file/env value (and an invalid override always loses).

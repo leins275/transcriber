@@ -193,6 +193,22 @@ LLAMA_CPP_CPU_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 # baked).
 BASE_EXTRAS: tuple[str, ...] = ("llm-cpu",)
 
+# Extras a platform's bake adds on top of BASE_EXTRAS. The dmg is not bound
+# by the 32-bit NSIS limit that keeps every GPU payload out of the Windows
+# bake, so the macOS build carries the Apple Silicon whisper engine
+# (`whisper-mlx`, mlx-whisper on the GPU) and the speaker runtime
+# (`diarization`, pyannote + torch, run on the GPU through MPS) outright;
+# only their weights are fetched at first run. Windows keeps fetching its
+# accelerated payloads at first run (CUDA, OpenVINO, the speaker runtime).
+PLATFORM_EXTRAS: dict[str, tuple[str, ...]] = {
+    "darwin": ("whisper-mlx", "diarization"),
+}
+
+
+def platform_extras(platform: str = sys.platform) -> tuple[str, ...]:
+    """The extras `platform`'s bake always includes beyond BASE_EXTRAS."""
+    return PLATFORM_EXTRAS.get(platform, ())
+
 
 def install_dependencies(
     uv_exe: str, python_exe: Path, requirements_file: Path, target_dir: Path
@@ -333,8 +349,12 @@ def bake(
     uv = find_uv(uv_exe)
     check_lock_fresh(service_dir, uv)
 
-    # The always-baked extras lead; caller extras follow, deduplicated.
-    extras = tuple(BASE_EXTRAS) + tuple(e for e in extras if e not in BASE_EXTRAS)
+    # The always-baked extras lead (the base ones, then this platform's);
+    # caller extras follow, deduplicated.
+    always = tuple(BASE_EXTRAS) + tuple(
+        e for e in platform_extras() if e not in BASE_EXTRAS
+    )
+    extras = always + tuple(e for e in extras if e not in always)
 
     if out_dir.exists():
         shutil.rmtree(out_dir)

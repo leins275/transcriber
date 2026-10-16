@@ -25,7 +25,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from transcription import artifacts, compress, exporting, llm_catalog, paths, transcript
+from transcription import (
+    artifacts,
+    compress,
+    exporting,
+    hardware,
+    llm_catalog,
+    paths,
+    transcript,
+)
 from transcription.config import Config
 from transcription.diarization import label_segments, split_segments_at_turns
 from transcription.diarizer import DiarizerProtocol, PyannoteDiarizer
@@ -359,6 +367,12 @@ class JobManager:
         running, preserving the one-model-at-a-time RAM/VRAM guarantee.
         """
         return await asyncio.get_running_loop().run_in_executor(self._executor, fn)
+
+    def _keep_whisper_loaded(self) -> bool:
+        configured = getattr(self._config, "whisper_keep_loaded", None)
+        if configured is not None:
+            return bool(configured)
+        return not hardware.apple_silicon_present()
 
     def llm_info(self) -> dict[str, Any]:
         """A cheap `/health` snapshot of the LLM engine's state (E15-safe).
@@ -1131,6 +1145,18 @@ class JobManager:
                     self._llm.unload()
                 except Exception:  # noqa: BLE001 - unload must never take the worker down
                     _logger.warning("failed to unload the LLM after job %s", job.job_id)
+            # The whisper engine releases its weights after a transcription
+            # where the config (or, unset, the machine) says so: on Apple
+            # Silicon the GPU's memory is the machine's, and the LLM that
+            # summarizes next needs it.
+            if job.job_type == "transcribe" and not self._keep_whisper_loaded():
+                whisper = self._providers.get(job.provider)
+                unload = getattr(whisper, "unload", None)
+                if unload is not None:
+                    try:
+                        unload()
+                    except Exception:  # noqa: BLE001 - unload must never take the worker down
+                        _logger.warning("failed to unload whisper after job %s", job.job_id)
             # The embedder always unloads after an index job (~700 MB RSS,
             # mmap-fast reload; no keep-loaded semantics on purpose).
             if job.job_type == "index" and self._embedder is not None:
@@ -1501,6 +1527,7 @@ class JobManager:
             on_progress=lambda fraction: _set_phase(job, phase, fraction),
             cancel=job.cancel_token.raise_if_cancelled,
             normalize_audio=job.normalize_audio is not False,
+            encoders=compress.encoders_for_platform(),
         )
         if outcome.warning is not None:
             job.warnings.append(outcome.warning)

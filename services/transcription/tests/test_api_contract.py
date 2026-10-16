@@ -102,6 +102,28 @@ def test_health_returns_ok_with_unloaded_model_state_before_any_job(
         "llm_gpu_build_present": None,
         # The search-embedding GGUF is likewise absent in a fresh app dir.
         "embedding_model_present": False,
+        # The engine plan (`engines.py`) for the plain machine the suite's
+        # autouse fixture pins: faster-whisper on the CPU with no model yet,
+        # the CPU LLM, the CPU speaker pass, x265.
+        "accelerators": {
+            "nvidia": False,
+            "apple_silicon": False,
+            "intel_npu": False,
+            "intel_gpu": False,
+            "physical_memory_bytes": 32 * 1024**3,
+        },
+        "engines": [
+            {"stage": "whisper", "engine": "ctranslate2", "device": "cpu", "present": False},
+            {"stage": "llm", "engine": "llama.cpp", "device": "cpu", "present": True},
+            {
+                "stage": "diarization",
+                "engine": "pyannote",
+                "device": "cpu",
+                # A dev environment synced with the extra reads as present.
+                "present": body["engines"][2]["present"],
+            },
+            {"stage": "compress", "engine": "libx265", "device": "cpu", "present": None},
+        ],
     }
 
 

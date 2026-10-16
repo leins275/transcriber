@@ -438,6 +438,44 @@ def test_streaming_complete_reports_the_finish_reason(finish_reason: str) -> Non
     assert completion.finish_reason == finish_reason
 
 
+def test_apple_silicon_offloads_every_layer_when_the_model_fits_unified_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The baked macOS llama.cpp has Metal; the NVML probe used to keep it
+    at 0 layers. On Apple Silicon the question is whether the GGUF fits
+    the unified memory, and the answer is all layers or none."""
+    from types import SimpleNamespace
+
+    from transcription import hardware
+    from transcription.llm import llama_cpp_local
+    from transcription.llm.llama_cpp_local import LlamaCppProvider
+
+    monkeypatch.setattr(hardware, "apple_silicon_present", lambda: True)
+    monkeypatch.setattr(llama_cpp_local, "_free_vram_bytes", lambda: None)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"\0" * 1024)
+    provider = LlamaCppProvider.__new__(LlamaCppProvider)
+    provider.config = SimpleNamespace(llm_gpu_layers=-1)  # type: ignore[assignment]
+    provider._gpu_kind = "cuda"
+    llama_cpp = SimpleNamespace(llama_supports_gpu_offload=lambda: True)
+
+    monkeypatch.setattr(hardware, "physical_memory_bytes", lambda: 16 * 1024**3)
+    assert provider._resolve_gpu_layers(model, llama_cpp) == -1
+    assert provider._gpu_kind == "metal"
+
+    provider._gpu_kind = "cuda"
+    monkeypatch.setattr(hardware, "physical_memory_bytes", lambda: 2 * 1024**3)
+    assert provider._resolve_gpu_layers(model, llama_cpp) == 0, "4 GiB stays for the rest"
+    assert provider._gpu_kind == "cuda"
+
+    monkeypatch.setattr(hardware, "physical_memory_bytes", lambda: None)
+    assert provider._resolve_gpu_layers(model, llama_cpp) == 0, "unknown memory: CPU"
+
+    # Elsewhere, no NVML still means the CPU.
+    monkeypatch.setattr(hardware, "apple_silicon_present", lambda: False)
+    assert provider._resolve_gpu_layers(model, llama_cpp) == 0
+
+
 def test_count_tokens_falls_back_to_the_heuristic_when_loading_fails() -> None:
     from transcription.llm.llama_cpp_local import LlamaCppProvider
 

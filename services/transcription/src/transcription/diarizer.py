@@ -152,6 +152,17 @@ def _progress_hook(on_progress: ProgressCallback | None) -> Callable[..., None]:
     return hook
 
 
+def _auto_torch_device(torch: Any) -> str:
+    """`auto`: CUDA, else Apple's MPS, else the CPU -- the same answer the
+    engine plan gives (`engines._diarization_row`)."""
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def _classify_diarize_failure(exc: Exception) -> ErrorKind:
     message = str(exc).lower()
     if any(marker in message for marker in _MODEL_LOAD_ERROR_MARKERS):
@@ -217,6 +228,10 @@ class PyannoteDiarizer:
 
     def _import_pyannote(self) -> Any:
         """The import seam tests monkeypatch; returns the `Pipeline` class."""
+        # Apple Silicon: pyannote's pipeline runs on the GPU through torch's
+        # MPS backend, which still lacks a few operators; with this set
+        # before torch is imported they run on the CPU instead of raising.
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         if self._app_dir is not None:
             # pyannote reads `PYANNOTE_CACHE` when it is imported, so the
             # cache directory must be decided before the import below; and
@@ -249,7 +264,7 @@ class PyannoteDiarizer:
 
         device = self.device
         if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            device = _auto_torch_device(torch)
         self.device = device
         return torch.device(device)
 

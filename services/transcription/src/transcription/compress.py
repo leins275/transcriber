@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -118,6 +119,8 @@ class EncoderSpec:
 
     name: str
     options: dict[str, str]
+    # The pixel format the encoder takes its frames in.
+    pix_fmt: str = "yuv420p"
 
 
 X265 = EncoderSpec(
@@ -133,8 +136,52 @@ NVENC_HEVC = EncoderSpec(
     {"preset": "p6", "rc": "vbr", "cq": "28", "b": "0"},
 )
 
+# Intel Quick Sync (the GPU's media engine, through the libvpl PyAV's
+# Windows wheels bundle). ICQ mode: `global_quality` alone decides the
+# size, like x265's CRF (no bitrate target, no look-ahead). The 1-51 scale
+# is x265's. Needs NV12 frames.
+QSV_HEVC = EncoderSpec(
+    "hevc_qsv",
+    {"global_quality": "26", "preset": "medium", "look_ahead": "0"},
+    pix_fmt="nv12",
+)
+
+# Apple's media engine (VideoToolbox, bundled in PyAV's macOS wheels).
+# Constant quality is the generic `-q:v` of the ffmpeg CLI -- the qscale
+# flag plus `global_quality` in lambda units (FF_QP2LAMBDA = 118) -- on a
+# 0-100 scale where higher is better; it exists on Apple Silicon only,
+# which is also the only macOS the installer targets. `allow_sw=0` makes
+# a machine without the hardware encoder fail over to x265 instead of
+# running Apple's software HEVC.
+VIDEOTOOLBOX_QUALITY = 60
+_FF_QP2LAMBDA = 118
+VIDEOTOOLBOX_HEVC = EncoderSpec(
+    "hevc_videotoolbox",
+    {
+        "flags": "+qscale",
+        "global_quality": str(VIDEOTOOLBOX_QUALITY * _FF_QP2LAMBDA),
+        "realtime": "0",
+        "allow_sw": "0",
+    },
+)
+
 # Tried in order; a spec that fails to open hands over to the next one.
+# Per platform: the GPU encoders the machine can have, then x265.
 DEFAULT_ENCODERS: tuple[EncoderSpec, ...] = (NVENC_HEVC, X265)
+
+
+def encoders_for_platform(platform: str = sys.platform) -> tuple[EncoderSpec, ...]:
+    """The encoder order for ``platform``: NVENC then QSV on Windows
+    (each fails to open where its GPU is absent), VideoToolbox on macOS,
+    NVENC elsewhere; x265 last everywhere."""
+    if platform == "win32":
+        return (NVENC_HEVC, QSV_HEVC, X265)
+    if platform == "darwin":
+        return (VIDEOTOOLBOX_HEVC, X265)
+    return DEFAULT_ENCODERS
+
+
+HEVC_ENCODER_NAMES = frozenset({"libx265", "hevc_nvenc", "hevc_qsv", "hevc_videotoolbox", "hevc"})
 
 # HEVC in mp4 needs this four-character tag for QuickTime and Safari;
 # FFmpeg's default `hev1` plays in VLC and Windows but not there.
@@ -383,7 +430,7 @@ def _encode(
             )
             width, height = target_size(src_video.width, src_video.height)
             video.width, video.height = width, height
-            video.pix_fmt = "yuv420p"
+            video.pix_fmt = spec.pix_fmt
             video.time_base = src_video.time_base
             # The encoder counts in the source's ticks too. Left at PyAV's
             # default of 1/rate, two frames of a variable-frame-rate
@@ -391,7 +438,7 @@ def _encode(
             # the same pts and the muxer refuses the file.
             if src_video.time_base is not None:
                 video.codec_context.time_base = src_video.time_base
-            if video.codec_context.name in ("libx265", "hevc_nvenc", "hevc"):
+            if video.codec_context.name in HEVC_ENCODER_NAMES:
                 video.codec_context.codec_tag = HEVC_MP4_TAG
 
             audio_mode: str | None = None
@@ -421,7 +468,7 @@ def _encode(
                 frame = cast("av.VideoFrame", decoded)
                 if frame.pts is not None and src_video.time_base is not None:
                     decoded_sec = float(frame.pts * src_video.time_base)
-                scaled = frame.reformat(width, height, "yuv420p", interpolation=RESAMPLE)
+                scaled = frame.reformat(width, height, spec.pix_fmt, interpolation=RESAMPLE)
                 for encoded in video.encode(scaled):
                     out.mux(encoded)
 

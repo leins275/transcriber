@@ -68,6 +68,19 @@ diarization = [
 # versions drift. `llm-cpu` (~60 MB) is what the installer bakes; `llm-cuda`
 # (~480 MB, bundles the CUDA 12.4 runtime DLLs) is what the dev sidecar
 # selects on a machine with an NVIDIA GPU.
+# The accelerated whisper engines (engines.py). `whisper-mlx` is baked into
+# the macOS build (mlx-whisper on the Apple Silicon GPU; its weights are a
+# first-run download). `whisper-openvino` is never baked: on a Windows
+# machine with an Intel NPU/GPU and no NVIDIA GPU the service fetches the
+# runtime into `<app_dir>/runtime/whisper-openvino/` from the manifest
+# `scripts/gen_openvino_runtime.py` generates from uv.lock (the diarization
+# runtime's pattern).
+whisper-mlx = [
+  "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+whisper-openvino = [
+  "openvino-genai==2026.4.1.0; sys_platform == 'win32'",
+]
 llm-cpu = [
   "llama-cpp-python==0.3.35",
 ]
@@ -142,7 +155,10 @@ asyncio_mode = "auto"
 line-length = 100
 # Generated from uv.lock by scripts/gen_diarization_runtime.py: pinned
 # wheel URLs run past the line limit, and the generator is the formatter.
-extend-exclude = ["src/transcription/diarization_runtime_packages.py"]
+extend-exclude = [
+  "src/transcription/diarization_runtime_packages.py",
+  "src/transcription/openvino_runtime_packages.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
@@ -160,5 +176,16 @@ files = ["src"]
 [[tool.mypy.overrides]]
 # All of these are imported lazily inside their seam modules only; none
 # ships usable type stubs.
-module = ["llama_cpp.*", "xhtml2pdf.*", "markdown.*", "reportlab.*", "pynvml.*", "sqlite_vec.*"]
+module = [
+  "llama_cpp.*",
+  "xhtml2pdf.*",
+  "markdown.*",
+  "reportlab.*",
+  "pynvml.*",
+  "sqlite_vec.*",
+  "mlx_whisper.*",
+  "mlx.*",
+  "openvino.*",
+  "openvino_genai.*",
+]
 ignore_missing_imports = true

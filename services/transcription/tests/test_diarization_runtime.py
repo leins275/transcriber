@@ -443,6 +443,29 @@ def test_status_offers_no_runtime_off_windows(
     assert status["runtime_present"] is True
 
 
+def test_status_labels_the_baked_apple_runtime_mps(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The macOS build bakes pyannote and runs it on the GPU through MPS:
+    nothing to fetch, but the row still names the device."""
+    from transcription import hardware
+
+    monkeypatch.setattr(dr, "runtime_offered", lambda: False)
+    monkeypatch.setattr(dr, "gpu_present", lambda: False)
+    monkeypatch.setattr(hardware, "apple_silicon_present", lambda: True)
+    monkeypatch.setattr(dr, "pyannote_importable", lambda: True)
+
+    status = dr.diarization_status(config)
+
+    assert status["runtime_variant"] == "mps"
+    assert status["runtime_total_bytes"] == 0
+    assert status["runtime_present"] is True
+
+    # Without the extra (a bare dev checkout on a Mac) nothing is offered.
+    monkeypatch.setattr(dr, "pyannote_importable", lambda: False)
+    assert dr.diarization_status(config)["runtime_variant"] is None
+
+
 def test_status_route_is_token_guarded_and_mirrors_the_dict(
     config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:

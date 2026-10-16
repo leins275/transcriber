@@ -8,7 +8,10 @@
 //! every other task's tests so nothing needs a running F2 process.
 
 use async_trait::async_trait;
+use std::collections::BTreeMap;
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 pub mod fake;
 pub mod http;
@@ -932,6 +935,23 @@ pub struct ServiceHealth {
     /// bge-m3 GGUF is on disk. `None` when the field is absent (a build of
     /// F2 older than the feature).
     pub embedding_model_present: Option<bool>,
+    /// F2's `engines` rows (`engines.py`): the engine each stage runs on
+    /// this machine and whether its payload is installed. Empty on a build
+    /// of F2 older than the feature.
+    pub engines: Vec<EngineRow>,
+}
+
+/// One row of `/health`'s `engines`: which engine a stage (`whisper`,
+/// `llm`, `diarization`, `compress`) runs on here, on which device, and
+/// whether what it needs is on disk (`None` where nothing is fetched).
+/// Passed through to the frontend verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineRow {
+    pub stage: String,
+    pub engine: String,
+    pub device: String,
+    #[serde(default)]
+    pub present: Option<bool>,
 }
 
 /// Wire-level model-download state (mirrors F2's `DownloadState`, T13,
@@ -976,6 +996,13 @@ pub struct ModelDownloadStatus {
     /// CUDA-runtime phase has failed and the setup continued into the model
     /// phase anyway (E4). Verbatim backend text, never re-worded here.
     pub cuda_warning: Option<String>,
+    /// The chain's current phase name (`model`, `cuda_runtime`,
+    /// `openvino_runtime`, `openvino_weights`, `mlx_weights`); `None` for
+    /// a bare model download or an older F2.
+    pub phase: Option<String>,
+    /// The optional phases that failed while the setup carried on, by
+    /// phase name, with F2's own message. Empty when none did.
+    pub warnings: BTreeMap<String, String>,
 }
 
 /// One curated model row from `GET /v1/llm-models`.

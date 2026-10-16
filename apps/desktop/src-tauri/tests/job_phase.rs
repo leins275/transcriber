@@ -157,6 +157,7 @@ impl TranscriptionService for ScriptedStatusService {
             llm_model_present: Some(true),
             llm_gpu_build_present: Some(true),
             embedding_model_present: Some(true),
+            engines: Vec::new(),
         })
     }
 

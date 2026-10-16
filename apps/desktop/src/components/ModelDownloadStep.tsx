@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import styles from "./ModelDownloadStep.module.css";
 import {
   MODEL_DOWNLOAD_POLL_INTERVAL_MS,
+  engineSetupNeeded,
   formatProgress,
   isInProgress,
+  phaseWords,
   pollDownloadStatus,
   type ModelDownloadStatus,
 } from "../lib/modelDownload";
@@ -109,28 +111,29 @@ export function ModelDownloadStep({
   };
 
   if (status.model_present) {
-    // E13: surfaces even without an in-session `cuda_warning` -- a fresh
-    // process (no `SetupDownload` instance, so `cuda_warning` is always
-    // `null`) still learns "CUDA runtime missing" from `/health`'s durable
-    // `cuda_runtime_present`. `false` is a strict signal (this host has a
-    // GPU and F2 judged the runtime absent); `null` means "no GPU on this
-    // machine" and must never prompt for a runtime it could never use.
-    const cudaSetupNeeded = Boolean(status.cuda_warning) || status.cuda_runtime_present === false;
-    if (!cudaSetupNeeded) {
+    // E13: surfaces even without an in-session warning -- a fresh process
+    // (no `SetupDownload` instance, so `warnings` is always empty) still
+    // learns what is missing from `/health`'s durable signals: the CUDA
+    // runtime on an NVIDIA host (`cuda_runtime_present === false`; `null`
+    // means "no GPU here" and never prompts), or the whisper engine row
+    // whose payload (the NPU engine, the Apple GPU model) is not on disk.
+    const setup = engineSetupNeeded(status);
+    if (!setup) {
       return null;
     }
-    // E17: a "Retry GPU setup" click re-POSTs `/v1/model/download` (whose
-    // `SetupDownload` skips the model phase entirely once it finds it
-    // already present, see `model_routes.py`) and E16 now polls
-    // unconditionally afterwards -- while that retry is in flight, show its
-    // progress instead of letting the notice go blank.
+    const kicker = setup.short === "GPU" ? "GPU" : "Engine";
+    // E17: a retry click re-POSTs `/v1/model/download` (whose chain skips
+    // every phase it finds already present, see `model_routes.py`) and E16
+    // now polls unconditionally afterwards -- while that retry is in
+    // flight, show its progress instead of letting the notice go blank.
     if (status.state === "downloading" || status.state === "verifying") {
+      const payload = phaseWords(status.phase)?.payload ?? setup.payload;
       return (
         <div className={`note ${styles.notice}`} data-state="cuda-warning" role="status">
-          <span className="note-kicker">GPU</span>
+          <span className="note-kicker">{kicker}</span>
           <div className={styles.noticeBody}>
             <p>
-              {status.state === "downloading" ? "Downloading" : "Verifying"} GPU runtime:{" "}
+              {status.state === "downloading" ? "Downloading" : "Verifying"} {payload}:{" "}
               {formatProgress(status)}
             </p>
             <ProgressBar percent={status.percent} />
@@ -138,16 +141,19 @@ export function ModelDownloadStep({
         </div>
       );
     }
-    // The model is present, but the CUDA-runtime phase failed and the setup
-    // continued anyway (E4) -- a persistent notice, not a toast, with the
-    // backend's own message verbatim (when one is available) and a retry.
+    // The model is present, but an optional phase failed and the setup
+    // continued anyway (E4), or was never fetched -- a persistent notice,
+    // not a toast, with the backend's own message verbatim (when one is
+    // available) and a retry.
     return (
       <div className={`note ${styles.notice}`} data-state="cuda-warning" role="alert">
-        <span className="note-kicker">GPU</span>
+        <span className="note-kicker">{kicker}</span>
         <div className={styles.noticeBody}>
-          <p>GPU acceleration is not installed. {status.cuda_warning}</p>
+          <p>
+            {setup.label} is not installed. {setup.detail}
+          </p>
           <button type="button" className="btn btn-ghost" onClick={handleStart}>
-            Retry GPU setup
+            Retry {setup.short} setup
           </button>
         </div>
       </div>
@@ -192,6 +198,12 @@ export function ModelDownloadStep({
       )}
       {(status.state === "downloading" || status.state === "verifying") && (
         <>
+          {phaseWords(status.phase) && (
+            <p className={styles.body}>
+              {status.state === "downloading" ? "Downloading" : "Verifying"} the{" "}
+              {phaseWords(status.phase)!.payload}.
+            </p>
+          )}
           <div className={styles.progressRow}>
             <ProgressBar percent={status.percent} />
             <span role="status" className={styles.progressLabel}>

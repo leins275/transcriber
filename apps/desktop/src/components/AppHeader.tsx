@@ -44,7 +44,11 @@ export function AppHeader({
   activeJob = null,
   onShowRecordings,
 }: AppHeaderProps) {
-  const label = serviceStatusLabel(serviceStatus.state, modelStatus?.cuda_runtime_present);
+  const label = serviceStatusLabel(
+    serviceStatus.state,
+    modelStatus?.cuda_runtime_present,
+    modelStatus?.engines,
+  );
   const modelSuffix = modelStatus?.model_present ? " · large-v3" : "";
   // The chip is one short line, so it says the percentage *or* the phase --
   // a real fraction beats the words describing it, and a stage reporting
