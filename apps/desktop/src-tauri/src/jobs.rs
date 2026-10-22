@@ -41,6 +41,12 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 /// it is treated as service-unavailable rather than polled forever (FR-13).
 const MAX_CONSECUTIVE_POLL_ERRORS: u32 = 3;
 
+/// How long a running job's polls may keep answering [`ServiceError::Busy`]
+/// before it is failed anyway. A busy service is alive, not gone: compiling
+/// whisper for an Intel NPU blocks the service for about ten minutes on a
+/// first run, so the poll-error budget above does not count those polls.
+const MAX_BUSY_STRETCH: Duration = Duration::from_secs(30 * 60);
+
 /// The filename F2 writes its transcript to, inside the meeting directory.
 const TRANSCRIPT_FILE_NAME: &str = "transcript.json";
 
@@ -845,11 +851,21 @@ async fn poll_until_terminal(
     follow_up: Option<FollowUp>,
 ) {
     let mut consecutive_errors = 0u32;
+    let mut busy_since: Option<std::time::Instant> = None;
     loop {
         tokio::time::sleep(shared.poll_interval).await;
         match service.status(&service_job_id).await {
+            Err(ServiceError::Busy { .. })
+                if busy_since
+                    .get_or_insert_with(std::time::Instant::now)
+                    .elapsed()
+                    < MAX_BUSY_STRETCH =>
+            {
+                consecutive_errors = 0;
+            }
             Ok(status) => {
                 consecutive_errors = 0;
+                busy_since = None;
                 apply_status(&mut snapshot, &status);
                 // A title suggestion's outcome is a value, not a file: it
                 // is read here, before `Done` is announced, so the
@@ -1192,7 +1208,7 @@ fn app_error_kind_str(kind: crate::error::ErrorKind) -> String {
 /// separate `service_unavailable` / `service` error kinds.
 fn service_error_kind_str(err: &ServiceError) -> &'static str {
     match err {
-        ServiceError::Unavailable { .. } => "service_unavailable",
+        ServiceError::Unavailable { .. } | ServiceError::Busy { .. } => "service_unavailable",
         ServiceError::Http { .. } | ServiceError::Decode { .. } | ServiceError::Auth { .. } => {
             "service"
         }
@@ -2479,6 +2495,74 @@ mod tests {
                 detail: "service died mid-session".to_string(),
             })
         }
+    }
+
+    /// Answers its first `busy_polls` status polls with
+    /// [`ServiceError::Busy`] (the service blocked compiling for the NPU),
+    /// then behaves like the fake.
+    struct BusyThenFakeService {
+        inner: FakeService,
+        busy_polls: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait]
+    impl TranscriptionService for BusyThenFakeService {
+        async fn health(&self) -> Result<ServiceHealth, ServiceError> {
+            self.inner.health().await
+        }
+
+        async fn submit(&self, req: SubmitRequest) -> Result<String, ServiceError> {
+            self.inner.submit(req).await
+        }
+
+        async fn status(&self, job_id: &str) -> Result<JobStatus, ServiceError> {
+            let left = self.busy_polls.load(Ordering::SeqCst);
+            if left > 0 {
+                self.busy_polls.store(left - 1, Ordering::SeqCst);
+                return Err(ServiceError::Busy {
+                    detail: "compiling for the NPU".to_string(),
+                });
+            }
+            self.inner.status(job_id).await
+        }
+    }
+
+    #[test]
+    fn a_busy_service_is_waited_out_instead_of_failing_the_job() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let downloads = tempdir().expect("tempdir");
+            let source = write_recording(downloads.path(), "ELS - 260812 - Security issue.mp4");
+
+            let service = Arc::new(BusyThenFakeService {
+                inner: FakeService::new(),
+                busy_polls: std::sync::atomic::AtomicU32::new(MAX_CONSECUTIVE_POLL_ERRORS * 4),
+            });
+            let registry = JobRegistry::with_poll_interval(
+                root.path().to_path_buf(),
+                service,
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(5),
+            );
+            let status_sink = Arc::new(RecordingUnavailableSink::default());
+            registry.set_status_sink(status_sink.clone());
+
+            let snapshots = registry.enqueue(vec![source]).await;
+            let terminal = wait_for(
+                &registry,
+                &snapshots[0].id,
+                |s| matches!(s.state, JobState::Done | JobState::Failed),
+                Duration::from_secs(5),
+            )
+            .await;
+
+            assert_eq!(terminal.state, JobState::Done);
+            assert!(status_sink
+                .calls
+                .lock()
+                .expect("recording unavailable-sink mutex poisoned")
+                .is_empty());
+        });
     }
 
     #[derive(Default)]

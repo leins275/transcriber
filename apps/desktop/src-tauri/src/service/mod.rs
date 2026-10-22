@@ -1035,6 +1035,11 @@ pub struct LlmModelsStatus {
 pub enum ServiceError {
     /// The service could not be reached at all (down, refused, timed out).
     Unavailable { detail: String },
+    /// The service accepted the connection but did not answer in time: it
+    /// is alive with its event loop blocked (a native call holding the
+    /// GIL -- OpenVINO compiling whisper for the NPU takes minutes).
+    /// Raised by job status polls only.
+    Busy { detail: String },
     /// The service answered with a non-2xx HTTP status.
     Http { status: u16, message: String },
     /// The response body could not be decoded into the expected shape.
@@ -1047,6 +1052,7 @@ impl fmt::Display for ServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ServiceError::Unavailable { detail } => write!(f, "service unavailable: {detail}"),
+            ServiceError::Busy { detail } => write!(f, "service busy: {detail}"),
             ServiceError::Http { status, message } => {
                 write!(f, "service http error {status}: {message}")
             }

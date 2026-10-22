@@ -804,7 +804,17 @@ impl TranscriptionService for HttpTranscriptionService {
                     .get(self.endpoint(&format!("/v1/jobs/{job_id}"))),
             )
             .timeout(bounded_timeout);
-        let response = request.send().await.map_err(|err| self.unavailable(err))?;
+        let response = request.send().await.map_err(|err| {
+            // Connected but no answer: the service is alive and blocked,
+            // which the poll loop waits out rather than failing the job.
+            if err.is_timeout() && !err.is_connect() {
+                ServiceError::Busy {
+                    detail: format!("{}: {err}", self.base_url),
+                }
+            } else {
+                self.unavailable(err)
+            }
+        })?;
 
         if !response.status().is_success() {
             return Err(service_error_from_response(response).await);
@@ -1676,6 +1686,26 @@ mod tests {
     }
 
     #[test]
+    fn status_maps_connection_refusal_to_unavailable_not_busy() {
+        // A sidecar that is gone refuses the connection; only one that is
+        // alive but blocked times out, and only that one is waited out.
+        run(async {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free loopback port");
+            let port = listener.local_addr().expect("local addr").port();
+            drop(listener);
+
+            let service = HttpTranscriptionService::new(&format!("http://127.0.0.1:{port}"), None)
+                .expect("loopback base url must be accepted");
+            let err = service
+                .status("gone")
+                .await
+                .expect_err("nothing is listening");
+            assert!(matches!(err, ServiceError::Unavailable { .. }));
+        });
+    }
+
+    #[test]
     fn health_maps_connection_refusal_to_unavailable_naming_base_url() {
         run(async {
             // Reserve a loopback port, then release it immediately so
@@ -2311,7 +2341,8 @@ mod tests {
                 elapsed < Duration::from_millis(1500),
                 "status() must complete well under the 1.5s poll interval, took {elapsed:?}"
             );
-            assert!(matches!(err, ServiceError::Unavailable { .. }));
+            // Connected, then no answer: alive but blocked, not gone.
+            assert!(matches!(err, ServiceError::Busy { .. }));
         });
     }
 
@@ -2353,7 +2384,7 @@ mod tests {
                 "status() must stay under NFR-4's 2s staleness bound even on the production \
                  default client, took {elapsed:?}"
             );
-            assert!(matches!(err, ServiceError::Unavailable { .. }));
+            assert!(matches!(err, ServiceError::Busy { .. }));
         });
     }
 

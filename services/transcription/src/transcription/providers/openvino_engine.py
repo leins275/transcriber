@@ -10,9 +10,12 @@ fetch (`openvino_runtime.py`); the weights are a pre-exported IR
 (`config.whisper_openvino_repo`, turbo int8 -- OpenVINO's own validated
 NPU workload) under ``<app_dir>/models/whisper-openvino/``.
 
-The NPU compiles the model to a static graph on first load -- minutes on
-a Panther Lake, cached by the driver afterwards -- so the job's
-`model_state` sits at ``loading`` meanwhile and the log says why. Its
+The NPU compiles the model to a static graph on first load -- about ten
+minutes on a Core Ultra, every load, unless OpenVINO's ``CACHE_DIR`` keeps
+the compiled blobs (~2.3 GB; a cached load measured 2 s) -- so the job's
+`model_state` sits at ``loading`` meanwhile and the log says why. The
+compile holds the GIL, so the service does not answer HTTP until it ends;
+the app reads those poll timeouts as busy, not gone. Its
 static shapes also mean one 30-second window per call and no
 `initial_prompt`, both of which this provider never needs: the recording's
 speech is cut into 30-second batches by the shared VAD
@@ -101,13 +104,12 @@ class OpenVinoWhisperProvider:
 
     def _open_pipeline(self, device: str) -> Any:
         _, genai = self._lib
-        properties: dict[str, Any] = {}
-        if device != "NPU":
-            # The NPU driver keeps its own compile cache; the others take
-            # OpenVINO's, beside the runtime.
-            cache = openvino_runtime.openvino_runtime_dir(self._app_dir) / "cache"
-            cache.mkdir(parents=True, exist_ok=True)
-            properties["CACHE_DIR"] = str(cache)
+        # OpenVINO's compile cache, beside the runtime, for every device:
+        # the NPU driver keeps none of its own, so without it each load
+        # recompiles for minutes.
+        cache = openvino_runtime.openvino_runtime_dir(self._app_dir) / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        properties: dict[str, Any] = {"CACHE_DIR": str(cache)}
         if device == "CPU":
             from transcription.providers.local_whisper import resolve_cpu_threads  # noqa: PLC0415
 
@@ -137,8 +139,8 @@ class OpenVinoWhisperProvider:
                 continue
             if device == "NPU":
                 logger.info(
-                    "compiling the speech model for the NPU (minutes on a first run, "
-                    "cached by the driver afterwards)",
+                    "compiling the speech model for the NPU (about ten minutes on a "
+                    "first run, seconds from the compile cache afterwards)",
                     extra={"event": "openvino_npu_compile", "model": self._model_id},
                 )
             try:

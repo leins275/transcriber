@@ -111,7 +111,9 @@ fn build_view(status: ModelDownloadStatus, health: HealthFields) -> ModelDownloa
 /// `service` kind.
 fn map_service_error(err: ServiceError) -> AppError {
     match err {
-        ServiceError::Unavailable { detail } => AppError::service_unavailable(detail),
+        ServiceError::Unavailable { detail } | ServiceError::Busy { detail } => {
+            AppError::service_unavailable(detail)
+        }
         ServiceError::Auth { message } => AppError::service_unavailable(message),
         ServiceError::Http { status, message } => {
             AppError::service(format!("model download service error {status}: {message}"))
