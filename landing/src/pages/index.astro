@@ -3,6 +3,60 @@
 // (local/Transcriber Landing.html); content edits happen here directly.
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const github = "https://github.com/leins275/transcriber";
+
+// The drop-to-insights chain, in the order the app runs it. Every stage is
+// automatic after the drop; each one leaves a file in the meeting's folder.
+const stages = [
+  {
+    no: "01",
+    title: "Name",
+    short: "Name",
+    text: "You name the file once: project, date, title, tags. The vault files it under the project — nothing to click through, no form to fill.",
+    artifact: "ACME/251110 - Kickoff - design, budget/",
+  },
+  {
+    no: "02",
+    title: "Transcribe",
+    short: "Transcribe",
+    text: "Whisper large-v3 runs on your own hardware — the NVIDIA GPU, the Apple GPU or the Intel NPU, and the CPU when there is none. Russian, English and Turkish.",
+    artifact: "transcript.json",
+  },
+  {
+    no: "03",
+    title: "Identify speakers",
+    short: "Speakers",
+    text: "Voices are separated and, once you have named them, recognized the next time they appear — in this project or any other.",
+    artifact: "speakers.json",
+  },
+  {
+    no: "04",
+    title: "Summarize",
+    short: "Summarize",
+    text: "Qwen3.5 9B reads the transcript and writes the summary: what was discussed, the notable facts, the action items and who owns them.",
+    artifact: "summary.md",
+  },
+  {
+    no: "05",
+    title: "Export",
+    short: "Export",
+    text: "A Markdown file and a PDF with a shareable name land next to the recording. Sharing is a file you choose to send.",
+    artifact: "export.md · export.pdf",
+  },
+  {
+    no: "06",
+    title: "Compress",
+    short: "Compress",
+    text: "A video recording is re-encoded in place — HEVC, capped at 1080p, quiet and loud voices levelled — so a year of meetings fits on the disk.",
+    artifact: "source.mp4, several times smaller",
+  },
+  {
+    no: "07",
+    title: "Index",
+    short: "Index",
+    text: "The meeting joins the search index: full-text and semantic, so a question asked months later finds the moment it was answered.",
+    artifact: ".transcriber/index.sqlite3",
+  },
+];
 ---
 
 <!doctype html>
@@ -13,7 +67,7 @@ const github = "https://github.com/leins275/transcriber";
     <title>Transcriber — every meeting becomes one document</title>
     <meta
       name="description"
-      content="A local-first desktop app: drop a meeting recording, get a transcript, summary and action items filed into one document. Nothing leaves your computer."
+      content="A local-first desktop app for the manager who owes everyone clarity: drop a meeting recording, get a transcript, speakers, summary and action items filed into one vault on your own computer. Ask it questions. Nothing leaves your machine."
     />
     <link rel="icon" type="image/svg+xml" href={`${base}/logo.svg`} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -29,8 +83,11 @@ const github = "https://github.com/leins275/transcriber";
         <img src={`${base}/logo.svg`} alt="" width="26" height="26" />
         <span class="brand">Transcriber</span>
         <nav class="topnav">
+          <a href="#why">Why</a>
           <a href="#how">How it works</a>
-          <a href="#principles">Principles</a>
+          <a href="#speakers">Speakers</a>
+          <a href="#ask">Ask</a>
+          <a href="#vault">Vault</a>
           <a href={github}>GitHub</a>
         </nav>
       </header>
@@ -39,15 +96,18 @@ const github = "https://github.com/leins275/transcriber";
         <div class="kicker">A desktop tool · Local · Open source</div>
         <h1>Every meeting becomes one document.</h1>
         <p class="lede">
-          Transcriber does a single job: it takes a recording, transcribes it on your machine,
-          extracts the summary and action items, and files everything into one organized document
-          in a folder you own. Nothing leaves your computer.
+          Transcriber takes a meeting recording, transcribes it on your machine, tells the voices
+          apart, writes the summary with the facts and the action items, and files everything into
+          one vault in a folder you own. Then it answers questions about what was said. Nothing
+          leaves your computer.
         </p>
         <div class="cta-row">
           <a href={`${github}/releases`} class="btn btn-primary">Download for Windows</a>
           <a href={github} class="btn btn-ghost">View source →</a>
         </div>
-        <div class="fineprint">Rust + Tauri · Whisper runs locally · free</div>
+        <div class="fineprint">
+          Rust + Tauri · Whisper and the LLM run locally · free · macOS build on the releases page
+        </div>
       </section>
 
       <section class="shot">
@@ -60,31 +120,221 @@ const github = "https://github.com/leins275/transcriber";
         <div class="shot-caption">The whole interface: one list of recordings, filed by project.</div>
       </section>
 
+      <section id="why" class="story">
+        <h2>Clarity is the manager's job.</h2>
+        <div class="story-cols">
+          <div class="story-text">
+            <p>
+              If you run a project, you have one responsibility that nobody else carries: everyone
+              involved should know what was decided, what is still open, and who owes what to whom.
+              Not roughly. Precisely. Clarity is the thing you are there to produce, and every other
+              duty follows from it.
+            </p>
+            <p>
+              Most of a project's context is created in meetings — and most of it is lost there,
+              too. A decision is made at minute forty, three people hear three versions of it, and a
+              week later the question is asked again. The meeting happened; the clarity did not
+              survive it.
+            </p>
+            <p>
+              So track your meetings. Keep taking notes — notes are how you think. But make the
+              meeting itself serve you: record it, and let the record do the remembering. Then your
+              notes can be about what matters, not about catching every word.
+            </p>
+          </div>
+          <aside class="story-aside">
+            <div class="aside-title">What a recorded meeting gives back</div>
+            <ul>
+              <li>Who said what, word for word, searchable.</li>
+              <li>A summary you can send the same hour.</li>
+              <li>The action items with names on them.</li>
+              <li>An answer, months later, to "when did we agree on that?"</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section id="local" class="local">
+        <h2>Not another cloud.</h2>
+        <p class="section-lede">
+          The meeting assistants you can buy today share a shape: a subscription, a web app, and your
+          conversations on someone else's servers. Transcriber is built against that shape.
+        </p>
+        <div class="contrast">
+          <div class="contrast-col contrast-them">
+            <div class="contrast-head">Cloud meeting tools</div>
+            <dl>
+              <dt>Rigid</dt>
+              <dd>Their template, their export, their retention policy. The bot joins the call or it doesn't.</dd>
+              <dt>Expensive</dt>
+              <dd>A seat per person per month, forever, for work a GPU you already own does in minutes.</dd>
+              <dt>Insecure</dt>
+              <dd>Your clients' conversations, your team's candid moments, uploaded to be processed — and kept.</dd>
+            </dl>
+          </div>
+          <div class="contrast-col contrast-us">
+            <div class="contrast-head">Transcriber</div>
+            <dl>
+              <dt>Yours to shape</dt>
+              <dd>Any recording from any call software. A plain folder of plain files you can open, move or back up.</dd>
+              <dt>Free to run</dt>
+              <dd>The models are open weights and run on your machine. There is no account to create and nothing to renew.</dd>
+              <dt>Only you can read it</dt>
+              <dd>The service listens on your own computer only. Sharing is manual and deliberate: you export a PDF and send it.</dd>
+            </dl>
+          </div>
+        </div>
+      </section>
+
       <section id="how" class="how">
         <h2>How it works</h2>
-        <div class="steps">
-          <div class="step">
-            <div class="step-no">01</div>
-            <div class="step-title">Drop a recording</div>
+        <p class="section-lede">
+          One drop starts the whole chain. Each stage runs on your machine, in order, and leaves its
+          result in the meeting's folder.
+        </p>
+
+        <ol class="rail" aria-label="Pipeline stages">
+          {
+            stages.map((s) => (
+              <li class="node">
+                <span class="node-dot">{s.no}</span>
+                <span class="node-label">{s.short}</span>
+              </li>
+            ))
+          }
+        </ol>
+
+        <div class="stages">
+          {
+            stages.map((s) => (
+              <div class="stage">
+                <div class="stage-no">{s.no}</div>
+                <div class="stage-body">
+                  <div class="stage-title">{s.title}</div>
+                  <p>{s.text}</p>
+                </div>
+                <div class="stage-artifact">
+                  <span class="artifact-label">Lands as</span>
+                  <code>{s.artifact}</code>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </section>
+
+      <section id="speakers" class="speakers">
+        <h2>Who said what.</h2>
+        <p class="section-lede">
+          A transcript without names is a wall of text. Transcriber separates the voices and, over
+          time, learns whose they are.
+        </p>
+        <div class="feature-grid">
+          <div class="feature">
+            <div class="feature-title">Voices, told apart</div>
             <p>
-              Any common audio or video file — mp4, mkv, webm, m4a, mp3, wav and more. Drop it
-              anywhere in the window.
+              Speaker identification runs locally on your GPU or CPU, cutting the transcript at every
+              change of voice. Each voice gets a tag; you type a name once.
             </p>
           </div>
-          <div class="step">
-            <div class="step-no">02</div>
-            <div class="step-title">It works locally</div>
+          <div class="feature">
+            <div class="feature-title">A memory for voices</div>
             <p>
-              Whisper large-v3 transcribes on your own GPU or CPU, then Qwen3.5 9B extracts the
-              summary and action items from the transcript.
+              Every name you confirm becomes a voiceprint. The next recording — in this project or
+              another — arrives with the regulars already named. Your corrections always win over
+              the machine's guesses.
             </p>
           </div>
-          <div class="step">
-            <div class="step-no">03</div>
-            <div class="step-title">One document, filed</div>
+          <div class="feature">
+            <div class="feature-title">A roster per project</div>
             <p>
-              Transcript, summary and action items land in a single document, filed by project in
-              a plain folder on your disk.
+              List the people who attend a project's meetings and the recognition is bounded to
+              them: no stray guesses, no strangers invented from a cough.
+            </p>
+          </div>
+          <div class="feature">
+            <div class="feature-title">People, not just labels</div>
+            <p>
+              The Speakers tab lists everyone in your vault. Each person has a page: the name,
+              the other spellings they go by, a short bio, the projects they appear in and every
+              meeting where they spoke.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="ask" class="ask">
+        <div class="ask-cols">
+          <div class="ask-text">
+            <h2>Ask your meetings.</h2>
+            <p>
+              The library's Chat tab is a question box over a whole project. Ask what was decided
+              about the budget, when the deadline moved, what a client objected to — the answer
+              comes with the meetings it was drawn from, and a click opens the moment in the
+              transcript.
+            </p>
+            <p>
+              The search behind it is hybrid: meaning and exact words, titles and transcripts, your
+              own notes included. The language model that answers is the same one that writes the
+              summaries, running on your machine. Conversations are saved into the vault beside the
+              meetings they are about.
+            </p>
+            <p class="ask-fine">
+              Prefer another assistant? The vault ships with an MCP server, so Claude Desktop can
+              read your meetings directly — with the app closed.
+            </p>
+          </div>
+          <div class="ask-demo" aria-hidden="true">
+            <div class="demo-q">What did we agree on the launch date with ACME?</div>
+            <div class="demo-a">
+              Moved from 12 December to 23 January, at the client's request, to leave room for the
+              second design review. Agreed by their project lead; your side owns the revised plan by
+              Friday.
+            </div>
+            <div class="demo-src">
+              <span>Sources</span>
+              <span>ACME · 251103 · Steering committee</span>
+              <span>ACME · 251027 · Weekly sync</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="vault" class="vault">
+        <div class="vault-cols">
+          <div class="vault-tree" aria-label="Vault folder layout">
+            <pre><code>Meetings/
+├─ ACME/
+│  ├─ 251027 - Weekly sync/
+│  ├─ 251103 - Steering committee/
+│  └─ 251110 - Kickoff - design, budget/
+│     ├─ source.mp4
+│     ├─ transcript.json
+│     ├─ speakers.json
+│     ├─ summary.md
+│     ├─ note.md
+│     ├─ export.md
+│     └─ ACME - 251110 - Kickoff.pdf
+├─ INTERNAL/
+│  └─ 251105 - Hiring plan - people/
+└─ people.json</code></pre>
+          </div>
+          <div class="vault-text">
+            <h2>One vault for everything.</h2>
+            <p>
+              Every recording you have ever dropped lives in one folder tree: a folder per project,
+              a folder per meeting, the same files inside each. The recording, the transcript, the
+              speakers, the summary, your note, the export.
+            </p>
+            <p>
+              That makes the bookkeeping trivial. Backing up is copying a folder. Moving to a new
+              machine is copying a folder. Finding last spring's meetings with a client is opening a
+              folder. The search index travels inside the vault, and there is no database to
+              export because there is no database to be locked into.
+            </p>
+            <p>
+              Tag meetings in the name — <em>design</em>, <em>budget</em>, <em>people</em> — and the
+              library filters by any of them or all of them.
             </p>
           </div>
         </div>
@@ -92,7 +342,7 @@ const github = "https://github.com/leins275/transcriber";
 
       <section id="principles" class="principles">
         <h2>Deliberately rigid</h2>
-        <p class="principles-lede">
+        <p class="section-lede">
           Transcriber is opinionated on purpose. It refuses to be a platform so it can be good at
           one thing.
         </p>
@@ -107,26 +357,29 @@ const github = "https://github.com/leins275/transcriber";
           <div class="principle">
             <div class="principle-title">One output shape</div>
             <p>
-              Every meeting produces the same document: transcript, summary, action items. No
-              templates to configure.
+              Every meeting produces the same document: transcript, speakers, and a summary that
+              carries the facts and the action items. No templates to configure.
             </p>
           </div>
           <div class="principle">
-            <div class="principle-title">No editor, no wiki</div>
-            <p>Read, copy, export to PDF. Your notes belong in the tools you already use.</p>
+            <div class="principle-title">Your notes, next to the record</div>
+            <p>
+              Each meeting has a note you write yourself. It lives in the meeting's folder as plain
+              Markdown and is searched along with everything else.
+            </p>
           </div>
           <div class="principle">
             <div class="principle-title">Two models, no picker</div>
             <p>
-              Whisper large-v3 transcribes, Qwen3.5 9B extracts the insights. The best local pair
-              we found — so there is nothing to choose.
+              Whisper large-v3 transcribes, Qwen3.5 9B writes the summary. The best local pair we
+              found — so there is nothing to choose.
             </p>
           </div>
         </div>
       </section>
 
       <section class="closer">
-        <h2>Stop taking notes in meetings.</h2>
+        <h2>Nothing said in a meeting gets lost again.</h2>
         <div class="cta-row">
           <a href={`${github}/releases`} class="btn btn-primary">Download for Windows</a>
           <a href={github} class="btn btn-ghost">Star on GitHub</a>
@@ -155,6 +408,7 @@ const github = "https://github.com/leins275/transcriber";
 
     --font-heading: "Cormorant Garamond", Georgia, serif;
     --font-body: "Lora", Georgia, serif;
+    --font-mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
 
     --radius-md: 4px;
   }
@@ -163,6 +417,10 @@ const github = "https://github.com/leins275/transcriber";
   *::before,
   *::after {
     box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
   }
 
   body {
@@ -181,6 +439,10 @@ const github = "https://github.com/leins275/transcriber";
   img {
     display: block;
     max-width: 100%;
+  }
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
   }
   :focus {
     outline: none;
@@ -264,6 +526,8 @@ const github = "https://github.com/leins275/transcriber";
     align-items: center;
     gap: 24px;
     font-size: 14px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .topnav a {
     text-decoration: none;
@@ -272,12 +536,31 @@ const github = "https://github.com/leins275/transcriber";
     text-decoration: underline;
   }
 
+  /* Every section shares the rhythm; the sections below only add their own layout. */
+  section {
+    padding: 72px 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  section h2 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 32px;
+    line-height: 1.15;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  .section-lede {
+    font-size: 15px;
+    color: var(--color-neutral-700);
+    max-width: 58ch;
+    margin: 0 0 40px;
+  }
+
   .hero {
     padding: 88px 0 72px;
     display: flex;
     flex-direction: column;
     gap: 28px;
-    border-bottom: 1px solid var(--color-divider);
   }
   .kicker {
     font-size: 12px;
@@ -296,7 +579,7 @@ const github = "https://github.com/leins275/transcriber";
   }
   .lede {
     font-size: 18px;
-    max-width: 52ch;
+    max-width: 56ch;
     margin: 0;
     color: var(--color-neutral-800);
   }
@@ -315,7 +598,6 @@ const github = "https://github.com/leins275/transcriber";
 
   .shot {
     padding: 64px 0;
-    border-bottom: 1px solid var(--color-divider);
   }
   .shot .plate {
     max-width: 860px;
@@ -333,84 +615,317 @@ const github = "https://github.com/leins275/transcriber";
     margin-top: 14px;
   }
 
-  .how {
-    padding: 72px 0;
-    border-bottom: 1px solid var(--color-divider);
+  /* Why: the manager's story, essay column with a margin note. */
+  .story h2 {
+    font-weight: 400;
+    font-size: 40px;
+    margin-bottom: 32px;
   }
-  .how h2 {
+  .story-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+    gap: 48px;
+    align-items: start;
+  }
+  .story-text p {
+    margin: 0 0 18px;
+    font-size: 16.5px;
+    color: var(--color-neutral-800);
+  }
+  .story-text p:first-child::first-letter {
+    font-family: var(--font-heading);
+    font-size: 3.1em;
+    float: left;
+    line-height: 0.8;
+    padding: 6px 8px 0 0;
+    color: var(--color-accent-600);
+  }
+  .story-text p:last-child {
+    margin-bottom: 0;
+  }
+  .story-aside {
+    border-top: 1px solid var(--color-accent-400);
+    padding-top: 16px;
+    margin-top: 10px;
+  }
+  .aside-title {
     font-family: var(--font-heading);
     font-weight: 600;
-    font-size: 32px;
-    margin: 0 0 40px;
+    font-size: 18px;
+    margin-bottom: 10px;
   }
-  .steps {
+  .story-aside ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--color-neutral-700);
+    font-size: 14.5px;
+  }
+  .story-aside li {
+    margin-bottom: 8px;
+  }
+  .story-aside li::marker {
+    color: var(--color-accent);
+  }
+
+  /* Local: two columns set against each other. */
+  .contrast {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1px solid var(--color-divider);
   }
-  .step {
-    padding: 0 28px;
+  .contrast-col {
+    padding: 28px 28px 24px;
+  }
+  .contrast-them {
     border-right: 1px solid var(--color-divider);
+    color: var(--color-neutral-700);
   }
-  .step:first-child {
-    padding-left: 0;
+  .contrast-us {
+    background: var(--color-surface);
   }
-  .step:last-child {
-    padding-right: 0;
-    border-right: 0;
-  }
-  .step-no {
+  .contrast-head {
     font-family: var(--font-heading);
-    font-size: 30px;
+    font-weight: 600;
+    font-size: 20px;
+    margin-bottom: 18px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .contrast-us .contrast-head {
+    border-bottom-color: var(--color-accent-400);
+  }
+  .contrast dl {
+    margin: 0;
+  }
+  .contrast dt {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 17px;
+    margin-top: 14px;
+  }
+  .contrast-them dt {
+    color: var(--color-neutral-800);
+  }
+  .contrast-us dt {
     color: var(--color-accent-600);
+  }
+  .contrast dd {
+    margin: 2px 0 0;
+    font-size: 14.5px;
+    color: var(--color-neutral-700);
+  }
+
+  /* How: the rail is the diagram, the stages are its legend. */
+  .rail {
+    list-style: none;
+    margin: 0 0 48px;
+    padding: 0;
+    display: flex;
+    align-items: flex-start;
+  }
+  .node {
+    position: relative;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+  .node-dot {
+    position: relative;
+    z-index: 1;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--color-accent);
+    background: var(--color-bg);
+    color: var(--color-accent-600);
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     font-feature-settings: "tnum";
   }
-  .step-title {
+  .node-label {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 15px;
+  }
+  /* The line between dots: drawn from each node's centre to the next. */
+  .node:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    width: 100%;
+    border-top: 1px solid var(--color-accent-400);
+  }
+  .stages {
+    display: flex;
+    flex-direction: column;
+  }
+  .stage {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) 220px;
+    gap: 0 28px;
+    padding: 22px 0;
+    border-top: 1px solid var(--color-divider);
+  }
+  .stage:last-child {
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .stage-no {
+    font-family: var(--font-heading);
+    font-size: 28px;
+    line-height: 1;
+    color: var(--color-accent-600);
+    font-feature-settings: "tnum";
+    padding-top: 2px;
+  }
+  .stage-title {
     font-family: var(--font-heading);
     font-weight: 600;
     font-size: 19px;
-    margin: 10px 0 8px;
+    margin-bottom: 6px;
   }
-  .step p {
+  .stage-body p {
     margin: 0;
     font-size: 14.5px;
     color: var(--color-neutral-700);
-    text-align: justify;
+  }
+  .stage-artifact {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 4px;
+  }
+  .artifact-label {
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-neutral-600);
+  }
+  .stage-artifact code {
+    color: var(--color-neutral-800);
+    overflow-wrap: anywhere;
   }
 
-  .principles {
-    padding: 72px 0;
-    border-bottom: 1px solid var(--color-divider);
-  }
-  .principles h2 {
-    font-family: var(--font-heading);
-    font-weight: 600;
-    font-size: 32px;
-    margin: 0 0 12px;
-  }
-  .principles-lede {
-    font-size: 15px;
-    color: var(--color-neutral-700);
-    max-width: 56ch;
-    margin: 0 0 40px;
-  }
+  /* Speakers: four features on accent rules, like the principles. */
+  .feature-grid,
   .principle-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 32px 56px;
   }
+  .feature,
   .principle {
     border-top: 1px solid var(--color-accent-400);
     padding-top: 16px;
   }
+  .feature-title,
   .principle-title {
     font-family: var(--font-heading);
     font-weight: 600;
     font-size: 18px;
   }
+  .feature p,
   .principle p {
     margin: 6px 0 0;
     font-size: 14.5px;
     color: var(--color-neutral-700);
+  }
+
+  /* Ask: prose beside a still of one exchange. */
+  .ask-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 48px;
+    align-items: start;
+  }
+  .ask-text p {
+    margin: 0 0 16px;
+    font-size: 15px;
+    color: var(--color-neutral-800);
+  }
+  .ask-fine {
+    font-size: 14px !important;
+    color: var(--color-neutral-700) !important;
+    font-style: italic;
+    margin-bottom: 0 !important;
+  }
+  .ask-demo {
+    border: 1px solid var(--color-divider);
+    background: var(--color-surface);
+    padding: 20px 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 6px;
+  }
+  .demo-q {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 19px;
+    line-height: 1.3;
+  }
+  .demo-a {
+    font-size: 14px;
+    color: var(--color-neutral-800);
+    padding-left: 14px;
+    border-left: 2px solid var(--color-accent-400);
+  }
+  .demo-src {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 12.5px;
+    color: var(--color-neutral-600);
+    padding-top: 10px;
+    border-top: 1px solid var(--color-divider);
+  }
+  .demo-src span:first-child {
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-size: 11px;
+  }
+  .demo-src span:not(:first-child) {
+    color: var(--color-accent-600);
+  }
+
+  /* Vault: the folder tree is the picture. */
+  .vault-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    gap: 48px;
+    align-items: start;
+  }
+  .vault-tree pre {
+    margin: 0;
+    padding: 20px 22px;
+    border: 1px solid var(--color-divider);
+    background: var(--color-surface);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--color-neutral-800);
+    overflow-x: auto;
+  }
+  .vault-tree code {
+    font-size: 1em;
+  }
+  .vault-text p {
+    margin: 0 0 16px;
+    font-size: 15px;
+    color: var(--color-neutral-800);
+  }
+  .vault-text p:last-child {
+    margin-bottom: 0;
+  }
+  .vault-text em {
+    color: var(--color-accent-600);
   }
 
   .closer {
@@ -420,14 +935,13 @@ const github = "https://github.com/leins275/transcriber";
     align-items: center;
     gap: 20px;
     text-align: center;
+    border-bottom: 0;
   }
   .closer h2 {
-    font-family: var(--font-heading);
     font-weight: 400;
     font-size: 36px;
     margin: 0;
     max-width: 22ch;
-    text-wrap: balance;
   }
   .closer .cta-row {
     justify-content: center;
@@ -441,22 +955,65 @@ const github = "https://github.com/leins275/transcriber";
     .page {
       padding: 0 20px;
     }
+    section {
+      padding: 56px 0;
+    }
     .hero {
       padding: 56px 0 48px;
     }
     .hero h1 {
       font-size: 40px;
     }
-    .steps {
-      grid-template-columns: 1fr;
-      gap: 32px;
+    .story h2 {
+      font-size: 32px;
     }
-    .step {
-      padding: 0;
+    .story-cols,
+    .contrast,
+    .feature-grid,
+    .principle-grid,
+    .ask-cols,
+    .vault-cols {
+      grid-template-columns: 1fr;
+    }
+    .contrast-them {
       border-right: 0;
+      border-bottom: 1px solid var(--color-divider);
     }
-    .principle-grid {
-      grid-template-columns: 1fr;
+    .vault-tree {
+      order: 2;
+    }
+    /* The rail turns vertical: dots down the left, the line runs between them. */
+    .rail {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      margin-bottom: 40px;
+    }
+    .node {
+      flex-direction: row;
+      gap: 14px;
+      text-align: left;
+      padding-bottom: 14px;
+    }
+    .node-dot {
+      width: 32px;
+      height: 32px;
+      font-size: 13px;
+    }
+    .node:not(:last-child)::after {
+      top: 16px;
+      left: 16px;
+      width: 0;
+      height: 100%;
+      border-top: 0;
+      border-left: 1px solid var(--color-accent-400);
+    }
+    .stage {
+      grid-template-columns: 40px minmax(0, 1fr);
+      gap: 10px 16px;
+    }
+    .stage-artifact {
+      grid-column: 2;
     }
     .topnav {
       gap: 14px;
