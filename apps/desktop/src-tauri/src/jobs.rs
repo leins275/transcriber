@@ -1062,8 +1062,9 @@ async fn llm_model_present(shared: &Arc<Shared>) -> bool {
 
 /// Whether the meeting folder's recording (`source.<ext>`) is a video, by
 /// the vault's own extension split. A folder with no recording, or one
-/// that cannot be read, is not a video.
-async fn source_is_video(meeting_dir: PathBuf) -> bool {
+/// that cannot be read, is not a video. Shared with the manual "Compress
+/// video" command (`commands/llm.rs`), which refuses on the same rule.
+pub(crate) async fn source_is_video(meeting_dir: PathBuf) -> bool {
     tokio::task::spawn_blocking(move || {
         vault::source_file_in(&meeting_dir)
             .and_then(|path| {
@@ -1827,6 +1828,52 @@ mod tests {
             // The Export button re-exports, nothing more.
             tokio::time::sleep(Duration::from_millis(200)).await;
             assert_eq!(fake.llm_submissions().len(), 1);
+            assert_eq!(registry.list().await.len(), 1);
+        });
+    }
+
+    #[test]
+    fn a_manual_compress_chains_nothing_and_ignores_the_toggle() {
+        run(async {
+            let dir = tempdir().expect("tempdir");
+            let meeting_dir = dir.path().join("ELS").join("260101 - Planning");
+            fs::create_dir_all(&meeting_dir).expect("mkdir");
+            fs::write(meeting_dir.join("source.mp4"), b"bytes").expect("write source");
+            let fake = Arc::new(FakeService::new());
+            let registry = JobRegistry::with_poll_interval(
+                dir.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingSink::new()),
+                Duration::from_millis(10),
+            );
+            // The setting only switches the automatic stage off.
+            registry.set_compress_video(false);
+
+            let meeting = meeting_dir.to_string_lossy().into_owned();
+            let snapshot = registry
+                .enqueue_llm(crate::service::LlmSubmitRequest {
+                    kind: crate::service::LlmJobKind::Compress,
+                    input_path: meeting.clone(),
+                    output_dir: meeting,
+                    max_speakers: None,
+                    speaker_match_threshold: None,
+                    normalize_audio: Some(true),
+                })
+                .await;
+            assert_eq!(snapshot.job_type, "compress");
+            wait_for(
+                &registry,
+                &snapshot.id,
+                |s| s.state == JobState::Done,
+                Duration::from_secs(5),
+            )
+            .await;
+
+            // The Compress button compresses, nothing more.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let submissions = fake.llm_submissions();
+            assert_eq!(submissions.len(), 1);
+            assert_eq!(submissions[0].kind, crate::service::LlmJobKind::Compress);
             assert_eq!(registry.list().await.len(), 1);
         });
     }

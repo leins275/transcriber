@@ -262,6 +262,7 @@ fn view_for(id: &str, root: &Path, meeting_dir: &Path) -> VaultMeetingView {
         meeting_dir: meeting_dir.to_string_lossy().into_owned(),
         has_source: has_source_file(meeting_dir),
         has_transcript: meeting_dir.join(vault::TRANSCRIPT_FILE_NAME).is_file(),
+        video_compressed: vault::source_video_compressed(meeting_dir),
     }
 }
 

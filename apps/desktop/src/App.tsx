@@ -642,6 +642,15 @@ function App() {
     },
     [upsertJob],
   );
+  // The chain's compress stage on request ("Compress video" / "Compress
+  // again"). The marker flips by itself: the vault is re-listed when the
+  // job reaches a terminal state.
+  const handleCompressVideo = useCallback(
+    async (entryId: string) => {
+      upsertJob(await api.compressVaultEntry(entryId));
+    },
+    [upsertJob],
+  );
   // Title suggestions the operator has already been shown (by job id): each
   // one opens the rename form once, never again on a later visit.
   const [shownTitleSuggestions, setShownTitleSuggestions] = useState<string[]>([]);
@@ -860,6 +869,7 @@ function App() {
                   activeLlmJobs={activeLlmJobs}
                   summaryReloadToken={summaryReloadToken}
                   onSuggestTitle={handleSuggestTitle}
+                  onCompressVideo={handleCompressVideo}
                   llmReady={llmReady}
                   titleSuggestion={
                     newestTitleSuggestion

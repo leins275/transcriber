@@ -281,6 +281,10 @@ export const api = {
    * Renames nothing: the finished job's snapshot carries `suggested_title`. */
   suggestTitleForVaultEntry: (entryId: string): Promise<JobSnapshot> =>
     call<JobSnapshot>("suggest_title_for_vault_entry", { entryId }),
+  /** Re-encodes the meeting's video recording in its place — the chain's
+   * compress stage, on request. Refused for a meeting without a video. */
+  compressVaultEntry: (entryId: string): Promise<JobSnapshot> =>
+    call<JobSnapshot>("compress_vault_entry", { entryId }),
   llmModelDownloadStatus: (): Promise<LlmModelDownloadStatus> =>
     call<LlmModelDownloadStatus>("llm_model_download_status"),
   startLlmModelDownload: (): Promise<LlmModelDownloadStatus> =>

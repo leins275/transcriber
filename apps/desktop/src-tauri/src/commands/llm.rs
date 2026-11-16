@@ -130,6 +130,41 @@ pub async fn suggest_title_for_vault_entry_handler(
     Ok(enqueue(state, LlmJobKind::SuggestTitle, &meeting_dir, &meeting_dir).await)
 }
 
+/// `compress_vault_entry` -- re-encode the meeting's video recording in its
+/// place, on the operator's request ("Compress video" / "Compress again").
+///
+/// The same `compress` job the drop-to-insights chain ends with, with the
+/// same voice-levelling switch, but not gated by the `compress_video`
+/// setting (that only switches the automatic stage) and followed by
+/// nothing. The service needs no transcript for it, only a recording --
+/// and only a video is worth the job, so anything else is refused here.
+/// There is no "force": on an already compressed recording the service
+/// keeps its result only when it comes out smaller.
+pub async fn compress_vault_entry_handler(
+    state: &AppState,
+    entry_id: &str,
+) -> Result<JobSnapshot, AppError> {
+    let (_root, meeting_dir) = resolve_entry(state, entry_id).await?;
+    if !crate::jobs::source_is_video(meeting_dir.clone()).await {
+        let name = meeting_name_of(&meeting_dir);
+        return Err(AppError::invalid_argument(format!(
+            "\"{name}\" has no video recording to compress"
+        )));
+    }
+    let registry = state.registry.read().await;
+    let dir = meeting_dir.to_string_lossy().into_owned();
+    Ok(registry
+        .enqueue_llm(LlmSubmitRequest {
+            kind: LlmJobKind::Compress,
+            input_path: dir.clone(),
+            output_dir: dir,
+            max_speakers: None,
+            speaker_match_threshold: None,
+            normalize_audio: Some(registry.normalize_audio()),
+        })
+        .await)
+}
+
 // -- GGUF model download ----------------------------------------------------
 
 /// Health-derived fields the download status alone cannot answer:
@@ -348,6 +383,14 @@ pub async fn suggest_title_for_vault_entry(
     entry_id: String,
 ) -> Result<JobSnapshot, AppError> {
     suggest_title_for_vault_entry_handler(&state, &entry_id).await
+}
+
+#[tauri::command]
+pub async fn compress_vault_entry(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<JobSnapshot, AppError> {
+    compress_vault_entry_handler(&state, &entry_id).await
 }
 
 #[tauri::command]
@@ -703,6 +746,120 @@ mod tests {
             );
             assert!(meeting_dir.is_dir(), "nothing is renamed by the job");
             assert_eq!(fake.llm_submissions().len(), 1, "nothing is chained");
+        });
+    }
+
+    #[test]
+    fn compress_refuses_a_meeting_without_a_video_recording() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let dir = root.path().join("ELS").join("260101 - Planning");
+            std::fs::create_dir_all(&dir).expect("mkdir");
+            std::fs::write(dir.join("source.m4a"), b"bytes").expect("write source");
+            std::fs::write(dir.join("transcript.json"), b"{}").expect("write transcript");
+            let fake = Arc::new(FakeService::new());
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+
+            let err = compress_vault_entry_handler(&state, &id)
+                .await
+                .expect_err("an audio-only recording must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(
+                err.message().contains("no video recording"),
+                "{}",
+                err.message()
+            );
+
+            // The same for a meeting with no recording at all.
+            std::fs::remove_file(dir.join("source.m4a")).expect("remove source");
+            let err = compress_vault_entry_handler(&state, &id)
+                .await
+                .expect_err("no recording must be refused");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+            assert!(fake.llm_submissions().is_empty());
+        });
+    }
+
+    #[test]
+    fn compress_rejects_an_unknown_entry_id() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+
+            let err = compress_vault_entry_handler(&state, "not-an-entry")
+                .await
+                .expect_err("only ids list_vault issued name a meeting");
+            assert_eq!(err.kind(), ErrorKind::InvalidArgument);
+        });
+    }
+
+    #[test]
+    fn compress_submits_the_job_with_the_levelling_switch_and_needs_no_transcript() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            // No transcript: the service asks for none on a compress job.
+            make_meeting(root.path(), "ELS", "260101 - Planning", false);
+            let fake = Arc::new(FakeService::new());
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                fake.clone(),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let id = only_entry_id(&state).await;
+            {
+                let registry = state.registry.read().await;
+                // The setting gates the automatic stage only; the levelling
+                // switch travels with the manual job too.
+                registry.set_compress_video(false);
+                registry.set_normalize_audio(false);
+            }
+
+            let snapshot = compress_vault_entry_handler(&state, &id)
+                .await
+                .expect("compress must enqueue");
+            assert_eq!(snapshot.job_type, "compress");
+
+            let submission = first_llm_submission(&fake).await;
+            assert_eq!(submission.kind, crate::service::LlmJobKind::Compress);
+            assert!(submission.input_path.ends_with("260101 - Planning"));
+            assert_eq!(submission.input_path, submission.output_dir);
+            assert_eq!(submission.normalize_audio, Some(false));
+            assert_eq!(submission.max_speakers, None);
+
+            // Nothing follows a manual compress.
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            assert_eq!(fake.llm_submissions().len(), 1, "nothing is chained");
+        });
+    }
+
+    #[test]
+    fn list_vault_reports_whether_the_video_is_compressed() {
+        run(async {
+            let root = tempdir().expect("tempdir");
+            // `make_meeting` writes a `source.mp4` that is no HEVC mp4.
+            make_meeting(root.path(), "ELS", "260101 - Planning", true);
+            let state = state_with_root(
+                root.path().to_path_buf(),
+                Arc::new(FakeService::new()),
+                Arc::new(RecordingRevealer::default()),
+            );
+            let entries = list_vault_handler(&state).await.expect("list vault");
+            assert_eq!(entries[0].video_compressed, Some(false));
+
+            let dir = root.path().join("ELS").join("260101 - Planning");
+            std::fs::remove_file(dir.join("source.mp4")).expect("remove source");
+            std::fs::write(dir.join("source.mp3"), b"bytes").expect("write source");
+            let entries = list_vault_handler(&state).await.expect("list vault");
+            assert_eq!(entries[0].video_compressed, None);
         });
     }
 

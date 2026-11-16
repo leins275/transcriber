@@ -173,6 +173,12 @@ pub struct VaultMeetingView {
     pub meeting_dir: String,
     pub has_source: bool,
     pub has_transcript: bool,
+    /// Whether the meeting's video recording has been compressed -- read
+    /// from the recording itself (`vault::source_video_compressed`: an
+    /// mp4/mov with an HEVC video track, which is what the compress stage
+    /// leaves behind). `None` when there is no video recording (no source,
+    /// or an audio-only one); additive.
+    pub video_compressed: Option<bool>,
 }
 
 /// IPC contract's `ServiceStatusView.state` (plan.md).
@@ -393,12 +399,6 @@ impl Revealer for ExplorerRevealer {
     }
 }
 
-/// State shared by every command handler. Constructed once at startup
-/// (`lib.rs`) and replaced piecewise (settings, registry, service) as the
-/// app runs; every field is behind a lock so handlers never need `&mut`
-/// access to the whole thing.
-pub struct AppState {
-    pub config_dir: PathBuf,
 /// Neither shipped platform: the app has no Linux build, but the crate is
 /// checked from one (WSL), so the type must still implement the trait.
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -410,6 +410,12 @@ impl Revealer for ExplorerRevealer {
     }
 }
 
+/// State shared by every command handler. Constructed once at startup
+/// (`lib.rs`) and replaced piecewise (settings, registry, service) as the
+/// app runs; every field is behind a lock so handlers never need `&mut`
+/// access to the whole thing.
+pub struct AppState {
+    pub config_dir: PathBuf,
     pub app_dir: PathBuf,
     pub settings: RwLock<Settings>,
     pub registry: RwLock<JobRegistry>,
@@ -988,6 +994,7 @@ pub async fn list_vault_handler(state: &AppState) -> Result<Vec<VaultMeetingView
             meeting_dir: meeting_dir.to_string_lossy().into_owned(),
             has_source: entry.has_source,
             has_transcript: entry.has_transcript,
+            video_compressed: entry.video_compressed,
         });
     }
 

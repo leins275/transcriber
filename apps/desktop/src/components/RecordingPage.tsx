@@ -66,6 +66,10 @@ export type RecordingPageProps = {
   /** The LLM feature's on-demand jobs over this recording. */
   onSummarize: (entryId: string) => Promise<void>;
   onExportPdf: (entryId: string) => Promise<void>;
+  /** Re-encodes this recording's video in its place (the chain's compress
+   * stage, on request). Offered only while `entry.video_compressed` says
+   * there is a video; absent, the action is not offered at all. */
+  onCompressVideo?: (entryId: string) => Promise<void>;
   /** Speaker identification over this recording's existing transcript. */
   onDiarize: (entryId: string) => Promise<void>;
   /** Whether speaker identification is set up (runtime and models on
@@ -162,6 +166,7 @@ export function RecordingPage({
   onTranscribe,
   onSummarize,
   onExportPdf,
+  onCompressVideo,
   onDiarize,
   speakersReady,
   activeLlmJobs,
@@ -379,6 +384,10 @@ export function RecordingPage({
   const turns = transcript ? groupIntoTurns(transcript.segments, transcript.speakers) : [];
   const speakers = speakerNames(turns);
 
+  // Whether the video recording has been compressed; `null` = no video
+  // recording, so neither the marker nor the action is shown.
+  const videoCompressed = entry.video_compressed ?? null;
+
   // One provenance line, the decoded language first — it is the one value
   // the operator acts on (a wrong one means re-transcribe with an override).
   const languageName = transcript?.language ? LANGUAGE_NAMES[transcript.language] : undefined;
@@ -389,12 +398,14 @@ export function RecordingPage({
     speakers.length > 0 ? `${speakers.length} speaker${speakers.length === 1 ? "" : "s"}` : null,
     transcript?.model,
     transcript?.device,
+    videoCompressed === null ? null : videoCompressed ? "Video compressed" : "Video not compressed",
   ].filter((part): part is string => Boolean(part));
 
   const summarizing = activeLlmJobs.includes("summarize");
   const exporting = activeLlmJobs.includes("export");
   const diarizing = activeLlmJobs.includes("diarize");
   const suggestingTitle = activeLlmJobs.includes("suggest_title");
+  const compressing = activeLlmJobs.includes("compress");
 
   const closeMenuAnd = (action: () => void) => () => {
     setMenuOpen(false);
@@ -573,6 +584,21 @@ export function RecordingPage({
                       onClick={closeMenuAnd(() => void runLlm(onExportPdf))}
                     >
                       {exporting ? "Exporting…" : "Export PDF"}
+                    </button>
+                  )}
+                  {videoCompressed !== null && onCompressVideo && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={styles.menuItem}
+                      disabled={compressing}
+                      onClick={closeMenuAnd(() => void runLlm(onCompressVideo))}
+                    >
+                      {compressing
+                        ? "Compressing video…"
+                        : videoCompressed
+                          ? "Compress again"
+                          : "Compress video"}
                     </button>
                   )}
                   <button

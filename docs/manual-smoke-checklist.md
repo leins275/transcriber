@@ -87,6 +87,18 @@ Each names the automated coverage that stands in for it in the meantime.
       `test_llm_title.py`, `test_suggest_title_job.py`,
       `jobs::tests::*suggest_title*`, `commands::llm::tests::suggest_title_*`,
       `SuggestTitle.test.tsx`, `App.suggestTitle.test.tsx`.
+- [ ] **11b. Compressed marker and manual compress.** Open a meeting whose
+      video has not been compressed. Expected: the line under the title
+      ends with "Video not compressed" and `⋯` offers **Compress video**;
+      picking it queues a "Compressing video" job (the item reads
+      "Compressing video…" and is disabled meanwhile), also with
+      Settings → Recordings' compression switched off, and nothing is
+      queued after it. When the job has replaced the recording the line
+      reads "Video compressed" and the item **Compress again**. An
+      audio-only meeting shows neither the marker nor the item. Automated:
+      `vault::video::tests`, `commands::llm::tests::compress_*`,
+      `jobs::tests::a_manual_compress_chains_nothing_and_ignores_the_toggle`,
+      `CompressVideo.test.tsx`, `App.compressVideo.test.tsx`.
 - [ ] **12. Delete.** Delete a meeting and confirm. Expected: the folder is
       in the Windows Recycle Bin (restorable), not erased; the row
       disappears. Automated: `vault::manage::tests::delete_moves_the_meeting_out_of_the_vault_and_prunes_its_project`,

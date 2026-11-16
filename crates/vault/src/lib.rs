@@ -166,6 +166,10 @@ pub mod ingest;
 /// docs for exactly what "read-only" and "two levels" mean here.
 pub mod list;
 
+/// Whether a meeting's video recording has been compressed, read from the
+/// recording's own container (see the module docs).
+pub mod video;
+
 /// Post-ingest meeting management — rename, re-file and delete an existing
 /// meeting folder. Like [`list`], a scope extension over this crate's
 /// original spec; see the module docs for the containment gate that keeps
@@ -185,3 +189,4 @@ pub use paths::{
     ROSTER_FILE_NAME, SOURCE_STEM, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };
 pub use tags::TAG_SEPARATOR;
+pub use video::source_video_compressed;

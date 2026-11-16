@@ -102,14 +102,17 @@ Field semantics, matching `config.rs`'s `Settings`/`ServiceSettings`/`ModelSetti
   the stage; the service sees it as an unknown top-level key and ignores
   it, so no `TRANSCRIBER_*` variable or CLI flag reaches it. Written by
   the Settings page's Recordings row (`set_compress_video`), which takes
-  effect immediately and restarts nothing. Never written as `null`.
+  effect immediately and restarts nothing. Never written as `null`. It
+  switches the automatic stage only: the recording page's manual "Compress
+  video" / "Compress again" (`compress_vault_entry`) ignores it.
 - `normalize_audio` (`bool`, absent by default) — whether that compress
   stage evens out the voices in the audio track (a quiet speaker lifted
   towards a loud one, FFmpeg's `dynaudnorm` in-process; the track is then
   always re-encoded to AAC instead of copied). Absent means **on**. Read by
   the **app** only (`config.rs`'s `normalize_audio_enabled`): the job
   registry sends the resolved value as the compress submission's
-  `normalize_audio` field (`services/transcription/README.md`), so the
+  `normalize_audio` field (`services/transcription/README.md`) — on the
+  chained stage and on a manual `compress_vault_entry` alike — so the
   service never reads the key itself. Written by the same Recordings row
   (`set_normalize_audio`), immediate, no restart. Never written as `null`.
 - **Unknown keys are preserved.** Every level (`Settings`, `ServiceSettings`,

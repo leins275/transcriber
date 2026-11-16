@@ -140,6 +140,12 @@ export type VaultMeetingView = {
   meeting_dir: string;
   has_source: boolean;
   has_transcript: boolean;
+  /** Whether the meeting's video recording has been compressed — read by
+   * the app from the recording itself, so it also holds for meetings
+   * compressed before the marker existed. `null` when there is no video
+   * recording (no source, or audio only). Optional so entry literals written
+   * before the field still typecheck; absent reads as `null`. */
+  video_compressed?: boolean | null;
 };
 
 // Per-meeting extension to the IPC contract (additive, mirroring the Rust

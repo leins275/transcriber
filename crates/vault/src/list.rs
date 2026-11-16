@@ -13,7 +13,9 @@
 //! `<root>/<PROJECT>/<meeting>` and `<root>/unsorted/<meeting>` — and goes no
 //! further: it does not recurse into a meeting folder's own contents beyond
 //! checking whether `source.*`/`transcript.json` exist there, and it never
-//! reads a file's bytes. A junk entry at either level (a stray file where a
+//! reads a file's bytes — with one exception: a video `source.mp4`/`.mov`
+//! has a few box headers read (never its media data) to tell whether it
+//! has been compressed, see [`crate::video`]. A junk entry at either level (a stray file where a
 //! directory was expected, an unreadable directory, a name that is not valid
 //! Unicode, a root-level directory whose name is not the reserved `unsorted`
 //! word and does not match the project-code pattern) is skipped rather than
@@ -32,6 +34,7 @@ use crate::date;
 use crate::paths::{
     RESERVED_PROJECT_DIR_NAMES, SOURCE_STEM, TRANSCRIPT_FILE_NAME, UNSORTED_DIR_NAME,
 };
+use crate::video::source_video_compressed;
 
 /// One meeting folder found while listing the vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +55,10 @@ pub struct MeetingEntry {
     /// Whether a `source.*` recording exists directly inside `meeting_dir`
     /// (an existence check only — the file's contents are never read).
     pub has_source: bool,
+    /// Whether the meeting's video recording has been compressed
+    /// ([`crate::video::source_video_compressed`]); `None` when there is
+    /// no video recording — no source at all, or an audio-only one.
+    pub video_compressed: Option<bool>,
     /// Whether `transcript.json` exists directly inside `meeting_dir` (an
     /// existence check only).
     pub has_transcript: bool,
@@ -170,6 +177,7 @@ fn collect_meetings(parent: &Path, project: Option<String>, out: &mut Vec<Meetin
             project: project.clone(),
             has_transcript: meeting_dir.join(TRANSCRIPT_FILE_NAME).is_file(),
             has_source: has_source_file(&meeting_dir),
+            video_compressed: source_video_compressed(&meeting_dir),
             meeting_name,
             meeting_dir,
         });

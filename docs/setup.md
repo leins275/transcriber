@@ -319,6 +319,24 @@ hour of 4K meeting on a desktop CPU and a little over half that with NVENC
 (the GPU output is about 10 % larger); like every job it holds the serial
 queue while it runs, so the next drop's transcription waits behind it.
 
+**Is it compressed, and compressing by hand.** A recording page's
+provenance line (under the title) ends with **Video compressed** or
+**Video not compressed**; an audio-only meeting shows neither. The app
+reads this from the recording itself — a `source.mp4`/`.mov` whose video
+track is HEVC counts as compressed — so it also holds for meetings
+compressed before the marker existed, and no marker file is written. Two
+consequences: a recording that arrived as HEVC already reads as
+compressed, and one the service decided to keep as it was (already under
+700 kbps, or the result was not 15 % smaller) keeps reading "not
+compressed". The page's overflow menu (`⋯`) offers **Compress video** —
+**Compress again** on an already compressed one — which queues the same
+compress job on request: it works with the automatic stage switched off,
+needs no transcript, follows the voice-levelling switch, and triggers
+nothing after it. There is no "force": compressing again re-encodes and
+keeps the result only if it comes out at least 15 % smaller, otherwise the
+Service log row says the original was kept. The marker updates when the
+job finishes.
+
 ## Suggesting a title from the summary
 
 Recordings often arrive with names that say nothing ("Запись встречи
