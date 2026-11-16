@@ -13,10 +13,9 @@
 #               explorer.exe, taskkill — is `#[cfg(windows)]`-gated since
 #               the macOS target landed, so the crate compiles elsewhere
 #               too, but this job stays the authoritative one.)
-#   rust-macos  macOS (Apple Silicon). A `cargo check` only — the cheapest
-#               guard that a Windows-focused PR cannot silently break the
-#               macOS release build's compile. The full macOS test suite
-#               runs on the release leg and on developers' Macs.
+#               There is no macOS job: macOS is not built or checked in
+#               CI for now (Windows only), so the macOS code paths are
+#               unguarded until its `cargo check` job comes back.
 #   python      windows-only. `runtime_dlls` and `cuda_runtime` are about
 #               Windows DLL loading, and their tests assert on it.
 #   scripts     windows-only. The build-system tests know about NSIS, the
@@ -97,25 +96,6 @@ jobs:
             git status --porcelain
             exit 1
           fi
-
-  rust-macos:
-    name: Rust (macOS check)
-    runs-on: macos-14
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-
-      # Compile-only on purpose: `--all-targets` includes the test targets,
-      # so cfg-gate mistakes in tests surface too, without paying for a
-      # second full test run per PR.
-      - name: cargo check
-        run: cargo check --workspace --all-targets
 
   frontend:
     name: Frontend

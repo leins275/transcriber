@@ -72,12 +72,14 @@ jobs:
             echo "release=true" >> "$GITHUB_OUTPUT"
           fi
 
-  # One leg per platform, in parallel: the Windows NSIS installer and the
-  # macOS (Apple Silicon) dmg. Each leg runs the same `build_installer.py`
-  # pipeline a developer runs locally, stages its artifacts under a
-  # per-platform name, and uploads them for the fan-in `publish` job below --
-  # the release object itself is only ever created once, after *both* legs
-  # succeed, so a failed leg leaves no partial release behind.
+  # One leg per platform -- Windows only for now: the macOS (Apple Silicon)
+  # dmg leg is switched off until macOS is supported again (re-adding it
+  # means a `macos-14` / `darwin-aarch64` matrix entry plus its updater
+  # archive in the stage, manifest and confirm steps below). The leg runs the
+  # same `build_installer.py` pipeline a developer runs locally, stages its
+  # artifacts under a per-platform name, and uploads them for the `publish`
+  # job below -- the release object itself is only ever created once, after
+  # the build succeeds, so a failed build leaves no partial release behind.
   build:
     needs: check
     if: needs.check.outputs.release == 'true'
@@ -87,8 +89,6 @@ jobs:
         include:
           - os: windows-latest
             slug: windows-x86_64
-          - os: macos-14 # Apple Silicon (arm64) runner
-            slug: darwin-aarch64
     runs-on: ${{ matrix.os }}
     # The installer build bakes a relocatable CPython, installs the frozen
     # dependency tree, builds Rust in release mode and bundles. On a cold
@@ -130,12 +130,6 @@ jobs:
       # set, `createUpdaterArtifacts` fails the build rather than silently
       # publishing unsigned archives -- which is the right way round.
       #
-      # The macOS app is NOT Apple-signed or notarized yet (no Developer ID):
-      # first launch needs right-click -> Open. When a certificate exists,
-      # signing/notarization slots in here via:
-      #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD /
-      #   APPLE_SIGNING_IDENTITY / APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
-      #
       # The pyannote speaker models the installer ships are committed to the
       # repository (apps/desktop/src-tauri/resources/models/), so this build
       # needs no Hugging Face access; the pipeline only checks they match
@@ -151,13 +145,10 @@ jobs:
       # `sync_version.artifact_name`, the same function `build_installer.py`
       # names the file with, so the workflow cannot drift from the builder by
       # spelling the pattern out itself. build-manifest.json is renamed
-      # per-platform because both legs produce one.
+      # per-platform because every leg produces one.
       #
-      # The updater consumes different artifacts per platform: on Windows,
-      # `createUpdaterArtifacts` signs the NSIS installer itself
-      # (`<installer>.exe.sig`); on macOS it produces a separate
-      # `Transcriber.app.tar.gz` + `.sig` -- the .dmg is first-install media
-      # only and is published unsigned (checksummed).
+      # The updater consumes the installer itself: `createUpdaterArtifacts`
+      # signs the NSIS installer in place (`<installer>.exe.sig`).
       - name: Stage release assets
         shell: bash
         run: |
@@ -185,25 +176,13 @@ jobs:
           mkdir -p stage
           cp "$installer" "$installer.sha256" stage/
           cp dist/build-manifest.json "stage/build-manifest-${{ matrix.slug }}.json"
-          if [ "${{ matrix.slug }}" = "windows-x86_64" ]; then
-            sig="target/release/bundle/nsis/$(basename "$installer").sig"
-            if [ ! -s "$sig" ]; then
-              echo "::error::updater signature missing: $sig -- was TAURI_SIGNING_PRIVATE_KEY set for the build?"
-              ls -la target/release/bundle/nsis/ || true
-              exit 1
-            fi
-            cp "$sig" "stage/$(basename "$installer").sig"
-          else
-            updater_archive="target/release/bundle/macos/Transcriber.app.tar.gz"
-            for asset in "$updater_archive" "$updater_archive.sig"; do
-              if [ ! -s "$asset" ]; then
-                echo "::error::macOS updater artifact missing: $asset -- was TAURI_SIGNING_PRIVATE_KEY set for the build?"
-                ls -la target/release/bundle/macos/ || true
-                exit 1
-              fi
-            done
-            cp "$updater_archive" "$updater_archive.sig" stage/
+          sig="target/release/bundle/nsis/$(basename "$installer").sig"
+          if [ ! -s "$sig" ]; then
+            echo "::error::updater signature missing: $sig -- was TAURI_SIGNING_PRIVATE_KEY set for the build?"
+            ls -la target/release/bundle/nsis/ || true
+            exit 1
           fi
+          cp "$sig" "stage/$(basename "$installer").sig"
           echo "staged for ${{ matrix.slug }}:"
           ls -la stage/
 
@@ -213,8 +192,8 @@ jobs:
           path: stage/
           if-no-files-found: error
 
-  # Fan-in: download both legs' staged assets, assemble one combined update
-  # manifest, and create the release exactly once with everything attached.
+  # Download the staged assets, assemble the update manifest, and create the
+  # release exactly once with everything attached.
   publish:
     needs: [check, build]
     if: needs.check.outputs.release == 'true'
@@ -250,12 +229,10 @@ jobs:
       # produced* -- so a manifest can never claim a signature that was not
       # made for these bytes.
       #
-      # Per platform the updater downloads different things: on Windows the
-      # NSIS installer itself (signed in place, no separate archive -- the
-      # legacy `.nsis.zip` is the `v1Compatible` layout this does not use),
-      # with `plugins.updater.windows.installMode: "passive"` as the client
-      # half; on macOS the `Transcriber.app.tar.gz` updater archive, never
-      # the .dmg.
+      # The updater downloads the NSIS installer itself (signed in place, no
+      # separate archive -- the legacy `.nsis.zip` is the `v1Compatible`
+      # layout this does not use), with
+      # `plugins.updater.windows.installMode: "passive"` as the client half.
       #
       # Assembled in Python rather than shell: `notes` is arbitrary prose
       # from CHANGELOG.md, and hand-escaping that into JSON with sed is how
@@ -289,9 +266,6 @@ jobs:
           installers = sorted(assets.glob("*.exe"))
           if len(installers) != 1:
               sys.exit(f"::error::expected exactly one staged .exe, found {installers}")
-          mac_archive = assets / "Transcriber.app.tar.gz"
-          if not mac_archive.is_file():
-              sys.exit("::error::macOS updater archive Transcriber.app.tar.gz was not staged")
 
           notes = pathlib.Path("release-notes.md").read_text(encoding="utf-8").strip()
           pathlib.Path("latest.json").write_text(
@@ -305,7 +279,6 @@ jobs:
                       .replace("+00:00", "Z"),
                       "platforms": {
                           "windows-x86_64": signed_platform(installers[0]),
-                          "darwin-aarch64": signed_platform(mac_archive),
                       },
                   },
                   indent=2,
@@ -313,7 +286,7 @@ jobs:
               + "\n",
               encoding="utf-8",
           )
-          print(f"latest.json covers {installers[0].name} and {mac_archive.name}")
+          print(f"latest.json covers {installers[0].name}")
           PY
         env:
           VERSION: ${{ needs.check.outputs.version }}
@@ -334,9 +307,9 @@ jobs:
 
       # `gh release create` can succeed with a partial upload if an asset is
       # rejected after the release object is made. Read the published release
-      # back and confirm both installers and the macOS updater archive are
-      # actually attached -- the whole point of the release is those files.
-      - name: Confirm the installers are attached to the published release
+      # back and confirm the installer is actually attached -- the whole
+      # point of the release is that file.
+      - name: Confirm the installer is attached to the published release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -344,9 +317,8 @@ jobs:
           set -euo pipefail
           version="${{ needs.check.outputs.version }}"
           exe_name=$(basename assets/*.exe)
-          dmg_name=$(basename assets/*.dmg)
           failed=0
-          for name in "$exe_name" "$dmg_name" "Transcriber.app.tar.gz"; do
+          for name in "$exe_name"; do
             size=$(gh release view "v$version" \
               --json assets \
               --jq ".assets[] | select(.name == \"$name\") | .size")

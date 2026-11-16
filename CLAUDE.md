@@ -80,7 +80,7 @@ Installer build: `make installer` → `dist/Transcriber_<version>_x64-setup.exe`
 
 ## Releasing — commit subjects are load-bearing
 
-Merging to `main` **is** the ship decision (no release PRs). `tag.yml` computes the next version from conventional-commit subjects since the last `v*` tag: `feat:` → minor, `fix:`/`perf:` → patch, `feat!:`/`BREAKING CHANGE:` → major, everything else → no release. CI then commits the bump + CHANGELOG to `main`, tags `vX.Y.Z`, and `release.yml` builds both installers (Windows NSIS + macOS dmg) and publishes one GitHub Release. A failed build leaves a tag with no release — re-run `release.yml` on the tag, it's idempotent. Details in `docs/releasing.md`.
+Merging to `main` **is** the ship decision (no release PRs). `tag.yml` computes the next version from conventional-commit subjects since the last `v*` tag: `feat:` → minor, `fix:`/`perf:` → patch, `feat!:`/`BREAKING CHANGE:` → major, everything else → no release. CI then commits the bump + CHANGELOG to `main`, tags `vX.Y.Z`, and `release.yml` builds the Windows NSIS installer and publishes one GitHub Release (CI neither builds nor checks macOS for now — its release leg and the `rust-macos` check are switched off). A failed build leaves a tag with no release — re-run `release.yml` on the tag, it's idempotent. Details in `docs/releasing.md`.
 
 ## Specs
 

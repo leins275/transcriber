@@ -11,8 +11,8 @@ How a change gets from a commit to an installer someone can download.
    everywhere, prepends the new section to `CHANGELOG.md`, commits `chore(release): X.Y.Z`
    to `main` and tags it `vX.Y.Z`.
 4. The tag triggers the release build: the Windows installer (NSIS `.exe`)
-   and the macOS Apple Silicon installer (`.dmg`) are built in parallel and
-   one GitHub Release is published with both attached.
+   is built and one GitHub Release is published with it attached. (macOS is
+   not built or checked in CI for now — Windows only.)
 
 There is no release PR and no separate "ship it" step: **merging to `main`
 is the ship decision.** A merge that contains only `docs:`/`chore:`-class
@@ -64,7 +64,7 @@ files fails CI rather than surfacing later as a confusing lockfile error.
 |---|---|---|
 | `.github/workflows/ci.yml` | every PR; called by `tag.yml` for direct pushes | format / lint / type / test across Rust, TypeScript and Python, in four parallel jobs |
 | `.github/workflows/tag.yml` | push to `main` | runs the CI gate first if the push was direct (a PR merge is already gated); then computes the next version; if there is one, commits the bump + changelog to `main` and pushes the `vX.Y.Z` tag |
-| `.github/workflows/release.yml` | `v*` tag | builds both installers in parallel (`windows-latest` + `macos-14`), then a fan-in `publish` job creates the GitHub Release once with everything attached |
+| `.github/workflows/release.yml` | `v*` tag | builds the Windows installer (`windows-latest`; the macOS leg is switched off for now), then the `publish` job creates the GitHub Release once with everything attached |
 
 One hand-off in there is explicit rather than implicit: refs pushed with the
 built-in `GITHUB_TOKEN` never trigger other workflows, so `tag.yml` ends by
@@ -73,32 +73,31 @@ your own credentials) triggers `release.yml` the ordinary way.
 
 CI runs mostly on Windows — the primary platform, whose code paths
 (`runtime_dlls`, NSIS, the Windows process plumbing) the other runners
-cannot exercise. Since the macOS target landed, the Windows-only Rust is
-`#[cfg(windows)]`-gated and a small `rust-macos` job runs
-`cargo check --workspace --all-targets` on an Apple Silicon runner, so a
-Windows-focused PR cannot silently break the macOS release build's compile.
+cannot exercise. The Windows-only Rust is `#[cfg(windows)]`-gated since the
+macOS target landed, but nothing in CI compiles for macOS at the moment (the
+`rust-macos` check and the macOS release leg were removed for speed while
+only Windows is supported), so the macOS code paths are unguarded.
 
 ### The installers are the release
 
-`release.yml` builds the two platforms as a matrix (`windows-latest` →
-`Transcriber_<v>_x64-setup.exe`, `macos-14` → `Transcriber_<v>_aarch64.dmg`
-plus the `Transcriber.app.tar.gz` updater archive) and will not publish a
-release without both attached, checking that twice. Each leg resolves its
+`release.yml` builds a one-entry platform matrix (`windows-latest` →
+`Transcriber_<v>_x64-setup.exe`; the `macos-14` leg is switched off for now)
+and will not publish a release without the installer attached, checking that
+twice. The leg resolves its
 artifact name from `sync_version.artifact_name` — the same function
 `build_installer.py` names the file with, so the workflow cannot drift from
 the builder — and fails if the installer, its `.sha256` or
 `build-manifest.json` is missing, empty, or implausibly small for a build
-that exited 0. The release object is created exactly once, by a fan-in
-`publish` job that runs only after both legs succeed — a failed leg leaves
+that exited 0. The release object is created exactly once, by a
+`publish` job that runs only after the build succeeds — a failed build leaves
 no partial release. After publishing, it reads the release back from the API
-and confirms the installers are actually attached, because
+and confirms the installer is actually attached, because
 `gh release create` can create the release object and still have an upload
 rejected.
 
-The macOS app is not Apple-signed or notarized yet (no Developer ID), so
-Gatekeeper blocks a plain double-click on first launch: right-click the app
-→ Open → Open. The workflow marks where the Apple signing secrets slot in
-once a certificate exists.
+A locally built macOS app is not Apple-signed or notarized (no Developer
+ID), so Gatekeeper blocks a plain double-click on first launch: right-click
+the app → Open → Open.
 
 The tag now exists *before* the build, which is the price of the simple
 tag-driven flow: an installer build that fails leaves a `vX.Y.Z` tag with no
@@ -145,8 +144,8 @@ How it fits together:
 | Piece | Where |
 |---|---|
 | Signing keypair | private key in the `TAURI_SIGNING_PRIVATE_KEY` repo secret; public key in `tauri.conf.json` |
-| Signed update artifacts + `.sig` | `createUpdaterArtifacts`, per platform: on Windows it signs the NSIS `-setup.exe` itself (Tauri v2 layout — no separate archive); on macOS it produces `Transcriber.app.tar.gz` + `.sig` (the `.dmg` is first-install media only) |
-| `latest.json` | assembled by `release.yml`'s `publish` job with both platform entries (`windows-x86_64`, `darwin-aarch64`) and attached to the Release |
+| Signed update artifacts + `.sig` | `createUpdaterArtifacts`: it signs the NSIS `-setup.exe` itself (Tauri v2 layout — no separate archive) |
+| `latest.json` | assembled by `release.yml`'s `publish` job with the `windows-x86_64` platform entry and attached to the Release |
 | The check | `state/useUpdate.ts` at launch, rendered by `UpdateNotice` |
 
 `latest.json` is built in the publish job rather than by the bundler,
