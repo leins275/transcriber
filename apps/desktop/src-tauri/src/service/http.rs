@@ -134,6 +134,29 @@ impl HttpTranscriptionService {
         }
     }
 
+    /// Whether something is still listening at the base URL. The timeout
+    /// error cannot say: Windows takes about two seconds to refuse a
+    /// loopback connection -- longer than a status poll waits -- so a
+    /// sidecar that is gone times out exactly like one that is blocked. A
+    /// blocked one still has its listening socket, and the kernel completes
+    /// the handshake without the process's help.
+    async fn accepts_connections(&self) -> bool {
+        let Ok(url) = reqwest::Url::parse(&self.base_url) else {
+            return false;
+        };
+        let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+            return false;
+        };
+        matches!(
+            tokio::time::timeout(
+                DEFAULT_CONNECT_TIMEOUT,
+                tokio::net::TcpStream::connect((host, port)),
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    }
+
     /// One call against a download slot (`GET`/`POST`/`DELETE` on a
     /// `/v1/<slot>/download` route): every slot answers the same
     /// `ModelDownloadResponse` body.
@@ -804,17 +827,18 @@ impl TranscriptionService for HttpTranscriptionService {
                     .get(self.endpoint(&format!("/v1/jobs/{job_id}"))),
             )
             .timeout(bounded_timeout);
-        let response = request.send().await.map_err(|err| {
-            // Connected but no answer: the service is alive and blocked,
-            // which the poll loop waits out rather than failing the job.
-            if err.is_timeout() && !err.is_connect() {
-                ServiceError::Busy {
+        let response = match request.send().await {
+            Ok(response) => response,
+            // No answer in time, yet the port still accepts a connection:
+            // the service is alive and blocked, which the poll loop waits
+            // out rather than failing the job.
+            Err(err) if err.is_timeout() && self.accepts_connections().await => {
+                return Err(ServiceError::Busy {
                     detail: format!("{}: {err}", self.base_url),
-                }
-            } else {
-                self.unavailable(err)
+                });
             }
-        })?;
+            Err(err) => return Err(self.unavailable(err)),
+        };
 
         if !response.status().is_success() {
             return Err(service_error_from_response(response).await);

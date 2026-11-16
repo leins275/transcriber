@@ -30,6 +30,7 @@ tokio = { version = "1", features = [
   "io-util",
   "sync",
   "macros",
+  "net",
 ] }
 # `stream` is load-bearing for the chat SSE: `Response::bytes_stream()`
 # does not exist without it.
