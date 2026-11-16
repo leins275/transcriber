@@ -3,6 +3,26 @@
 Every release of Transcriber, newest first. Generated from conventional
 commits by git-cliff — edit the commit messages, not this file.
 
+## 0.35.0 — 2026-11-16
+
+### Bug fixes
+
+- Tell a dead service from a busy one by probing its port
+- Make the NPU compile wait build so it can ship
+- Wait out the NPU model compile instead of failing the job
+
+### Build & CI
+
+- Build and check Windows only for now
+
+### Documentation
+
+- **landing**: Tell the manager's story and show the whole pipeline
+
+### Features
+
+- Show whether a video is compressed and compress it by hand
+
 ## 0.34.0 — 2026-10-16
 
 ### Features
