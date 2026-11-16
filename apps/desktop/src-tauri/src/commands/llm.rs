@@ -42,7 +42,9 @@ pub struct LlmModelDownloadStatusView {
 
 pub(super) fn map_service_error(err: ServiceError) -> AppError {
     match err {
-        ServiceError::Unavailable { detail } => AppError::service_unavailable(detail),
+        ServiceError::Unavailable { detail } | ServiceError::Busy { detail } => {
+            AppError::service_unavailable(detail)
+        }
         ServiceError::Auth { message } => AppError::service_unavailable(message),
         ServiceError::Http { status, message } => {
             AppError::service(format!("service error {status}: {message}"))

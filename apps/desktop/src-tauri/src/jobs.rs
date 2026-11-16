@@ -2536,7 +2536,9 @@ mod tests {
 
             let service = Arc::new(BusyThenFakeService {
                 inner: FakeService::new(),
-                busy_polls: std::sync::atomic::AtomicU32::new(MAX_CONSECUTIVE_POLL_ERRORS * 4),
+                busy_polls: std::sync::atomic::AtomicU32::new(
+                    super::MAX_CONSECUTIVE_POLL_ERRORS * 4,
+                ),
             });
             let registry = JobRegistry::with_poll_interval(
                 root.path().to_path_buf(),

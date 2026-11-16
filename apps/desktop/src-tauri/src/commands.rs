@@ -399,6 +399,17 @@ impl Revealer for ExplorerRevealer {
 /// access to the whole thing.
 pub struct AppState {
     pub config_dir: PathBuf,
+/// Neither shipped platform: the app has no Linux build, but the crate is
+/// checked from one (WSL), so the type must still implement the trait.
+#[cfg(not(any(windows, target_os = "macos")))]
+impl Revealer for ExplorerRevealer {
+    fn reveal(&self, _path: &Path) -> Result<(), AppError> {
+        Err(AppError::internal(
+            "reveal is not supported on this platform",
+        ))
+    }
+}
+
     pub app_dir: PathBuf,
     pub settings: RwLock<Settings>,
     pub registry: RwLock<JobRegistry>,
