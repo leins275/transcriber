@@ -278,6 +278,23 @@ on the Intel iGPU or NPU (llama.cpp's OpenVINO backend is a preview that
 fails Qwen3.5 on the NPU; no prebuilt Vulkan wheel), CoreML/ANE whisper on
 the Mac (Swift-only), pyannote on Intel XPU.
 
+Summaries on the Intel NPU were tried through OpenVINO GenAI and left out
+(measured in 2026-11 on a Core Ultra 7 366H with one 56-minute meeting):
+
+| Engine | Time | Summary |
+|---|---|---|
+| CPU, Qwen3.5-9B GGUF (what ships) | 13 min 47 s | specific and accurate |
+| NPU, Qwen3-8B int4 | 3 min 48 s | correct but more general |
+| NPU, Qwen3-8B with reasoning on | 9 min 57 s | richer, with invented action items |
+| NPU, Gemma 4 E2B | 19 min, 15 of them compiling | repetitive, one invented detail |
+| NPU, Gemma 4 E4B (community export) | 50 min | disordered |
+
+The NPU's graph is static — 8 192 prompt tokens worked, 16 384 ran it out
+of memory — so a long meeting is summarized in chunks and merged, which is
+where most of the quality went. The Intel iGPU generated with the same
+Qwen3-8B as fast as the NPU and has no static window; a one-pass summary
+there was not measured.
+
 ## Video compression (on by default)
 
 A dropped **video** goes through one more stage after its transcript,
